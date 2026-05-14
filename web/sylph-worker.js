@@ -57,6 +57,43 @@ self.addEventListener("message", async (e) => {
           bytes: bytes.length,
         },
       });
+    } else if (type === "loadDbUrl") {
+      // Each worker in a pool fetches the DB independently — the browser
+      // HTTP cache turns the second fetch into a memory/disk hit, so only
+      // one network request actually flies.
+      await ensureInited();
+      if (profiler) { profiler.free(); profiler = null; }
+      const { url } = e.data;
+      const resp = await fetch(url);
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      const buf = await resp.arrayBuffer();
+      const bytes = new Uint8Array(buf);
+      profiler = new Profiler(bytes);
+      self.postMessage({
+        id, ok: true,
+        meta: {
+          database_size: profiler.database_size,
+          k: profiler.k,
+          c: profiler.c,
+          bytes: bytes.length,
+        },
+      });
+    } else if (type === "loadDbFile") {
+      await ensureInited();
+      if (profiler) { profiler.free(); profiler = null; }
+      const { file } = e.data;
+      const buf = await file.arrayBuffer();
+      const bytes = new Uint8Array(buf);
+      profiler = new Profiler(bytes);
+      self.postMessage({
+        id, ok: true,
+        meta: {
+          database_size: profiler.database_size,
+          k: profiler.k,
+          c: profiler.c,
+          bytes: bytes.length,
+        },
+      });
     } else if (type === "profileFile") {
       if (!profiler) throw new Error("database not loaded");
       const { file, maxReads } = e.data;

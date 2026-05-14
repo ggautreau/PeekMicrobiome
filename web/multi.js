@@ -34,7 +34,12 @@ const els = {
 //     progress?, detected?, elapsed?, rows?, error?
 //   }
 let files = [];
-let rpc = sylphWorkerRpc();   // WASM Profiler runs in a Web Worker
+// Pool of WASM workers. Each loads its own copy of the DB and processes
+// samples independently — two samples run truly in parallel (decompress +
+// sylph profile both on the worker), capped by POOL_SIZE.
+const POOL_SIZE = 2;
+const rpcs = Array.from({ length: POOL_SIZE }, () => sylphWorkerRpc());
+let rpc = rpcs[0];            // alias for one-shot calls (db load reported from rpcs[0])
 let dbMeta = null;            // { database_size, k, c, bytes } once loaded
 let lineage = {};             // {genome_file: "Species name"}
 let runManifest = {};         // {filename: {sample, layout, mate?}} — optional
@@ -54,7 +59,7 @@ let lastMatrix = null;        // {samples: string[], rows: [{genome, species, va
 
 (async () => {
   try {
-    await rpc.init();
+    await Promise.all(rpcs.map(r => r.init()));
     wasmReady = true;
   } catch (e) {
     showError(`WASM init failed: ${e.message ?? e}`);
@@ -86,36 +91,22 @@ async function loadDatabase() {
   try {
     while (!wasmReady) await new Promise(r => setTimeout(r, 50));
 
-    let dbBytes, label;
+    let label, loadFn;
     if (url === "__local__") {
       const file = await pickLocalDb();
       if (!file) { els.dbInfo.textContent = "No file selected."; return; }
       label = file.name;
-      els.dbInfo.textContent = `Reading ${label} (${fmtBytes(file.size)})…`;
-      const buf = await file.arrayBuffer();
-      dbBytes = new Uint8Array(buf);
+      loadFn = (r) => r.loadDbFile(file);
     } else {
       label = url;
-      els.dbInfo.textContent = `Loading ${url}…`;
-      const resp = await fetch(url);
-      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-      const total = Number(resp.headers.get("content-length") || 0);
-      const reader = resp.body.getReader();
-      const chunks = [];
-      let received = 0;
-      while (true) {
-        const { value, done } = await reader.read();
-        if (done) break;
-        chunks.push(value);
-        received += value.length;
-        if (total > 0) {
-          els.dbInfo.textContent = `Loading ${url} — ${fmtBytes(received)} / ${fmtBytes(total)} (${(received/total*100).toFixed(1)}%)`;
-        }
-      }
-      dbBytes = new Uint8Array(received);
-      let off = 0;
-      for (const c of chunks) { dbBytes.set(c, off); off += c.length; }
+      loadFn = (r) => r.loadDbUrl(url);
     }
+    els.dbInfo.textContent = `Loading ${label} on ${rpcs.length} worker${rpcs.length === 1 ? "" : "s"}…`;
+
+    // Each worker fetches/reads the DB independently. For URLs the browser HTTP
+    // cache satisfies workers 2..N from memory, so only one network read flies.
+    const metas = await Promise.all(rpcs.map(loadFn));
+    dbMeta = metas[0];
 
     // Lineage is best-effort: a custom local .syldb may not have a matching
     // map, in which case species fall back to the raw genome filename.
@@ -124,11 +115,10 @@ async function loadDatabase() {
       if (lineageResp.ok) lineage = await lineageResp.json();
     } catch { /* leave lineage empty */ }
 
-    setStep("decoding database in WASM worker…");
-    dbMeta = await rpc.loadDb(dbBytes);   // transfers buffer ownership
     const dt = ((performance.now() - t0) / 1000).toFixed(1);
     els.dbInfo.textContent =
-      `Database ready (${label}): ${dbMeta.database_size} genomes, k=${dbMeta.k}, c=${dbMeta.c} ` +
+      `Database ready on ${rpcs.length} worker${rpcs.length === 1 ? "" : "s"} (${label}): ` +
+      `${dbMeta.database_size} genomes, k=${dbMeta.k}, c=${dbMeta.c} ` +
       `(${fmtBytes(dbMeta.bytes)}, loaded in ${dt} s).`;
     refreshRunButton();
   } catch (e) {
@@ -337,93 +327,99 @@ async function runAll() {
   const matrix = {};
   const sampleOrder = [];
 
-  let okCount = 0, failCount = 0;
-  for (let i = 0; i < files.length; i++) {
-    if (abortCtrl.signal.aborted) break;
-    const s = files[i];
+  // Pick up already-done samples and replay them into the matrix without
+  // re-running. Build the parallel-work queue from the rest.
+  const queue = [];
+  for (const s of files) {
     if (s.status === "done") {
       sampleOrder.push(s.sampleName);
       mergeRowsIntoMatrix(matrix, s.sampleName, s.rows);
-      continue;
-    }
-    s.status = "running";
-    s.progress = s.kind === "pe" ? "decompressing both mates…" : "decompressing…";
-    renderFilesList();
-    setStep(`[${i + 1}/${files.length}] ${s.sampleName} — decompressing + trimming`);
-    paintOverall(i, files.length, 0);
-
-    const t0 = performance.now();
-    let wasmTick = null;
-    try {
-      let tsv;
-      function startWasmHeartbeat(label, reads) {
-        const wasmT0 = performance.now();
-        wasmTick = setInterval(() => {
-          const sec = ((performance.now() - wasmT0) / 1000).toFixed(1);
-          s.progress = `sketching ${reads.toLocaleString()} ${label} in WASM worker (${sec} s)`;
-          renderFilesList();
-          setStep(`[${i + 1}/${files.length}] ${s.sampleName} — WASM compute, ${sec} s`);
-        }, 250);
-      }
-      if (s.kind === "pe") {
-        const r1Files = s.peRuns.map(p => p.r1);
-        const r2Files = s.peRuns.map(p => p.r2);
-        const total1 = r1Files.reduce((a, f) => a + f.size, 0);
-        const total2 = r2Files.reduce((a, f) => a + f.size, 0);
-        let p1 = { bytesIn: 0, reads: 0, fi: 0 };
-        let p2 = { bytesIn: 0, reads: 0, fi: 0 };
-        ({ tsv } = await rpc.profileFilesPe(r1Files, r2Files, maxReads, (p) => {
-          if (p.phase === "profile_start") { startWasmHeartbeat("pairs", p.reads); return; }
-          if (p.mate === 1) p1 = { bytesIn: p.bytesIn, reads: p.reads, fi: p.fi };
-          else p2 = { bytesIn: p.bytesIn, reads: p.reads, fi: p.fi };
-          const reads = Math.min(p1.reads, p2.reads);
-          s.progress =
-            `${reads.toLocaleString()} pairs across ${r1Files.length} run${r1Files.length === 1 ? "" : "s"}; ` +
-            `R1 file ${p1.fi + 1}/${r1Files.length} ${fmtBytes(p1.bytesIn)}/${fmtBytes(total1)}, ` +
-            `R2 file ${p2.fi + 1}/${r2Files.length} ${fmtBytes(p2.bytesIn)}/${fmtBytes(total2)}`;
-          renderFilesList();
-          paintOverall(i, files.length,
-            (p1.bytesIn + p2.bytesIn) / Math.max(1, total1 + total2));
-          setStep(`[${i + 1}/${files.length}] ${s.sampleName} — decompress + sketch (PE)`);
-        }, abortCtrl.signal));
-      } else {
-        const seFiles = s.seRuns;
-        const totalBytes = seFiles.reduce((a, f) => a + f.size, 0);
-        ({ tsv } = await rpc.profileFilesMulti(seFiles, maxReads, (p) => {
-          if (p.phase === "profile_start") { startWasmHeartbeat("reads", p.reads); return; }
-          s.progress =
-            `${p.reads.toLocaleString()} reads, file ${p.fi + 1}/${seFiles.length} ` +
-            `(${fmtBytes(p.bytesIn)} / ${fmtBytes(totalBytes)} total)`;
-          renderFilesList();
-          paintOverall(i, files.length, totalBytes > 0 ? p.bytesIn / totalBytes : 0);
-          setStep(`[${i + 1}/${files.length}] ${s.sampleName} — decompress + sketch`);
-        }, abortCtrl.signal));
-      }
-
-      const rows = parseTsv(tsv);
-      s.status = "done";
-      s.detected = rows.length;
-      s.elapsed = (performance.now() - t0) / 1000;
-      s.progress = undefined;
-      s.rows = rows;
-      sampleOrder.push(s.sampleName);
-      mergeRowsIntoMatrix(matrix, s.sampleName, rows);
-      okCount++;
-    } catch (e) {
-      s.status = "failed";
-      s.error = (e?.message ?? String(e)).slice(0, 200);
-      failCount++;
-      if (e?.name === "AbortError") {
-        renderFilesList();
-        break;
-      }
-      console.error(e);
-    } finally {
-      if (wasmTick) { clearInterval(wasmTick); wasmTick = null; }
-      renderFilesList();
-      paintOverall(i + 1, files.length, 0);
+    } else {
+      queue.push(s);
     }
   }
+
+  const totalTodo = queue.length;
+  let okCount = 0, failCount = 0, completed = 0;
+
+  // Each worker independently drains the shared queue. Two workers run end-
+  // to-end (decompress + sylph profile) in parallel.
+  async function drain(rpc, slotIdx) {
+    while (queue.length > 0 && !abortCtrl.signal.aborted) {
+      const s = queue.shift();
+      if (!s) break;
+      s.status = "running";
+      s.progress = s.kind === "pe" ? "decompressing both mates…" : "decompressing…";
+      renderFilesList();
+      setStep(`[w${slotIdx}] ${s.sampleName} — decompressing + trimming`);
+
+      const t0 = performance.now();
+      let wasmTick = null;
+      try {
+        let tsv;
+        function startWasmHeartbeat(label, reads) {
+          const wasmT0 = performance.now();
+          wasmTick = setInterval(() => {
+            const sec = ((performance.now() - wasmT0) / 1000).toFixed(1);
+            s.progress = `sketching ${reads.toLocaleString()} ${label} in WASM (${sec} s)`;
+            renderFilesList();
+            setStep(`[w${slotIdx}] ${s.sampleName} — WASM compute, ${sec} s`);
+          }, 250);
+        }
+        if (s.kind === "pe") {
+          const r1Files = s.peRuns.map(p => p.r1);
+          const r2Files = s.peRuns.map(p => p.r2);
+          const total1 = r1Files.reduce((a, f) => a + f.size, 0);
+          const total2 = r2Files.reduce((a, f) => a + f.size, 0);
+          let p1 = { bytesIn: 0, reads: 0, fi: 0 };
+          let p2 = { bytesIn: 0, reads: 0, fi: 0 };
+          ({ tsv } = await rpc.profileFilesPe(r1Files, r2Files, maxReads, (p) => {
+            if (p.phase === "profile_start") { startWasmHeartbeat("pairs", p.reads); return; }
+            if (p.mate === 1) p1 = { bytesIn: p.bytesIn, reads: p.reads, fi: p.fi };
+            else p2 = { bytesIn: p.bytesIn, reads: p.reads, fi: p.fi };
+            const reads = Math.min(p1.reads, p2.reads);
+            s.progress =
+              `${reads.toLocaleString()} pairs across ${r1Files.length} run${r1Files.length === 1 ? "" : "s"}; ` +
+              `R1 file ${p1.fi + 1}/${r1Files.length} ${fmtBytes(p1.bytesIn)}/${fmtBytes(total1)}, ` +
+              `R2 file ${p2.fi + 1}/${r2Files.length} ${fmtBytes(p2.bytesIn)}/${fmtBytes(total2)}`;
+            renderFilesList();
+          }, abortCtrl.signal));
+        } else {
+          const seFiles = s.seRuns;
+          const totalBytes = seFiles.reduce((a, f) => a + f.size, 0);
+          ({ tsv } = await rpc.profileFilesMulti(seFiles, maxReads, (p) => {
+            if (p.phase === "profile_start") { startWasmHeartbeat("reads", p.reads); return; }
+            s.progress =
+              `${p.reads.toLocaleString()} reads, file ${p.fi + 1}/${seFiles.length} ` +
+              `(${fmtBytes(p.bytesIn)} / ${fmtBytes(totalBytes)} total)`;
+            renderFilesList();
+          }, abortCtrl.signal));
+        }
+
+        const rows = parseTsv(tsv);
+        s.status = "done";
+        s.detected = rows.length;
+        s.elapsed = (performance.now() - t0) / 1000;
+        s.progress = undefined;
+        s.rows = rows;
+        sampleOrder.push(s.sampleName);
+        mergeRowsIntoMatrix(matrix, s.sampleName, rows);
+        okCount++;
+      } catch (e) {
+        s.status = "failed";
+        s.error = (e?.message ?? String(e)).slice(0, 200);
+        failCount++;
+        if (e?.name !== "AbortError") console.error(e);
+      } finally {
+        if (wasmTick) { clearInterval(wasmTick); wasmTick = null; }
+        completed++;
+        renderFilesList();
+        paintOverall(completed, totalTodo, 0);
+      }
+    }
+  }
+
+  await Promise.all(rpcs.map((rpc, i) => drain(rpc, i + 1)));
 
   els.cancel.disabled = true;
   els.loadDb.disabled = false;
@@ -432,7 +428,7 @@ async function runAll() {
     lastMatrix = matrixToTable(matrix, sampleOrder);
     renderMatrix(lastMatrix);
   }
-  setStep(`done — ${okCount} sample${okCount === 1 ? "" : "s"} ok, ${failCount} failed`);
+  setStep(`done — ${okCount} sample${okCount === 1 ? "" : "s"} ok, ${failCount} failed (pool=${rpcs.length})`);
 }
 
 function mergeRowsIntoMatrix(matrix, sampleName, rows) {

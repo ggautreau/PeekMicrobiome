@@ -13,7 +13,7 @@
 
 // Bump this version when you change the worker or any module it imports,
 // to force the browser to refetch instead of reusing its module-worker cache.
-const WORKER_VERSION = "5";
+const WORKER_VERSION = "6";
 
 export function sylphWorkerRpc() {
   const workerUrl = new URL(`./sylph-worker.js?v=${WORKER_VERSION}`, import.meta.url);
@@ -61,6 +61,14 @@ export function sylphWorkerRpc() {
     },
     async loadDb(bytes) {
       const { meta } = await call("loadDb", { bytes }, { transfer: [bytes.buffer] });
+      return meta;
+    },
+    async loadDbUrl(url) {
+      const { meta } = await call("loadDbUrl", { url });
+      return meta;
+    },
+    async loadDbFile(file) {
+      const { meta } = await call("loadDbFile", { file });
       return meta;
     },
     async profileFile(file, maxReads, onProgress, signal) {
