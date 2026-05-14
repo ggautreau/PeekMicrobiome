@@ -1,0 +1,16 @@
+{
+  "name": "sylph",
+  "type": "module",
+  "version": "0.9.0",
+  "license": "MIT OR Apache-2.0",
+  "files": [
+    "sylph_wasm_bg.wasm",
+    "sylph_wasm.js",
+    "sylph_wasm.d.ts"
+  ],
+  "main": "sylph_wasm.js",
+  "types": "sylph_wasm.d.ts",
+  "sideEffects": [
+    "./snippets/*"
+  ]
+}

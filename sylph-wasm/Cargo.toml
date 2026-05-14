@@ -1,0 +1,78 @@
+[package]
+name = "sylph"
+version = "0.9.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+
+[features]
+# `native` mirrors upstream sylph 0.9.0 behaviour: parallel, CLI, file I/O,
+# memory stats, stderr logger. Required for the CLI binary.
+default = ["native"]
+native = [
+    "dep:rayon",
+    "dep:memory-stats",
+    "dep:simple_logger",
+    "needletail/compression",
+]
+# `wasm` strips everything that doesn't work under wasm32: rayon, mmap, std::fs
+# paths, the CLI, memory stats. The library still compiles and exposes the
+# sketching/profiling code paths.
+wasm = []
+
+[dependencies]
+# default-features = false drops bzip2/zstd/xz2 (all C deps; non-WASM).
+# Native build re-enables flate2 inline below.
+needletail = { version = "0.5.0", default-features = false }
+log = "0"
+smallvec = { version = "1", features = ["union", "serde", "write"] }
+serde = { version = "1", features = ["derive"] }
+bincode = "1"
+fxhash = "0"
+# rust_backend uses miniz_oxide (pure Rust); zlib-ng is a C dep, no WASM.
+flate2 = { version = "1.0.17", default-features = false, features = ["rust_backend"] }
+statrs = "0.16"
+nalgebra = "0"
+rand = "0"
+regex = "1"
+fastrand = "2"
+scalable_cuckoo_filter = "0.2"
+serde_yaml = "0.9"
+
+# Optional — only present under feature = "native".
+rayon         = { version = "1", optional = true }
+memory-stats  = { version = "1", optional = true }
+simple_logger = { version = "3", features = ["stderr"], optional = true }
+# clap is needed by the lib too (cmdline.rs is imported by sketch/contain/inspect)
+# so we keep it as a non-optional dep. Stripping default features removes
+# terminal/atty/colors which pull in non-WASM code; "derive" is enough.
+clap = { version = "3", default-features = false, features = ["derive", "std"] }
+
+[target.'cfg(target_env = "musl")'.dependencies]
+tikv-jemallocator = "0"
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = "0.2"
+js-sys = "0.3"
+console_log = "1"
+console_error_panic_hook = "0.1"
+getrandom = { version = "0.2", features = ["js"] }
+
+[dev-dependencies]
+assert_cmd = "1.0.1"
+predicates = "1"
+serial_test = "*"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[[bin]]
+name = "sylph"
+path = "src/main.rs"
+required-features = ["native"]
+
+[profile.release]
+panic = "abort"
+lto = true
+
+[profile.dev]
+opt-level = 3

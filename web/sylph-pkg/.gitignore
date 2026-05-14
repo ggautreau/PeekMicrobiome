@@ -1,0 +1,4 @@
+# wasm-pack stamps this directory with `*` to keep the build artifact
+# out of the source repo. We override that here because the deployed
+# site (GitHub Pages) needs sylph_wasm.js + sylph_wasm_bg.wasm at runtime.
+!*

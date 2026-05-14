@@ -1,0 +1,26 @@
+# downloads & build outputs
+data/
+*.syldb
+*.fastq
+*.fastq.gz
+*.fq
+*.fq.gz
+*.fasta
+*.fasta.gz
+*.fa
+*.fa.gz
+
+# rust / wasm
+target/
+pkg/
+Cargo.lock
+node_modules/
+
+# editor
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+# cloned upstream (kept out of our repo)
+sylph-survey/sylph/

@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Sylph profile · sylph-web-gut</title>
+  <link rel="icon" type="image/svg+xml" href="./favicon.svg">
+  <link rel="stylesheet" href="./styles.css">
+  <script>
+    (function () {
+      try {
+        var t = localStorage.getItem("sylph-theme") || "light";
+        if (t === "auto") {
+          t = matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+        }
+        if (t !== "light" && t !== "dark") t = "light";
+        document.documentElement.setAttribute("data-theme", t);
+      } catch (e) {
+        document.documentElement.setAttribute("data-theme", "light");
+      }
+    })();
+  </script>
+</head>
+<body>
+  <div class="beta-bar" role="alert">
+    <span class="beta-pill">BETA</span>
+    <span>In active development — bugs expected. Report issues at <a href="https://github.com/ggautreau/sylph-web-gut/issues">github.com/ggautreau/sylph-web-gut</a>.</span>
+  </div>
+  <header class="app-header">
+    <a class="brand" href="./index.html">
+      <div class="brand-logo">S</div>
+      <div class="brand-text">
+        <span class="brand-title">sylph-web-gut</span>
+        <span class="brand-tagline">In-browser gut metagenomic profiling</span>
+      </div>
+    </a>
+    <nav class="app-nav">
+      <a href="./">Multi-sample</a>
+      <button class="theme-toggle" type="button" aria-label="Toggle theme">
+        <svg class="icon-moon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+        <svg class="icon-sun" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg>
+      </button>
+    </nav>
+  </header>
+
+  <main class="container">
+    <div class="page-head">
+      <h1>Sylph profile</h1>
+      <p class="sub">Drop a FASTQ — sylph sketches it and profiles against the UHGG gut reference, locally in your browser. No upload.</p>
+    </div>
+
+    <div class="privacy-notice" role="note">
+      <svg class="privacy-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="m9 12 2 2 4-4"/></svg>
+      <div><strong>100% browser-based — your files never leave your computer.</strong> Parsing happens entirely in your browser. No data is sent to any server.</div>
+    </div>
+
+    <div class="notice" role="note">
+      <svg class="notice-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+      <div><strong>Quick-and-dirty preview.</strong> This tool is meant for fast in-browser checks of gut metagenomic composition. It does not achieve the reliability of <a href="https://github.com/bluenote-1577/sylph">sylph</a>, <a href="https://github.com/biobakery/MetaPhlAn">MetaPhlAn4</a>, or <a href="https://forgemia.inra.fr/metagenopolis/meteor">Meteor2</a> run natively — use those for real analyses. This is an <strong>unofficial adapted WebAssembly port of sylph — not supported or endorsed by the sylph authors</strong>. <strong>If you use the results, please cite the <a href="https://www.nature.com/articles/s41587-024-02412-y">sylph paper</a></strong> (Shaw &amp; Yu, <em>Nat. Biotechnol.</em> 2024) <strong>and the <a href="https://www.nature.com/articles/s41587-020-0603-3">UHGG catalog</a></strong> (Almeida <em>et al.</em>, <em>Nat. Biotechnol.</em> 2021).</div>
+    </div>
+
+    <section class="card">
+      <h2>Reference database</h2>
+      <div class="row" style="margin-top:.4rem">
+        <label>Database:
+          <select id="dbSelect" style="width:auto;min-width:14rem">
+            <option value="https://zenodo.org/api/records/20180025/files/gut.syldb/content">Full UHGG gut (4744 species, 433 MB) — downloads from Zenodo</option>
+            <option value="db/gut_mini.syldb">Tiny smoke-test (50 species, 6 MB) — bundled</option>
+          </select>
+        </label>
+        <button id="loadDb">Load database</button>
+      </div>
+      <div class="info" id="dbInfo">Pick a database and click <em>Load database</em>. The first load is the slow part.</div>
+    </section>
+
+    <section class="card">
+      <h2>Input</h2>
+      <label class="drop" id="drop">
+        <input type="file" id="file" accept=".fastq,.fq,.fastq.gz,.fq.gz,.gz">
+        <div id="dropLabel"><strong>Drop a FASTQ here</strong> or click to browse</div>
+        <div class="hint">.fastq, .fq, .fastq.gz, .fq.gz</div>
+      </label>
+
+      <div class="row reads-row">
+        <label>Reads to profile: <input type="number" id="maxReads" value="1000000" min="10000" step="10000"></label>
+        <input type="range" id="maxReadsSlider" class="reads-slider" min="10000" max="5000000" step="10000" value="1000000" aria-label="Reads to profile (slider)">
+        <span class="info" id="memHint">Rough estimate: ≳0.9 GB peak browser memory at 1,000,000 reads (assumes short single-end reads; long or paired reads can use 2–3× more).</span>
+      </div>
+      <div class="info" style="margin-top:-.35rem">Recommended: stay at or below <strong>3,000,000 reads</strong> (the safe zone). Higher values are allowed but the slider turns red past 3 M because the run may fail.</div>
+      <div class="reads-warn hide" id="readsWarn">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="flex:0 0 auto;margin-top:1px"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+        <span>Above 3,000,000 reads may exceed the 4 GB wasm32 memory ceiling — profiling may fail. Consider lowering the value, or running sylph on a server.</span>
+      </div>
+
+      <div class="row">
+        <button id="run" class="primary" disabled>Profile</button>
+      </div>
+
+      <div id="progress" class="hide">
+        <div class="progress"><div id="bar"></div></div>
+        <div class="stats">
+          <span>Step</span>            <span id="step">—</span>
+          <span>Input read</span>      <span id="bytesIn">0 B</span>
+          <span>Reads sketched</span>  <span id="reads">0 / 0</span>
+          <span>Elapsed</span>         <span id="elapsed">0.0 s</span>
+        </div>
+      </div>
+
+      <div id="error" class="err"></div>
+    </section>
+
+    <section id="results" class="card hide">
+      <h2>Results</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>Rel. abundance</th>
+            <th>Seq. abundance</th>
+            <th>ANI</th>
+            <th>Eff. cov</th>
+            <th>Genome</th>
+            <th>Species</th>
+          </tr>
+        </thead>
+        <tbody id="resultsBody"></tbody>
+      </table>
+    </section>
+  </main>
+
+  <footer class="app-footer">
+    <span>Built on <a href="https://github.com/bluenote-1577/sylph">sylph</a> · UHGG gut reference · WebAssembly</span>
+    <span class="footer-links">
+      <a href="https://github.com/ggautreau/sylph-web-gut">GitHub</a>
+    </span>
+    <span class="credit">Created using Claude Opus 4.7, prompted by G. Gautreau — <a href="https://maiage.inrae.fr/">MaIAGE unit (UR 1404, Mathématiques et Informatique Appliquées du Génome à l'Environnement)</a>, INRAE.</span>
+  </footer>
+
+  <script src="./theme.js"></script>
+  <script type="module" src="./profile.js"></script>
+</body>
+</html>
