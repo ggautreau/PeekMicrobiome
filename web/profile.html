@@ -66,9 +66,11 @@
           <select id="dbSelect" style="width:auto;min-width:14rem">
             <option value="https://zenodo.org/api/records/20180025/files/gut.syldb/content">Full UHGG gut (4744 species, 433 MB) — downloads from Zenodo</option>
             <option value="db/gut_mini.syldb">Tiny smoke-test (50 species, 6 MB) — bundled</option>
+            <option value="__local__">Local file… (.syldb on your computer)</option>
           </select>
         </label>
         <button id="loadDb">Load database</button>
+        <input type="file" id="dbFile" accept=".syldb" hidden>
       </div>
       <div class="info" id="dbInfo">Pick a database and click <em>Load database</em>. The first load is the slow part.</div>
     </section>

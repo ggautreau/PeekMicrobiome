@@ -16,7 +16,7 @@ const els = {
   step: $("step"), bytesIn: $("bytesIn"), reads: $("reads"), elapsed: $("elapsed"),
   error: $("error"), results: $("results"), resultsBody: $("resultsBody"),
   dbInfo: $("dbInfo"), memHint: $("memHint"),
-  dbSelect: $("dbSelect"), loadDb: $("loadDb"),
+  dbSelect: $("dbSelect"), loadDb: $("loadDb"), dbFile: $("dbFile"),
 };
 
 const READS_MIN = 10_000;
@@ -51,50 +51,73 @@ let wasmReady = false;
 
 els.loadDb.addEventListener("click", loadDatabase);
 
+function pickLocalDb() {
+  return new Promise((resolve) => {
+    els.dbFile.onchange = (e) => {
+      const f = e.target.files?.[0];
+      e.target.value = "";   // allow re-picking the same file later
+      resolve(f || null);
+    };
+    els.dbFile.click();
+  });
+}
+
 async function loadDatabase() {
   els.loadDb.disabled = true;
   els.error.textContent = "";
   const url = els.dbSelect.value;
   const t0 = performance.now();
-  els.dbInfo.textContent = `Loading ${url}…`;
 
   try {
     while (!wasmReady) await new Promise(r => setTimeout(r, 50));
 
-    // Stream the response so we can show download progress.
-    const resp = await fetch(url);
-    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-    const total = Number(resp.headers.get("content-length") || 0);
-    const reader = resp.body.getReader();
-    const chunks = [];
-    let received = 0;
-    while (true) {
-      const { value, done } = await reader.read();
-      if (done) break;
-      chunks.push(value);
-      received += value.length;
-      if (total > 0) {
-        const pct = (received / total * 100).toFixed(1);
-        els.dbInfo.textContent =
-          `Loading ${url} — ${fmtBytes(received)} / ${fmtBytes(total)} (${pct}%)`;
-      } else {
-        els.dbInfo.textContent = `Loading ${url} — ${fmtBytes(received)}`;
+    let dbBytes, label;
+    if (url === "__local__") {
+      const file = await pickLocalDb();
+      if (!file) { els.dbInfo.textContent = "No file selected."; return; }
+      label = file.name;
+      els.dbInfo.textContent = `Reading ${label} (${fmtBytes(file.size)})…`;
+      const buf = await file.arrayBuffer();
+      dbBytes = new Uint8Array(buf);
+    } else {
+      label = url;
+      els.dbInfo.textContent = `Loading ${url}…`;
+      const resp = await fetch(url);
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      const total = Number(resp.headers.get("content-length") || 0);
+      const reader = resp.body.getReader();
+      const chunks = [];
+      let received = 0;
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        chunks.push(value);
+        received += value.length;
+        if (total > 0) {
+          const pct = (received / total * 100).toFixed(1);
+          els.dbInfo.textContent =
+            `Loading ${url} — ${fmtBytes(received)} / ${fmtBytes(total)} (${pct}%)`;
+        } else {
+          els.dbInfo.textContent = `Loading ${url} — ${fmtBytes(received)}`;
+        }
       }
+      dbBytes = new Uint8Array(received);
+      let off = 0;
+      for (const c of chunks) { dbBytes.set(c, off); off += c.length; }
     }
-    const dbBytes = new Uint8Array(received);
-    let off = 0;
-    for (const c of chunks) { dbBytes.set(c, off); off += c.length; }
 
-    // Lineage is small — fetch in parallel? simpler: serial after.
-    const lineageResp = await fetch("./db/lineage.json");
-    if (!lineageResp.ok) throw new Error(`lineage HTTP ${lineageResp.status}`);
-    lineage = await lineageResp.json();
+    // Lineage is best-effort: a custom local .syldb may not have a matching
+    // map, in which case species fall back to the raw genome filename.
+    try {
+      const lineageResp = await fetch("./db/lineage.json");
+      if (lineageResp.ok) lineage = await lineageResp.json();
+    } catch { /* leave lineage empty */ }
 
     els.dbInfo.textContent = `Decoding database in WASM worker…`;
     dbMeta = await rpc.loadDb(dbBytes);
     const dt = ((performance.now() - t0) / 1000).toFixed(1);
     els.dbInfo.textContent =
-      `Database ready: ${dbMeta.database_size} genomes, k=${dbMeta.k}, c=${dbMeta.c} ` +
+      `Database ready (${label}): ${dbMeta.database_size} genomes, k=${dbMeta.k}, c=${dbMeta.c} ` +
       `(${fmtBytes(dbMeta.bytes)}, loaded in ${dt} s).`;
     if (selectedFile) els.run.disabled = false;
   } catch (e) {
