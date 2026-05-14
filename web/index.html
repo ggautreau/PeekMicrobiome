@@ -68,6 +68,14 @@
             <option value="__local__">Local file… (.syldb on your computer)</option>
           </select>
         </label>
+        <label style="margin-left:.25rem">Threads:
+          <select id="poolSize" style="width:auto">
+            <option value="1">1</option>
+            <option value="2" selected>2</option>
+            <option value="3">3</option>
+            <option value="4">4</option>
+          </select>
+        </label>
         <button id="loadDb">Load database</button>
         <input type="file" id="dbFile" accept=".syldb" hidden>
       </div>

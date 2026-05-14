@@ -22,6 +22,7 @@ const els = {
   matrixHead: $("matrixHead"), matrixBody: $("matrixBody"),
   downloadTsv: $("downloadTsv"), downloadCsv: $("downloadCsv"),
   dbSelect: $("dbSelect"), loadDb: $("loadDb"), dbInfo: $("dbInfo"), dbFile: $("dbFile"),
+  poolSize: $("poolSize"),
 };
 
 // `files` is now really a *sample list*. Each entry can hold multiple source
@@ -34,16 +35,15 @@ const els = {
 //     progress?, detected?, elapsed?, rows?, error?
 //   }
 let files = [];
-// Pool of WASM workers. Each loads its own copy of the DB and processes
-// samples independently — two samples run truly in parallel (decompress +
-// sylph profile both on the worker), capped by POOL_SIZE.
-const POOL_SIZE = 2;
-const rpcs = Array.from({ length: POOL_SIZE }, () => sylphWorkerRpc());
-let rpc = rpcs[0];            // alias for one-shot calls (db load reported from rpcs[0])
+// Pool of WASM workers. Each holds its own copy of the DB and processes
+// samples independently — N samples run end-to-end in parallel (decompress
+// + sylph profile both on the worker). Default is 2; user can change it via
+// the "Threads" picker and the new pool takes effect on the next Load DB.
+let rpcs = [sylphWorkerRpc()];   // start with 1; loadDatabase resizes & inits
 let dbMeta = null;            // { database_size, k, c, bytes } once loaded
 let lineage = {};             // {genome_file: "Species name"}
 let runManifest = {};         // {filename: {sample, layout, mate?}} — optional
-let wasmReady = false;
+let wasmReady = false;        // at least the first worker's wasm is initialized
 let abortCtrl = null;
 let lastMatrix = null;        // {samples: string[], rows: [{genome, species, values: number[]}]}
 
@@ -57,15 +57,28 @@ let lastMatrix = null;        // {samples: string[], rows: [{genome, species, va
 
 // ---- WASM init ---------------------------------------------------------------
 
+// Boot just the first worker; the rest are spawned + initialized on demand
+// when the user clicks Load database with a different Threads value.
 (async () => {
   try {
-    await Promise.all(rpcs.map(r => r.init()));
+    await rpcs[0].init();
     wasmReady = true;
   } catch (e) {
     showError(`WASM init failed: ${e.message ?? e}`);
     console.error(e);
   }
 })();
+
+async function resizePool(target) {
+  while (rpcs.length > target) rpcs.pop().terminate();
+  const spawned = [];
+  while (rpcs.length < target) {
+    const r = sylphWorkerRpc();
+    rpcs.push(r);
+    spawned.push(r.init());
+  }
+  if (spawned.length) await Promise.all(spawned);
+}
 
 // ---- database loading --------------------------------------------------------
 
@@ -84,12 +97,20 @@ function pickLocalDb() {
 
 async function loadDatabase() {
   els.loadDb.disabled = true;
+  els.poolSize.disabled = true;
   els.error.textContent = "";
   const url = els.dbSelect.value;
   const t0 = performance.now();
 
   try {
     while (!wasmReady) await new Promise(r => setTimeout(r, 50));
+
+    const target = Math.max(1, Math.min(8, parseInt(els.poolSize.value, 10) || 1));
+    if (target !== rpcs.length) {
+      els.dbInfo.textContent = `Resizing pool to ${target} worker${target === 1 ? "" : "s"}…`;
+      await resizePool(target);
+      dbMeta = null;  // any previously-loaded DB is in old workers only
+    }
 
     let label, loadFn;
     if (url === "__local__") {
@@ -127,6 +148,7 @@ async function loadDatabase() {
     console.error(e);
   } finally {
     els.loadDb.disabled = false;
+    els.poolSize.disabled = false;
   }
 }
 
@@ -320,6 +342,7 @@ async function runAll() {
   els.run.disabled = true;
   els.cancel.disabled = false;
   els.loadDb.disabled = true;
+  els.poolSize.disabled = true;
   abortCtrl = new AbortController();
 
   const maxReads = clampReads(els.maxReads.value);
@@ -423,6 +446,7 @@ async function runAll() {
 
   els.cancel.disabled = true;
   els.loadDb.disabled = false;
+  els.poolSize.disabled = false;
   refreshRunButton();
   if (okCount > 0) {
     lastMatrix = matrixToTable(matrix, sampleOrder);
