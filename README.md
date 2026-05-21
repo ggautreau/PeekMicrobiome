@@ -2,6 +2,8 @@
 
 In-browser gut metagenomic profiling: a WebAssembly build of [sylph](https://github.com/bluenote-1577/sylph) targeted at a gut-only reference database, with a streaming FASTQ importer capped at 3 M reads per sample.
 
+**Live site:** <https://ggautreau.github.io/sylph-web-gut/>
+
 > [!IMPORTANT]
 > **Unofficial port.** This is an adapted WebAssembly port of sylph for quick, in-browser checks of gut metagenomic composition. It is **not supported or endorsed by the sylph authors** and does not achieve the reliability of [sylph](https://github.com/bluenote-1577/sylph), [MetaPhlAn4](https://github.com/biobakery/MetaPhlAn), or [Meteor2](https://github.com/metagenopolis/meteor) run natively — use those for real analyses. If you use the results, please cite the upstream papers below.
 
