@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Sylph profile · sylph-web-gut</title>
   <link rel="icon" type="image/svg+xml" href="./favicon.svg">
-  <link rel="stylesheet" href="./styles.css">
+  <link rel="stylesheet" href="./styles.css?v=13">
   <script>
     (function () {
       try {
@@ -51,7 +51,10 @@
 
     <div class="privacy-notice" role="note">
       <svg class="privacy-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="m9 12 2 2 4-4"/></svg>
-      <div><strong>100% browser-based — your files never leave your computer.</strong> Computation happens entirely in your browser. No data is sent to any server.</div>
+      <div>
+        <div><strong>100% browser-based — your files never leave your computer.</strong> The FASTQ you drop here is read, decompressed and profiled entirely inside this browser tab. Nothing about it — not the reads, not the file name, not the results — is uploaded anywhere.</div>
+        <div style="margin-top:.45rem"><strong>Loading the reference database downloads it from <code>zenodo.org</code>.</strong> The full UHGG gut database is 433 MB and is fetched the first time you click <em>Load database</em>, then kept on this computer for later visits. Zenodo sees your IP address and that you asked for this file. Choosing the bundled 6 MB smoke-test database, or a <code>.syldb</code> from your own disk, downloads nothing at all. That download is the only request this page makes, and it only travels <em>towards</em> you.</div>
+      </div>
     </div>
 
     <div class="notice" role="note">
@@ -70,9 +73,11 @@
           </select>
         </label>
         <button id="loadDb">Load database</button>
+        <button id="cancelDb" class="hide">Cancel download</button>
         <input type="file" id="dbFile" accept=".syldb" hidden>
       </div>
-      <div class="info" id="dbInfo">Pick a database and click <em>Load database</em>. The first load is the slow part.</div>
+      <div class="info" id="dbInfo">Pick a database and click <em>Load database</em>. The first load downloads the database once; it is then kept on this computer — unless the browser evicts it to reclaim disk space — so later visits start instantly.</div>
+      <div class="info" id="dbCacheInfo" style="margin-top:.4rem"></div>
     </section>
 
     <section class="card">
@@ -84,14 +89,14 @@
       </label>
 
       <div class="row reads-row">
-        <label>Reads to profile: <input type="number" id="maxReads" value="1000000" min="10000" step="10000"></label>
-        <input type="range" id="maxReadsSlider" class="reads-slider" min="10000" max="5000000" step="10000" value="1000000" aria-label="Reads to profile (slider)">
+        <label>Max reads to profile: <input type="number" id="maxReads" value="3000000" min="10000" step="10000"></label>
+        <input type="range" id="maxReadsSlider" class="reads-slider" min="10000" max="60000000" step="10000" value="3000000" aria-label="Max reads to profile (slider)">
         <span class="info" id="memHint">Rough estimate: ≳0.9 GB peak browser memory at 1,000,000 reads (assumes short single-end reads; long or paired reads can use 2–3× more).</span>
       </div>
-      <div class="info" style="margin-top:-.35rem">Recommended: stay at or below <strong>3,000,000 reads</strong> (the safe zone). Higher values are allowed but the slider turns red past 3 M because the run may fail.</div>
+      <div class="info" style="margin-top:-.35rem">Fewer reads finish sooner; more reads detect species at lower abundance.</div>
       <div class="reads-warn hide" id="readsWarn">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="flex:0 0 auto;margin-top:1px"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
-        <span>Above 3,000,000 reads may exceed the 4 GB wasm32 memory ceiling — profiling may fail. Consider lowering the value, or running sylph on a server.</span>
+        <span>Above 6,000,000 reads the trimmed FASTQ no longer fits in a single browser buffer — profiling may fail. Consider lowering the value, or running sylph on a server.</span>
       </div>
 
       <div class="row">
@@ -134,10 +139,10 @@
     <span class="footer-links">
       <a href="https://github.com/ggautreau/sylph-web-gut">GitHub</a>
     </span>
-    <span class="credit">Created using Claude Opus 4.7, prompted by G. Gautreau — <a href="https://maiage.inrae.fr/">MaIAGE unit (UR 1404, Mathématiques et Informatique Appliquées du Génome à l'Environnement)</a>, INRAE.</span>
+    <span class="credit">Created using Claude Opus 5, prompted by G. Gautreau — <a href="https://maiage.inrae.fr/">MaIAGE unit (UR 1404, Mathématiques et Informatique Appliquées du Génome à l'Environnement)</a>, INRAE.</span>
   </footer>
 
   <script src="./theme.js"></script>
-  <script type="module" src="./profile.js?v=2"></script>
+  <script type="module" src="./profile.js?v=13"></script>
 </body>
 </html>

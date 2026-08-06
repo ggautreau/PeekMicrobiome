@@ -8,7 +8,10 @@ pub mod inference;
 pub mod inspect;
 pub mod par;
 
-#[cfg(target_arch = "wasm32")]
+// target_family, not target_arch: wasm64-unknown-unknown reports
+// target_arch = "wasm64", and gating on "wasm32" would quietly compile a
+// cdylib with no wasm-bindgen exports at all.
+#[cfg(target_family = "wasm")]
 pub mod wasm;
 
 #[cfg(target_arch = "x86_64")]

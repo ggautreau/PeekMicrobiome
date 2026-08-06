@@ -1,5 +1,7 @@
 # downloads & build outputs
 data/
+# fixture for scripts/ena-test/tsv-parity.mjs, fetched on demand from the EBI
+scripts/ena-test/fx/
 *.syldb
 *.fastq
 *.fastq.gz
@@ -13,8 +15,11 @@ data/
 # rust / wasm
 target/
 pkg/
-Cargo.lock
 node_modules/
+# NOTE: Cargo.lock is deliberately NOT ignored. This crate is built as a
+# deployed artifact, not published as a library, and leaving it out let
+# dependency resolution drift until the wasm32 build stopped compiling
+# (unpinned `rand = "0"` reached rand 0.10 -> getrandom 0.4).
 
 # editor
 .vscode/

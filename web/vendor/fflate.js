@@ -1,3 +1,11 @@
+// fflate — https://github.com/101arrowz/fflate
+// Copyright (c) 2026 Arjun Barrett. MIT License; the full text is in
+// LICENSE.fflate next to this file.
+//
+// Vendored (not fetched from a CDN) because the site must work offline and load
+// nothing third-party at runtime, and because DecompressionStream mishandles
+// multi-member gzip, which real .fastq.gz files use.
+//
 // DEFLATE is a complex format; to read this code, you should probably check the RFC first:
 // https://tools.ietf.org/html/rfc1951
 // You may also wish to take a look at the guide I made about this program:

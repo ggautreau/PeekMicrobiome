@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>sylph-web-gut · In-browser gut metagenomic profiling</title>
   <link rel="icon" type="image/svg+xml" href="./favicon.svg">
-  <link rel="stylesheet" href="./styles.css">
+  <link rel="stylesheet" href="./styles.css?v=13">
   <script>
     (function () {
       try {
@@ -44,13 +44,18 @@
 
   <main class="container wide">
     <div class="page-head">
-      <h1>Multi-sample profile</h1>
+      <h1>Quick multi-sample metagenomic profiler</h1>
       <p class="sub">Drop several FASTQs — sylph profiles each against the loaded gut database and assembles a relative-abundance matrix.</p>
     </div>
 
     <div class="privacy-notice" role="note">
       <svg class="privacy-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="m9 12 2 2 4-4"/></svg>
-      <div><strong>100% browser-based — your files never leave your computer.</strong> Computation happens entirely in your browser. No data is sent to any server.</div>
+      <div>
+        <div><strong>Your own files never leave your computer.</strong> FASTQs you drop here are read, decompressed and profiled entirely inside this browser tab. Nothing about them — not the reads, not the file names, not the results — is uploaded anywhere. That is true in every mode, whatever else this page does, and it is the reason the tool exists.</div>
+        <div style="margin-top:.45rem">This page does make two kinds of request of its own, and both are downloads <em>towards</em> you. Nothing of yours is ever sent anywhere.</div>
+        <div style="margin-top:.45rem"><strong>Loading the reference database downloads it from <code>zenodo.org</code>.</strong> The full UHGG gut database is 433 MB and is fetched the first time you click <em>Load database</em>, then kept on this computer for later visits. Zenodo sees your IP address and that you asked for this file. Choosing the bundled 6 MB smoke-test database, or a <code>.syldb</code> from your own disk, downloads nothing at all.</div>
+        <div style="margin-top:.45rem"><strong>The ENA mode below downloads public FASTQs from the EBI.</strong> If you paste an accession, this page asks the <a href="https://www.ebi.ac.uk/ena/browser/home">EBI's public ENA API</a> which files it covers and then streams those public FASTQs from the EBI's servers (any host under <code>ebi.ac.uk</code> — usually <code>ftp.sra.ebi.ac.uk</code>) straight into the profiler, without ever writing them to your disk. The EBI therefore sees your IP address and which accessions you looked up, exactly as it would if you downloaded them yourself.</div>
+      </div>
     </div>
 
     <div class="notice" role="note">
@@ -58,8 +63,8 @@
       <div><strong>Quick-and-dirty preview.</strong> This tool is meant for fast in-browser checks of gut metagenomic composition. It does not achieve the reliability of <a href="https://github.com/bluenote-1577/sylph">sylph</a>, <a href="https://github.com/biobakery/MetaPhlAn">MetaPhlAn4</a>, or <a href="https://github.com/metagenopolis/meteor">Meteor2</a> run natively — use those for real analyses. This is an <strong>unofficial adapted WebAssembly port of sylph — not supported or endorsed by the sylph authors</strong>. <strong>If you use the results, please cite the <a href="https://www.nature.com/articles/s41587-024-02412-y">sylph paper</a></strong> (Shaw &amp; Yu, <em>Nat. Biotechnol.</em> 2024) <strong>and the <a href="https://www.nature.com/articles/s41587-020-0603-3">UHGG catalog</a></strong> (Almeida <em>et al.</em>, <em>Nat. Biotechnol.</em> 2021).</div>
     </div>
 
-    <section class="card">
-      <h2>Reference database</h2>
+    <section class="card" id="cardDb">
+      <h2><span class="step-num">1</span>Reference database</h2>
       <div class="row" style="margin-top:.4rem">
         <label>Database:
           <select id="dbSelect" style="width:auto;min-width:14rem">
@@ -77,29 +82,61 @@
           </select>
         </label>
         <button id="loadDb">Load database</button>
+        <button id="cancelDb" class="hide">Cancel download</button>
         <input type="file" id="dbFile" accept=".syldb" hidden>
       </div>
-      <div class="info" id="dbInfo">Pick a database and click <em>Load database</em>. First load is the slow part.</div>
+      <div class="info" id="dbInfo">Pick a database and click <em>Load database</em>. The first load downloads the database once; it is then kept on this computer — unless the browser evicts it to reclaim disk space — so later visits start instantly.</div>
+      <div class="info" id="dbCacheInfo" style="margin-top:.4rem"></div>
     </section>
 
-    <section class="card">
-      <h2>Samples</h2>
+    <section class="card" id="cardSamples">
+      <h2><span class="step-num">2</span>Samples</h2>
       <label class="drop" id="drop">
         <input type="file" id="file" multiple accept=".fastq,.fq,.fastq.gz,.fq.gz,.gz">
         <div id="dropLabel"><strong>Drop FASTQs here</strong> or click to browse (multiple files allowed)</div>
         <div class="hint">.fastq[.gz] / .fq[.gz] — paired mates (<code>_1</code>/<code>_2</code>) auto-group into a single sample.</div>
       </label>
 
+      <div class="ena-or">or</div>
+
+      <div class="ena" id="enaPanel">
+        <div class="ena-head">
+          <strong>…or profile public data from the ENA</strong>
+          <span class="info">Paste a run, sample, experiment or project accession — nothing is permanently saved to your disk, the reads are streamed straight into the profiler.</span>
+        </div>
+        <div class="row" style="margin:.6rem 0 .2rem">
+          <input type="text" id="enaAcc" class="ena-input" placeholder="ERR14098592 · SAMEA115468000 · PRJEB83730"
+                 autocomplete="off" autocapitalize="characters" spellcheck="false" aria-label="ENA accession">
+          <button id="enaResolve" type="button">Look up</button>
+          <button id="enaCancelLookup" type="button" class="hide">Cancel</button>
+        </div>
+        <div class="info" id="enaStatus"></div>
+        <div class="err" id="enaError"></div>
+        <div id="enaResult" class="hide">
+          <div class="toolbar" style="margin-top:.6rem">
+            <span class="info" id="enaSummary"></span>
+            <button id="enaAll" type="button">Select all</button>
+            <button id="enaNone" type="button">Select none</button>
+            <button id="enaAdd" type="button">Add to samples</button>
+          </div>
+          <ul class="files ena-runs" id="enaRuns"></ul>
+        </div>
+      </div>
+
       <ul class="files hide" id="filesList"></ul>
+      <div class="info hide" id="enaPending"></div>
 
       <div class="row reads-row">
-        <label>Reads per sample: <input type="number" id="maxReads" value="3000000" min="10000" step="10000"></label>
-        <input type="range" id="maxReadsSlider" class="reads-slider" min="10000" max="5000000" step="10000" value="3000000" aria-label="Reads per sample (slider)">
+        <label>Max reads per sample: <input type="number" id="maxReads" value="3000000" min="10000" step="10000"></label>
+        <label class="pair-unit" title="A paired run has two files. Ticked, the cap and the counts are in sequenced reads, the unit the ENA publishes; unticked, they are in pairs, the unit sylph works in.">
+          <input type="checkbox" id="pairsAsTwo"> count a pair as 2 reads
+        </label>
+        <input type="range" id="maxReadsSlider" class="reads-slider" min="10000" max="60000000" step="10000" value="3000000" aria-label="Max reads per sample (slider)">
       </div>
-      <div class="info" style="margin-top:-.35rem">Recommended: <strong>3,000,000 reads</strong> — keeps memory under the 4 GB wasm32 ceiling. Higher values are allowed but the slider turns red past 3 M because the run may fail.</div>
+      <div class="info" style="margin-top:-.35rem">Fewer reads finish sooner; more reads detect species at lower abundance.</div>
       <div class="reads-warn hide" id="readsWarn">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="flex:0 0 auto;margin-top:1px"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
-        <span>Above 3,000,000 reads may exceed the 4 GB wasm32 memory ceiling — profiling may fail. Consider lowering the value, or running sylph on a server.</span>
+        <span>Above 6,000,000 reads the trimmed FASTQ no longer fits in a single browser buffer — profiling may fail. Consider lowering the value, or running sylph on a server.</span>
       </div>
 
       <div class="row">
@@ -107,6 +144,9 @@
         <button id="cancel" disabled>Cancel</button>
         <button id="clearFiles" disabled>Clear</button>
       </div>
+      <!-- Why "Profile all" is greyed out. A disabled button with no reason is a
+           dead end: the database has to be loaded first, and nothing said so. -->
+      <div class="info hide" id="runHint"></div>
 
       <div id="progress" class="hide">
         <div class="progress"><div id="bar"></div></div>
@@ -117,7 +157,7 @@
     </section>
 
     <section id="results" class="card hide">
-      <h2>Abundance matrix</h2>
+      <h2><span class="step-num">3</span>Abundance matrix</h2>
       <div class="toolbar">
         <span class="info" id="resultsSummary"></span>
         <button id="downloadTsv">Download TSV</button>
@@ -137,10 +177,10 @@
     <span class="footer-links">
       <a href="https://github.com/ggautreau/sylph-web-gut">GitHub</a>
     </span>
-    <span class="credit">Created using Claude Opus 4.7, prompted by G. Gautreau — <a href="https://maiage.inrae.fr/">MaIAGE unit (UR 1404, Mathématiques et Informatique Appliquées du Génome à l'Environnement)</a>, INRAE.</span>
+    <span class="credit">Created using Claude Opus 5, prompted by G. Gautreau — <a href="https://maiage.inrae.fr/">MaIAGE unit (UR 1404, Mathématiques et Informatique Appliquées du Génome à l'Environnement)</a>, INRAE.</span>
   </footer>
 
   <script src="./theme.js"></script>
-  <script type="module" src="./multi.js?v=2"></script>
+  <script type="module" src="./multi.js?v=13"></script>
 </body>
 </html>

@@ -1,3 +1,13 @@
+> [!NOTE]
+> **This is a modified copy, not upstream sylph.** It is a fork of
+> [bluenote-1577/sylph](https://github.com/bluenote-1577/sylph) 0.9.0 carrying a `wasm` feature,
+> a wasm-bindgen surface (`src/wasm.rs`) and a streaming sketcher, for
+> [sylph-web-gut](https://github.com/ggautreau/sylph-web-gut). The algorithms and the `.syldb`
+> format are untouched. Original work © 2023 Jim Shaw, MIT — see `LICENSE`. Please report
+> problems with this port to sylph-web-gut, not to the sylph authors.
+>
+> The README below is upstream's, kept as it was.
+
 # sylph - fast and precise species-level metagenomic profiling with ANIs 
 
 > [!IMPORTANT]

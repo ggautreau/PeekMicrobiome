@@ -33,7 +33,7 @@ export class Profiler {
      */
     get c() {
         const ret = wasm.profiler_c(this.__wbg_ptr);
-        return ret >>> 0;
+        return ret;
     }
     /**
      * Abandon the sample in progress and free everything it holds.
@@ -52,7 +52,7 @@ export class Profiler {
      */
     get database_size() {
         const ret = wasm.profiler_database_size(this.__wbg_ptr);
-        return ret >>> 0;
+        return ret;
     }
     /**
      * Feed the next slice of the single-end FASTQ. Returns the cumulative
@@ -119,7 +119,7 @@ export class Profiler {
      */
     get k() {
         const ret = wasm.profiler_k(this.__wbg_ptr);
-        return ret >>> 0;
+        return ret;
     }
     /**
      * Load a sylph database. `syldb` is the raw bytes of a `.syldb` file
@@ -302,8 +302,8 @@ function __wbg_get_imports() {
             const ret = typeof(obj) === 'string' ? obj : undefined;
             var ptr1 = isLikeNone(ret) ? 0 : passStringToWasm0(ret, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
             var len1 = WASM_VECTOR_LEN;
-            getDataViewMemory0().setInt32(arg0 + 4 * 1, len1, true);
-            getDataViewMemory0().setInt32(arg0 + 4 * 0, ptr1, true);
+            getDataViewMemory0().setFloat64(Number(arg0) + 8 * 1, len1, true);
+            getDataViewMemory0().setFloat64(Number(arg0) + 8 * 0, ptr1, true);
         },
         __wbg___wbindgen_throw_344f42d3211c4765: function(arg0, arg1) {
             throw new Error(getStringFromWasm0(arg0, arg1));
@@ -374,7 +374,7 @@ function getDataViewMemory0() {
 }
 
 function getStringFromWasm0(ptr, len) {
-    return decodeText(ptr >>> 0, len);
+    return decodeText(ptr, len);
 }
 
 let cachedUint8ArrayMemory0 = null;
@@ -399,7 +399,7 @@ function isLikeNone(x) {
 }
 
 function passArray8ToWasm0(arg, malloc) {
-    const ptr = malloc(arg.length * 1, 1) >>> 0;
+    const ptr = malloc(arg.length * 1, 1);
     getUint8ArrayMemory0().set(arg, ptr / 1);
     WASM_VECTOR_LEN = arg.length;
     return ptr;
@@ -408,14 +408,14 @@ function passArray8ToWasm0(arg, malloc) {
 function passStringToWasm0(arg, malloc, realloc) {
     if (realloc === undefined) {
         const buf = cachedTextEncoder.encode(arg);
-        const ptr = malloc(buf.length, 1) >>> 0;
+        const ptr = malloc(buf.length, 1);
         getUint8ArrayMemory0().subarray(ptr, ptr + buf.length).set(buf);
         WASM_VECTOR_LEN = buf.length;
         return ptr;
     }
 
     let len = arg.length;
-    let ptr = malloc(len, 1) >>> 0;
+    let ptr = malloc(len, 1);
 
     const mem = getUint8ArrayMemory0();
 
@@ -430,12 +430,12 @@ function passStringToWasm0(arg, malloc, realloc) {
         if (offset !== 0) {
             arg = arg.slice(offset);
         }
-        ptr = realloc(ptr, len, len = offset + arg.length * 3, 1) >>> 0;
+        ptr = realloc(ptr, len, len = offset + arg.length * 3, 1);
         const view = getUint8ArrayMemory0().subarray(ptr + offset, ptr + len);
         const ret = cachedTextEncoder.encodeInto(arg, view);
 
         offset += ret.written;
-        ptr = realloc(ptr, len, offset, 1) >>> 0;
+        ptr = realloc(ptr, len, offset, 1);
     }
 
     WASM_VECTOR_LEN = offset;
