@@ -1046,5 +1046,46 @@ console.log("\n== N. rate meter ==");
   check("no elapsed time gives NaN, not Infinity", Number.isNaN(m2.push(1000)));
 }
 
+// The failure this exists for is not a crash: an amplicon run profiles cleanly,
+// finds nothing, and shows an empty table. Correct, and indistinguishable from a
+// bug — PRJNA1270378 (26 AMPLICON/Nanopore runs, 4.89 GiB) is what surfaced it.
+console.log("\n== O. library types sylph cannot profile ==");
+{
+  const row = (over) => ({
+    run_accession: "SRRX", library_layout: "SINGLE",
+    fastq_ftp: "ftp.sra.ebi.ac.uk/x.fastq.gz", fastq_bytes: "100", read_count: "10",
+    ...over,
+  });
+  const amplicon = parseRunRow(row({
+    library_strategy: "AMPLICON", library_source: "GENOMIC",
+    instrument_platform: "OXFORD_NANOPORE",
+  }));
+  check("an amplicon run is flagged before anything is downloaded",
+    amplicon.unprofilable !== "", amplicon.unprofilable.slice(0, 60));
+  check("...and the reason names amplicons rather than blaming the database",
+    /amplicon/i.test(amplicon.unprofilable) && !/database is wrong/i.test(amplicon.unprofilable));
+  check("...and the run stays usable, so the user may still tick it",
+    amplicon.usable === true);
+  check("...and the strategy is carried for display", amplicon.strategy === "AMPLICON");
+
+  check("a metatranscriptomic run is flagged through library_source",
+    parseRunRow(row({ library_strategy: "OTHER", library_source: "METATRANSCRIPTOMIC" }))
+      .unprofilable !== "");
+
+  // The other half, and the one that makes the check worth having: shotgun
+  // metagenomes must pass silently. A warning that fires on good runs is one
+  // the user learns to click through on the bad ones.
+  check("a WGS metagenome is NOT flagged",
+    parseRunRow(row({ library_strategy: "WGS", library_source: "METAGENOMIC" }))
+      .unprofilable === "");
+  check("OTHER/METAGENOMIC is NOT flagged — that is how many shotgun runs are declared",
+    parseRunRow(row({ library_strategy: "OTHER", library_source: "METAGENOMIC" }))
+      .unprofilable === "");
+  check("a run with no library metadata at all is NOT flagged",
+    parseRunRow(row({})).unprofilable === "");
+  check("case and padding in the ENA's fields do not change the verdict",
+    parseRunRow(row({ library_strategy: " amplicon " })).unprofilable !== "");
+}
+
 console.log(`\n${passes} passed, ${failures} failed`);
 process.exit(failures === 0 ? 0 : 1);

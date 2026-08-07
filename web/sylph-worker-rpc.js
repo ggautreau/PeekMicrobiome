@@ -46,7 +46,12 @@
 // catalogue at its bare path and keep the cached copy in which eighteen of the
 // nineteen entries are greyed out as unpublished — the databases would be live
 // and the app would go on saying they are not.
-export const WORKER_VERSION = "15";
+// v16: ena.js asks the portal API for library_strategy/source/platform and
+// flags runs sylph cannot profile (amplicon, RNA-Seq, capture). A page holding
+// ena.js?v=15 would request the old field list, get no strategy back, and every
+// run — including the 16S ones — would look profilable, which is the exact
+// silence this release is about.
+export const WORKER_VERSION = "16";
 
 // ---- memory64 capability probe ----------------------------------------------
 

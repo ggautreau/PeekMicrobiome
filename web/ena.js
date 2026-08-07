@@ -40,7 +40,15 @@ export const ENA_PORTAL_API = "https://www.ebi.ac.uk/ena/portal/api/filereport";
 // user input, and the commas are what the API expects. The ONLY thing that ever
 // comes from the user is the accession, and it goes through both a strict
 // whitelist regex and encodeURIComponent.
-export const ENA_FIELDS = "run_accession,library_layout,fastq_ftp,fastq_bytes,read_count";
+// library_strategy/source/platform cost nothing: they ride along in the one
+// filereport request this module already makes. Without them the app profiles
+// a 16S amplicon run against a genome catalogue, finds nothing, and shows an
+// empty table — a correct answer that is indistinguishable from a broken one.
+// PRJNA1270378 is the case that surfaced this: AMPLICON / PCR / Nanopore,
+// vaginal metagenome, zero detections and no explanation.
+export const ENA_FIELDS =
+  "run_accession,library_layout,fastq_ftp,fastq_bytes,read_count," +
+  "library_strategy,library_source,instrument_platform";
 
 // An INSDC accession: three to six letters then digits. PRJEB83730, SAMEA…,
 // ERR14098592, SRR…, ERS…, ERX…, ERP… all fit; nothing else is sent to the API.
@@ -129,6 +137,63 @@ export function fastqUrl(raw, allowHosts = ENA_FASTQ_HOSTS) {
   return { url: u.href };
 }
 
+// ---- is this run the kind of data sylph can profile at all? ------------------
+
+// sylph asks what fraction of a reference genome the reads cover. That question
+// only means something when the reads were drawn from whole genomes. The
+// library types below answer it with a number that is technically correct and
+// biologically meaningless, and the user sees an empty table.
+//
+// Deliberately a fixed table rather than a "not WGS → complain" rule. ENA's
+// library_strategy has ~35 values and metagenomic shotgun runs are declared
+// under WGS, WGA and quite often OTHER; treating everything unrecognised as
+// suspect would cry wolf on ordinary data, and a warning that fires on good
+// runs is one the user learns to click through on the bad ones.
+const UNPROFILABLE_STRATEGY = {
+  AMPLICON:
+    "an amplicon library (16S/ITS or similar), not shotgun metagenomics. sylph measures how much " +
+    "of a whole genome the reads cover; an amplicon covers well under 1% of one, so this run " +
+    "will produce no detections against any catalogue. Use a 16S classifier instead",
+  "RNA-SEQ":
+    "an RNA-Seq library. sylph profiles genomic DNA against genome sketches; transcript coverage " +
+    "is uneven and confined to expressed regions, so the abundances would not mean what they say",
+  WXS:
+    "an exome capture library — reads are confined to targeted regions, so genome coverage is not " +
+    "what it appears to be",
+  "TARGETED-CAPTURE":
+    "a targeted capture library — reads are confined to the capture panel, so genome coverage is " +
+    "not what it appears to be",
+  "BISULFITE-SEQ":
+    "a bisulfite library: unmethylated cytosines are read as thymines, which destroys the exact " +
+    "31-mers sylph matches on",
+  "HI-C": "a Hi-C library, built to measure contacts rather than to cover genomes evenly",
+  "CHIP-SEQ": "a ChIP-Seq library, enriched on bound regions rather than covering genomes",
+  "ATAC-SEQ": "an ATAC-seq library, enriched on accessible chromatin rather than covering genomes",
+};
+
+const UNPROFILABLE_SOURCE = {
+  METATRANSCRIPTOMIC:
+    "a metatranscriptomic library. sylph profiles genomic DNA against genome sketches; RNA " +
+    "coverage follows expression, not genome content",
+  TRANSCRIPTOMIC:
+    "a transcriptomic library. sylph profiles genomic DNA against genome sketches",
+};
+
+/**
+ * Why this run will not profile usefully, or "" when nothing is wrong with it.
+ *
+ * Returns a reason only for library types that are known-unsuitable. An unknown
+ * or absent strategy returns "": the ENA lets submitters leave these fields
+ * loose, and silence about data we cannot judge is better than a warning the
+ * user has to learn to ignore.
+ */
+export function libraryWarning(row) {
+  const strategy = String(row?.strategy ?? "").trim().toUpperCase();
+  const source = String(row?.source ?? "").trim().toUpperCase();
+  const why = UNPROFILABLE_STRATEGY[strategy] ?? UNPROFILABLE_SOURCE[source] ?? "";
+  return why;
+}
+
 // One row of the filereport → one run, with the layout question already
 // answered. The real-world shapes this has to survive, all seen in ENA:
 //
@@ -176,8 +241,15 @@ export function parseRunRow(row, { allowHosts = ENA_FASTQ_HOSTS } = {}) {
     });
   }
 
+  const strategy = String(row?.library_strategy ?? "").trim();
+  const source = String(row?.library_source ?? "").trim();
+  const platform = String(row?.instrument_platform ?? "").trim();
   const base = {
-    run, declaredLayout, reads,
+    run, declaredLayout, reads, strategy, source, platform,
+    // Carried on the run rather than computed at render time: whether a run can
+    // be profiled at all is a property of the run, and both the picker and the
+    // per-sample row need the same answer.
+    unprofilable: libraryWarning({ strategy, source }),
     bytes: files.reduce((a, f) => a + (Number.isFinite(f.bytes) ? f.bytes : 0), 0),
     bytesUnknown: files.filter((f) => !Number.isFinite(f.bytes)).length,
   };

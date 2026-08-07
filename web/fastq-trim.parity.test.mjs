@@ -1097,15 +1097,37 @@ console.log("== the picker is built from the catalogue ==");
   check("a local file has no catalogue entry behind it",
     biomes.biomeForUrl(catalog, biomes.LOCAL_VALUE) === null);
 
-  const disabled = options.filter((o) => o.disabled);
+  // Every one of the nineteen is published now, so the real catalogue holds no
+  // URL-less entry to assert on and these checks would be asserting 0 === 0 —
+  // they could no longer fail. The pending entry is therefore built here, with
+  // a reason this test owns, so what is pinned is the mechanism rather than the
+  // wording of the day.
+  const PENDING_REASON = "sentinel: built but with nowhere to fetch it from";
+  const withPending = biomes.normaliseCatalog({
+    ...catalogJson,
+    pendingNote: PENDING_REASON,
+    groups: catalogJson.groups.map((g, i) => (i > 0 ? g : {
+      ...g,
+      biomes: [...g.biomes, { ...g.biomes[0], key: "pending-test", label: "Pending test biome", url: "" }],
+    })),
+  });
+  const selectP = makeNode("select");
+  biomes.renderDbSelect(selectP, withPending, { selected: "" });
+  const disabled = selectP.children.flatMap((g) => g.children).filter((o) => o.disabled);
   check("entries with no URL are present but unselectable",
-    disabled.length === catalogEntries.filter((b) => !b.available).length && disabled.length > 0,
-    `${disabled.length} disabled`);
+    disabled.length === 1, `${disabled.length} disabled`);
   check("...with no value, so they cannot be loaded even by accident",
     disabled.every((o) => o.value === ""));
   check("...and the reason is in the text the user reads",
-    disabled.every((o) => /not published yet|no public URL/.test(o.textContent)),
+    disabled.every((o) => o.textContent.includes(PENDING_REASON)),
     disabled[0]?.textContent ?? "");
+  // The other direction: with the real catalogue nothing is greyed out, and
+  // every published biome is selectable. Checking only the pending case would
+  // pass just as well if all nineteen had lost their URLs.
+  check("...while in the real catalogue all nineteen are selectable",
+    options.filter((o) => o.disabled).length === 0
+    && catalogEntries.filter((b) => b.available).length === catalogEntries.length,
+    `${options.filter((o) => o.disabled).length} disabled of ${catalogEntries.length}`);
 
   check("the first available biome is selected by default",
     picked?.key === "human-gut" && select.value === picked.url, picked?.key ?? "none");
@@ -1116,9 +1138,11 @@ console.log("== the picker is built from the catalogue ==");
   const select2 = makeNode("select");
   const p2 = biomes.renderDbSelect(select2, catalog, { selected: "gut-mini" });
   check("a remembered biome is restored", p2?.key === "gut-mini" && select2.value === p2.url);
-  const stalled = catalogEntries.find((b) => !b.available);
+  // Same reason as above: no real entry is unavailable any more, so the stalled
+  // one has to come from the fixture rather than from the catalogue on disk.
+  const stalled = biomes.allBiomes(withPending).find((b) => !b.available);
   const select3 = makeNode("select");
-  const p3 = biomes.renderDbSelect(select3, catalog, { selected: stalled.key });
+  const p3 = biomes.renderDbSelect(select3, withPending, { selected: stalled.key });
   check("a remembered biome that is not downloadable falls back to one that is",
     p3?.available === true && p3.key !== stalled.key, p3?.key ?? "none");
 
@@ -1127,7 +1151,7 @@ console.log("== the picker is built from the catalogue ==");
   check("the built-in fallback still offers a database and the smoke test",
     biomes.allBiomes(fb).length === 2 && biomes.allBiomes(fb).every((b) => b.available));
   check("...and the pages ship the same two in their markup, for the same reason",
-    /gut\.syldb\/content/.test(indexSrcForBiome) && /db\/gut_mini\.syldb/.test(indexSrcForBiome)
+    /human-gut\.syldb\/content/.test(indexSrcForBiome) && /db\/gut_mini\.syldb/.test(indexSrcForBiome)
     && /gut\.syldb\/content/.test(profileSrcForBiome) && /db\/gut_mini\.syldb/.test(profileSrcForBiome));
   check("...including the local-file option, which is not a catalogue entry",
     /value="__local__"/.test(indexSrcForBiome) && /value="__local__"/.test(profileSrcForBiome));

@@ -11,21 +11,21 @@
 import {
   sylphWorkerRpc, detectMemory64, chooseWasmBits, WORKER_VERSION,
   readsBudget, readsBudgetNote, readsOverBudgetNote, loadedBuildNote, fmtReads,
-} from "./sylph-worker-rpc.js?v=15";
+} from "./sylph-worker-rpc.js?v=16";
 import {
   dbCacheClient, fmtRate, fmtEta, cacheSummary, assertSameDatabase,
-} from "./db-cache.js?v=15";
-import { matePattern, stripFastqExt } from "./sample-naming.js?v=15";
+} from "./db-cache.js?v=16";
+import { matePattern, stripFastqExt } from "./sample-naming.js?v=16";
 import {
   resolveAccession, validateAccession, ASSUMED_BPS,
   downloadEstimate, readCountVerdict, expectedProfiledReads,
-} from "./ena.js?v=15";
+} from "./ena.js?v=16";
 import {
   fetchCatalog, fallbackCatalog, renderDbSelect, biomeForUrl, biomeNote,
   makeDbRef, sameDbRef, refLine, refShort, refCommentLines, refSlug, genomeCountMismatch,
   rememberBiome, recallBiome, catalogueName, LOCAL_VALUE,
   selectionMatchesLoaded, notLoadedNote, refMetaMismatch,
-} from "./biomes.js?v=15";
+} from "./biomes.js?v=16";
 
 const $ = (id) => document.getElementById(id);
 const els = {
@@ -1021,12 +1021,22 @@ async function enaLookup() {
     const runs = await resolveAccession(v.acc, { signal: enaAbort.signal });
     enaResolved = runs;
     enaSelected.clear();
-    for (const r of runs) if (r.usable) enaSelected.add(r.run);
+    // Runs whose library type cannot be profiled are listed and can be ticked,
+    // but are NOT ticked for you: the default should not spend 200 MB a run on
+    // a download whose result is known in advance to be empty. "Select all"
+    // still takes them — that is an explicit instruction, this is a default.
+    for (const r of runs) if (r.usable && !r.unprofilable) enaSelected.add(r.run);
     const bad = runs.filter((r) => !r.usable).length;
+    const unprofilable = runs.filter((r) => r.usable && r.unprofilable).length;
     if (els.enaStatus) {
+      const asides = [];
+      if (bad) asides.push(`${bad} without downloadable FASTQ`);
+      if (unprofilable) {
+        asides.push(`${unprofilable} not shotgun metagenomics — left unticked, see below`);
+      }
       els.enaStatus.textContent =
         `${runs.length} run${runs.length === 1 ? "" : "s"} in ${v.acc}` +
-        (bad ? ` (${bad} without downloadable FASTQ)` : "");
+        (asides.length ? ` (${asides.join("; ")})` : "");
     }
     renderEnaRuns();
   } catch (e) {
@@ -1071,9 +1081,16 @@ function renderEnaRuns() {
         <span class="ena-note">already in the sample list below</span>
       </li>`;
     }
+    // The library type goes on its own line, not folded into `notes`: the other
+    // notes are about which FILES were taken, this one is about whether the run
+    // can answer the question at all, and it is the reason the box is unticked.
+    const lib = r.unprofilable
+      ? `<span class="ena-note ena-row-note ena-unprofilable">` +
+        `${escapeHTML(r.strategy || "this run")} — ${escapeHTML(r.unprofilable)}</span>`
+      : "";
     // Two columns rather than one run-on line: with 85 runs the sizes and read
     // counts are what you scan down, and they only compare if they line up.
-    return `<li>
+    return `<li${r.unprofilable ? ' class="ena-warned"' : ""}>
       <label class="ena-pick">
         <input type="checkbox" data-run="${escapeHTML(r.run)}" ${enaSelected.has(r.run) ? "checked" : ""}>
         <span class="ena-id">${escapeHTML(r.run)} <small>${tag}</small></span>
@@ -1083,6 +1100,7 @@ function renderEnaRuns() {
         <span class="ena-reads">${escapeHTML(reads)}</span>
       </span>
       ${notes ? `<span class="ena-note ena-row-note">${escapeHTML(notes)}</span>` : ""}
+      ${lib}
     </li>`;
   }).join("");
   updateEnaSummary();

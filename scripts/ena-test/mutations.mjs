@@ -309,6 +309,25 @@ const MUTATIONS = [
     to: `    if (!resp.ok && resp.status !== 206) throw new Error(\`HTTP \${resp.status}\`);`,
     expect: /releases the response body/,
   },
+  {
+    // The failure mode here is an EMPTY TABLE, not an exception: without this
+    // check an amplicon run downloads, profiles, finds nothing, and looks
+    // exactly like a bug in the database.
+    name: "library type: profile amplicon runs as if they were shotgun",
+    why: "26 runs and 4.89 GiB downloaded to produce a blank result with no explanation",
+    from: `  const why = UNPROFILABLE_STRATEGY[strategy] ?? UNPROFILABLE_SOURCE[source] ?? "";`,
+    to: `  const why = "";`,
+    expect: /amplicon run is flagged|metatranscriptomic run is flagged/,
+  },
+  {
+    // The other direction, and the one that rots quietly: a check that fires on
+    // everything is worse than no check, because the user stops reading it.
+    name: "library type: warn on every run, including good shotgun ones",
+    why: "a warning on WGS metagenomes is one the user learns to click through",
+    from: `  const why = UNPROFILABLE_STRATEGY[strategy] ?? UNPROFILABLE_SOURCE[source] ?? "";`,
+    to: `  const why = "this run may not be shotgun metagenomics";`,
+    expect: /WGS metagenome is NOT flagged|OTHER\/METAGENOMIC is NOT flagged/,
+  },
 ];
 
 // ---- running them ------------------------------------------------------------

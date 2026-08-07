@@ -4,6 +4,38 @@ Figures in this file are measured on the development machine (Chrome 151, Linux,
 not estimated. Where a number replaced an assumption, the assumption is named too — several of
 them were wrong in ways that mattered.
 
+## 2026-08-07 (2)
+
+### Runs sylph cannot profile are named as such, before they are downloaded
+
+Profiling PRJNA1270378 against the vaginal catalogue returned nothing. That was the correct
+answer — 26 AMPLICON / PCR / Nanopore runs, 16S rather than shotgun — but the app had no way to
+say so. sylph asks what fraction of a whole genome the reads cover; an amplicon covers well under
+1% of one, so the containment stays below the detection threshold whatever catalogue is loaded.
+An empty table, with no error and no warning, is indistinguishable from a bug, and the natural
+conclusion is that the database is wrong.
+
+`library_strategy`, `library_source` and `instrument_platform` ride along in the filereport
+request `ena.js` already makes — the information was one word away in a URL. Runs whose library
+type cannot answer the question are now listed with the reason, and left **unticked**: the
+default should not spend 200 MB a run on a download whose result is known in advance. They stay
+tickable, and "Select all" still takes them; that is an explicit instruction, this is a default.
+On PRJNA1270378 it is 4.89 GiB not downloaded.
+
+- Deliberately a fixed table (AMPLICON, RNA-Seq, WXS, Targeted-Capture, Bisulfite-Seq, Hi-C,
+  ChIP-Seq, ATAC-seq, and METATRANSCRIPTOMIC via `library_source`) rather than "not WGS →
+  complain". ENA has ~35 strategy values and shotgun metagenomes are declared under WGS, WGA and
+  quite often OTHER; a warning that fires on good runs is one the user learns to click through on
+  the bad ones. A run with no library metadata says nothing.
+- Both directions are pinned by mutation: one that stops warning entirely, and one that warns on
+  everything. The second matters as much as the first.
+- **`web/fastq-trim.parity.test.mjs` had been crashing since the databases were published** — it
+  asserted on entries with no URL, and there are none left. Caught here rather than there because
+  that suite was not run before the previous commit was pushed. No user-facing effect: the suite
+  broke, not the site. Repaired the same way as the other one, by building the pending entry in
+  the fixture instead of borrowing it from production data. A `/gut\.syldb/` check that passed
+  only because `human-gut.syldb` contains that substring was made explicit at the same time.
+
 ## 2026-08-07
 
 ### The nineteen databases are published
