@@ -1,0 +1,283 @@
+{
+  "schema": 1,
+  "generated": "2026-08-07",
+  "_howto": "One entry per MGnify genome catalogue. `url` is the only field that has to be edited by hand: after depositing <key>.syldb on Zenodo, paste the CORS-enabled file URL — https://zenodo.org/api/records/<record>/files/<file>/content — into the matching entry (and its DOI into `doi`, which is optional). An entry with an empty `url` still appears in the picker, greyed out, saying why; it is never dropped silently. Everything else comes from data/biome-dbs/manifest.tsv, where `species` is the genome count sylph inspect reported for the built database.",
+  "_warning": "MGnify publishes no unified catalogue: every catalogue is dereplicated on its own and they overlap (10% of the named species are shared between human-oral and human-skin). Two of these databases must therefore never be loaded together — sylph's pseudotax reassignment separates close genomes WITHIN one database, it cannot arbitrate between two independently dereplicated catalogues. One biome at a time, chosen by the user, is the whole design.",
+  "pendingNote": "not published yet — this database is built but has no public URL",
+  "groups": [
+    {
+      "key": "human",
+      "label": "Human",
+      "biomes": [
+        {
+          "key": "human-gut",
+          "label": "Human gut",
+          "hint": "stool and intestinal content (UHGG)",
+          "catalogue": "human-gut",
+          "version": "v2.0.2",
+          "species": 4744,
+          "bytes": 454021440,
+          "file": "gut.syldb",
+          "url": "https://zenodo.org/api/records/20180025/files/gut.syldb/content",
+          "source": "https://ftp.ebi.ac.uk/pub/databases/metagenomics/mgnify_genomes/human-gut/v2.0.2",
+          "doi": "10.5281/zenodo.20180025",
+          "lineage": "db/lineage.json"
+        },
+        {
+          "key": "human-oral",
+          "label": "Human oral",
+          "hint": "saliva, dental plaque, tongue",
+          "catalogue": "human-oral",
+          "version": "v1.0.1",
+          "species": 452,
+          "bytes": 33236205,
+          "file": "human-oral.syldb",
+          "url": "",
+          "source": "https://ftp.ebi.ac.uk/pub/databases/metagenomics/mgnify_genomes/human-oral/v1.0.1"
+        },
+        {
+          "key": "human-skin",
+          "label": "Human skin",
+          "hint": "skin swabs",
+          "catalogue": "human-skin",
+          "version": "v1.0",
+          "species": 579,
+          "bytes": 61571469,
+          "file": "human-skin.syldb",
+          "url": "",
+          "source": "https://ftp.ebi.ac.uk/pub/databases/metagenomics/mgnify_genomes/human-skin/v1.0"
+        },
+        {
+          "key": "human-vaginal",
+          "label": "Human vaginal",
+          "hint": "vaginal swabs",
+          "catalogue": "human-vaginal",
+          "version": "v1.0",
+          "species": 280,
+          "bytes": 19267520,
+          "file": "human-vaginal.syldb",
+          "url": "",
+          "source": "https://ftp.ebi.ac.uk/pub/databases/metagenomics/mgnify_genomes/human-vaginal/v1.0"
+        }
+      ]
+    },
+    {
+      "key": "animal",
+      "label": "Animal",
+      "biomes": [
+        {
+          "key": "chicken-gut",
+          "label": "Chicken gut",
+          "hint": "caecum and faeces",
+          "catalogue": "chicken-gut",
+          "version": "v1.0.1",
+          "species": 1322,
+          "bytes": 120696472,
+          "file": "chicken-gut.syldb",
+          "url": "",
+          "source": "https://ftp.ebi.ac.uk/pub/databases/metagenomics/mgnify_genomes/chicken-gut/v1.0.1"
+        },
+        {
+          "key": "cow-rumen",
+          "label": "Cow rumen",
+          "hint": "rumen content",
+          "catalogue": "cow-rumen",
+          "version": "v1.0.1",
+          "species": 2729,
+          "bytes": 248090414,
+          "file": "cow-rumen.syldb",
+          "url": "",
+          "source": "https://ftp.ebi.ac.uk/pub/databases/metagenomics/mgnify_genomes/cow-rumen/v1.0.1"
+        },
+        {
+          "key": "honeybee-gut",
+          "label": "Honeybee gut",
+          "hint": "whole-gut homogenate",
+          "catalogue": "honeybee-gut",
+          "version": "v1.0.1",
+          "species": 154,
+          "bytes": 17154522,
+          "file": "honeybee-gut.syldb",
+          "url": "",
+          "source": "https://ftp.ebi.ac.uk/pub/databases/metagenomics/mgnify_genomes/honeybee-gut/v1.0.1"
+        },
+        {
+          "key": "mouse-gut",
+          "label": "Mouse gut",
+          "hint": "faeces and intestinal content",
+          "catalogue": "mouse-gut",
+          "version": "v1.0",
+          "species": 2847,
+          "bytes": 287149810,
+          "file": "mouse-gut.syldb",
+          "url": "",
+          "source": "https://ftp.ebi.ac.uk/pub/databases/metagenomics/mgnify_genomes/mouse-gut/v1.0"
+        },
+        {
+          "key": "non-model-fish-gut",
+          "label": "Non-model fish gut",
+          "hint": "gut content of wild and farmed fish",
+          "catalogue": "non-model-fish-gut",
+          "version": "v2.0",
+          "species": 178,
+          "bytes": 16123334,
+          "file": "non-model-fish-gut.syldb",
+          "url": "",
+          "source": "https://ftp.ebi.ac.uk/pub/databases/metagenomics/mgnify_genomes/non-model-fish-gut/v2.0"
+        },
+        {
+          "key": "pig-gut",
+          "label": "Pig gut",
+          "hint": "faeces and intestinal content",
+          "catalogue": "pig-gut",
+          "version": "v1.0",
+          "species": 1376,
+          "bytes": 113386912,
+          "file": "pig-gut.syldb",
+          "url": "",
+          "source": "https://ftp.ebi.ac.uk/pub/databases/metagenomics/mgnify_genomes/pig-gut/v1.0"
+        },
+        {
+          "key": "sheep-rumen",
+          "label": "Sheep rumen",
+          "hint": "rumen content",
+          "catalogue": "sheep-rumen",
+          "version": "v1.0",
+          "species": 2172,
+          "bytes": 187765864,
+          "file": "sheep-rumen.syldb",
+          "url": "",
+          "source": "https://ftp.ebi.ac.uk/pub/databases/metagenomics/mgnify_genomes/sheep-rumen/v1.0"
+        },
+        {
+          "key": "zebrafish-fecal",
+          "label": "Zebrafish faecal",
+          "hint": "faeces of laboratory zebrafish",
+          "catalogue": "zebrafish-fecal",
+          "version": "v1.0",
+          "species": 79,
+          "bytes": 12557284,
+          "file": "zebrafish-fecal.syldb",
+          "url": "",
+          "source": "https://ftp.ebi.ac.uk/pub/databases/metagenomics/mgnify_genomes/zebrafish-fecal/v1.0"
+        }
+      ]
+    },
+    {
+      "key": "plant-soil",
+      "label": "Plant & soil",
+      "biomes": [
+        {
+          "key": "barley-rhizosphere",
+          "label": "Barley rhizosphere",
+          "hint": "root-adhering soil",
+          "catalogue": "barley-rhizosphere",
+          "version": "v2.0",
+          "species": 86,
+          "bytes": 15345602,
+          "file": "barley-rhizosphere.syldb",
+          "url": "",
+          "source": "https://ftp.ebi.ac.uk/pub/databases/metagenomics/mgnify_genomes/barley-rhizosphere/v2.0"
+        },
+        {
+          "key": "maize-rhizosphere",
+          "label": "Maize rhizosphere",
+          "hint": "root-adhering soil",
+          "catalogue": "maize-rhizosphere",
+          "version": "v1.0",
+          "species": 336,
+          "bytes": 55311704,
+          "file": "maize-rhizosphere.syldb",
+          "url": "",
+          "source": "https://ftp.ebi.ac.uk/pub/databases/metagenomics/mgnify_genomes/maize-rhizosphere/v1.0"
+        },
+        {
+          "key": "tomato-rhizosphere",
+          "label": "Tomato rhizosphere",
+          "hint": "root-adhering soil",
+          "catalogue": "tomato-rhizosphere",
+          "version": "v1.0",
+          "species": 579,
+          "bytes": 95785749,
+          "file": "tomato-rhizosphere.syldb",
+          "url": "",
+          "source": "https://ftp.ebi.ac.uk/pub/databases/metagenomics/mgnify_genomes/tomato-rhizosphere/v1.0"
+        },
+        {
+          "key": "soil",
+          "label": "Soil",
+          "hint": "bulk soil, all climates",
+          "catalogue": "soil",
+          "version": "v1.0",
+          "species": 19472,
+          "bytes": 2959289168,
+          "file": "soil.syldb",
+          "url": "",
+          "source": "https://ftp.ebi.ac.uk/pub/databases/metagenomics/mgnify_genomes/soil/v1.0"
+        }
+      ]
+    },
+    {
+      "key": "marine",
+      "label": "Marine",
+      "biomes": [
+        {
+          "key": "marine",
+          "label": "Marine water",
+          "hint": "sea water, all depths",
+          "catalogue": "marine",
+          "version": "v2.0",
+          "species": 13223,
+          "bytes": 1281608885,
+          "file": "marine.syldb",
+          "url": "",
+          "source": "https://ftp.ebi.ac.uk/pub/databases/metagenomics/mgnify_genomes/marine/v2.0"
+        },
+        {
+          "key": "marine-sediment",
+          "label": "Marine sediment",
+          "hint": "sea-floor sediment",
+          "catalogue": "marine-sediment",
+          "version": "v1.0",
+          "species": 6158,
+          "bytes": 706660184,
+          "file": "marine-sediment.syldb",
+          "url": "",
+          "source": "https://ftp.ebi.ac.uk/pub/databases/metagenomics/mgnify_genomes/marine-sediment/v1.0"
+        },
+        {
+          "key": "marine-eukaryotes",
+          "label": "Marine eukaryotes",
+          "hint": "protist and algal MAGs — beta catalogue",
+          "catalogue": "marine-eukaryotes",
+          "version": "vbeta",
+          "species": 16,
+          "bytes": 13460832,
+          "file": "marine-eukaryotes.syldb",
+          "url": "",
+          "source": "https://ftp.ebi.ac.uk/pub/databases/metagenomics/mgnify_genomes/marine-eukaryotes/vbeta"
+        }
+      ]
+    },
+    {
+      "key": "test",
+      "label": "Testing",
+      "biomes": [
+        {
+          "key": "gut-mini",
+          "label": "Smoke test — 50 human-gut species",
+          "hint": "a 50-genome cut of the human-gut catalogue, bundled with the site",
+          "catalogue": "human-gut",
+          "version": "v2.0.2",
+          "species": 50,
+          "bytes": 6516832,
+          "file": "gut_mini.syldb",
+          "url": "db/gut_mini.syldb",
+          "bundled": true,
+          "lineage": "db/lineage.json",
+          "source": "https://ftp.ebi.ac.uk/pub/databases/metagenomics/mgnify_genomes/human-gut/v2.0.2"
+        }
+      ]
+    }
+  ]
+}

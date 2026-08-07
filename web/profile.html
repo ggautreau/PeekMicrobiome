@@ -3,9 +3,9 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Sylph profile · sylph-web-gut</title>
+  <title>Single sample · PeekMicrobiome</title>
   <link rel="icon" type="image/svg+xml" href="./favicon.svg">
-  <link rel="stylesheet" href="./styles.css?v=13">
+  <link rel="stylesheet" href="./styles.css?v=14">
   <script>
     (function () {
       try {
@@ -24,14 +24,14 @@
 <body>
   <div class="beta-bar" role="alert">
     <span class="beta-pill">BETA</span>
-    <span>In active development — bugs expected. Report issues at <a href="https://github.com/ggautreau/sylph-web-gut/issues">github.com/ggautreau/sylph-web-gut</a>.</span>
+    <span>In active development — bugs expected. Report issues at <a href="https://github.com/ggautreau/PeekMicrobiome/issues">github.com/ggautreau/PeekMicrobiome</a>.</span>
   </div>
   <header class="app-header">
     <a class="brand" href="./index.html">
-      <div class="brand-logo">S</div>
+      <div class="brand-logo">P</div>
       <div class="brand-text">
-        <span class="brand-title">sylph-web-gut</span>
-        <span class="brand-tagline">In-browser gut metagenomic profiling</span>
+        <span class="brand-title">PeekMicrobiome</span>
+        <span class="brand-tagline">Metagenomic profiling across biomes, in your browser</span>
       </div>
     </a>
     <nav class="app-nav">
@@ -45,38 +45,51 @@
 
   <main class="container">
     <div class="page-head">
-      <h1>Sylph profile</h1>
-      <p class="sub">Drop a FASTQ — sylph sketches it and profiles against the UHGG gut reference, locally in your browser. No upload.</p>
+      <h1>Single sample</h1>
+      <p class="sub">Drop one FASTQ — it is sketched and profiled against the MGnify catalogue <em>you</em> choose (one biome at a time), locally in your browser. Nothing is uploaded.</p>
     </div>
 
     <div class="privacy-notice" role="note">
       <svg class="privacy-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="m9 12 2 2 4-4"/></svg>
       <div>
         <div><strong>100% browser-based — your files never leave your computer.</strong> The FASTQ you drop here is read, decompressed and profiled entirely inside this browser tab. Nothing about it — not the reads, not the file name, not the results — is uploaded anywhere.</div>
-        <div style="margin-top:.45rem"><strong>Loading the reference database downloads it from <code>zenodo.org</code>.</strong> The full UHGG gut database is 433 MB and is fetched the first time you click <em>Load database</em>, then kept on this computer for later visits. Zenodo sees your IP address and that you asked for this file. Choosing the bundled 6 MB smoke-test database, or a <code>.syldb</code> from your own disk, downloads nothing at all. That download is the only request this page makes, and it only travels <em>towards</em> you.</div>
+        <div style="margin-top:.45rem"><strong>Loading the reference database downloads it from <code>zenodo.org</code>.</strong> You choose which biome's catalogue to load: the human-gut (UHGG) database is 433 MB, the others run from 18 MB (human-vaginal) to 2.8 GB (soil). It is fetched the first time you click <em>Load database</em>, then kept on this computer for later visits. Zenodo sees your IP address and which of these files you asked for. Choosing the bundled 6 MB smoke-test database, or a <code>.syldb</code> from your own disk, downloads nothing at all. That download is the only request this page makes, and it only travels <em>towards</em> you.</div>
       </div>
     </div>
 
     <div class="notice" role="note">
       <svg class="notice-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
-      <div><strong>Quick-and-dirty preview.</strong> This tool is meant for fast in-browser checks of gut metagenomic composition. It does not achieve the reliability of <a href="https://github.com/bluenote-1577/sylph">sylph</a>, <a href="https://github.com/biobakery/MetaPhlAn">MetaPhlAn4</a>, or <a href="https://github.com/metagenopolis/meteor">Meteor2</a> run natively — use those for real analyses. This is an <strong>unofficial adapted WebAssembly port of sylph — not supported or endorsed by the sylph authors</strong>. <strong>If you use the results, please cite the <a href="https://www.nature.com/articles/s41587-024-02412-y">sylph paper</a></strong> (Shaw &amp; Yu, <em>Nat. Biotechnol.</em> 2024) <strong>and the <a href="https://www.nature.com/articles/s41587-020-0603-3">UHGG catalog</a></strong> (Almeida <em>et al.</em>, <em>Nat. Biotechnol.</em> 2021).</div>
+      <div><strong>Quick-and-dirty preview.</strong> This tool is meant for fast in-browser checks of gut metagenomic composition. It does not achieve the reliability of <a href="https://github.com/bluenote-1577/sylph">sylph</a>, <a href="https://github.com/biobakery/MetaPhlAn">MetaPhlAn4</a>, or <a href="https://github.com/metagenopolis/meteor">Meteor2</a> run natively — use those for real analyses. This is an <strong>unofficial adapted WebAssembly port of sylph — not supported or endorsed by the sylph authors</strong>. <strong>If you use the results, please cite the <a href="https://www.nature.com/articles/s41587-024-02412-y">sylph paper</a></strong> (Shaw &amp; Yu, <em>Nat. Biotechnol.</em> 2024) <strong>and the <a href="https://www.nature.com/articles/s41587-020-0603-3">UHGG catalog</a></strong> (Almeida <em>et al.</em>, <em>Nat. Biotechnol.</em> 2021) — or, for any other biome, the <a href="https://www.ebi.ac.uk/metagenomics/browse/genomes">MGnify genome catalogue</a> you loaded.</div>
+    </div>
+
+    <div class="notice biome-warning" role="note">
+      <svg class="notice-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+      <div><strong>Pick the biome your sample came from.</strong> Every result is relative to the one catalogue you loaded and to nothing else: sylph names the closest genomes that catalogue contains and says nothing at all about species it does not contain. Profiling a saliva sample against the soil catalogue therefore returns a full, plausible, wrong table — with no error and no empty result. The loaded biome is named on the database line and above the results table; that is where a mistake is caught. The catalogues cannot be combined: MGnify dereplicates each one separately and they overlap, so loading two would count the same species twice.</div>
     </div>
 
     <section class="card">
       <h2>Reference database</h2>
       <div class="row" style="margin-top:.4rem">
-        <label>Database:
-          <select id="dbSelect" style="width:auto;min-width:14rem">
-            <option value="https://zenodo.org/api/records/20180025/files/gut.syldb/content">Full UHGG gut (4744 species, 433 MB) — downloads from Zenodo</option>
-            <option value="db/gut_mini.syldb">Tiny smoke-test (50 species, 6 MB) — bundled</option>
-            <option value="__local__">Local file… (.syldb on your computer)</option>
+        <label>Biome:
+          <!-- Rebuilt at load time from db/biomes.json — see the note in
+               index.html and web/biomes.js. What is written here is the fallback
+               for a visitor whose catalogue file does not load. -->
+          <select id="dbSelect" style="width:auto;min-width:20rem">
+            <optgroup label="Human">
+              <option value="https://zenodo.org/api/records/20180025/files/gut.syldb/content">Human gut — 4,744 species, 433 MB, downloads from Zenodo</option>
+              <option value="db/gut_mini.syldb">Smoke test — 50 human-gut species, 6 MB, bundled</option>
+            </optgroup>
+            <optgroup label="Your own file">
+              <option value="__local__">Local file… (.syldb on your computer)</option>
+            </optgroup>
           </select>
         </label>
         <button id="loadDb">Load database</button>
         <button id="cancelDb" class="hide">Cancel download</button>
         <input type="file" id="dbFile" accept=".syldb" hidden>
       </div>
-      <div class="info" id="dbInfo">Pick a database and click <em>Load database</em>. The first load downloads the database once; it is then kept on this computer — unless the browser evicts it to reclaim disk space — so later visits start instantly.</div>
+      <div class="info biome-note" id="dbBiomeNote"></div>
+      <div class="info" id="dbInfo">Pick the biome your sample comes from and click <em>Load database</em>. The first load downloads that database once; it is then kept on this computer — unless the browser evicts it to reclaim disk space — so later visits start instantly.</div>
       <div class="info" id="dbCacheInfo" style="margin-top:.4rem"></div>
     </section>
 
@@ -118,6 +131,10 @@
 
     <section id="results" class="card hide">
       <h2>Results</h2>
+      <!-- Which reference these rows are relative to, above them. Written from
+           the database that was loaded when the profile ran, not from the
+           picker's current value. -->
+      <div class="db-ref" id="resultsRef"></div>
       <table>
         <thead>
           <tr>
@@ -137,12 +154,12 @@
   <footer class="app-footer">
     <span>Built on <a href="https://github.com/bluenote-1577/sylph">sylph</a> · UHGG gut reference · WebAssembly</span>
     <span class="footer-links">
-      <a href="https://github.com/ggautreau/sylph-web-gut">GitHub</a>
+      <a href="https://github.com/ggautreau/PeekMicrobiome">GitHub</a>
     </span>
     <span class="credit">Created using Claude Opus 5, prompted by G. Gautreau — <a href="https://maiage.inrae.fr/">MaIAGE unit (UR 1404, Mathématiques et Informatique Appliquées du Génome à l'Environnement)</a>, INRAE.</span>
   </footer>
 
   <script src="./theme.js"></script>
-  <script type="module" src="./profile.js?v=13"></script>
+  <script type="module" src="./profile.js?v=14"></script>
 </body>
 </html>

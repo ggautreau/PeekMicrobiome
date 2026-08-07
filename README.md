@@ -1,8 +1,8 @@
-# sylph-web-gut
+# PeekMicrobiome
 
-In-browser gut metagenomic profiling: a WebAssembly build of [sylph](https://github.com/bluenote-1577/sylph) targeted at a gut-only reference database, with a streaming FASTQ importer that sketches reads as they arrive — the FASTQ is never held whole.
+Upload-free, installation-free metagenomic profiling across biomes. A WebAssembly build of [sylph](https://github.com/bluenote-1577/sylph) that runs entirely in the browser: your FASTQ files are never uploaded, nothing is installed, and reads are sketched as they stream — the FASTQ is never held whole. Nineteen MGnify reference catalogues, one biome at a time.
 
-**Live site:** <https://ggautreau.github.io/sylph-web-gut/>
+**Live site:** <https://ggautreau.github.io/PeekMicrobiome/>
 
 > [!IMPORTANT]
 > **Unofficial port.** This is an adapted WebAssembly port of sylph for quick, in-browser checks of gut metagenomic composition. It is **not supported or endorsed by the sylph authors** and does not achieve the reliability of [sylph](https://github.com/bluenote-1577/sylph), [MetaPhlAn4](https://github.com/biobakery/MetaPhlAn), or [Meteor2](https://github.com/metagenopolis/meteor) run natively — use those for real analyses. If you use the results, please cite the upstream papers below.
@@ -21,7 +21,7 @@ file of yours, no read, no file name and no result is ever uploaded, in any mode
 | Step | What crosses the network | What the other side learns |
 |---|---|---|
 | **Drop a FASTQ** | nothing | nothing |
-| **Load database** (default option) | 433 MB of `gut.syldb` coming *down* from `zenodo.org`, once, then cached on your computer | Zenodo sees your IP address and that you asked for this file |
+| **Load database** (any published biome) | the catalogue you picked coming *down* from `zenodo.org`, once, then cached on your computer — 433 MB for the human-gut default, 18 MB to 2.8 GB for the others | Zenodo sees your IP address and which of these files you asked for |
 | **Load database** (bundled 6 MB / local `.syldb`) | nothing beyond the site itself | nothing |
 | **Paste an ENA accession** | the accession, then the public FASTQ files coming *down* from the EBI | the EBI sees your IP address and which accessions you asked for |
 
@@ -177,7 +177,19 @@ The 6 MB smoke-test database (`web/db/gut_mini.syldb`) is bundled with the site.
 
 > Note: the user-facing record URL `https://zenodo.org/records/20180025/files/gut.syldb` does **not** return CORS headers, so it can't be `fetch()`-ed by the browser app. Use the `/api/records/.../content` form instead. GitHub Release assets have the same CORS limitation — that's why we host on Zenodo rather than from a GitHub Release.
 
-To publish a new version, upload a fresh `gut.syldb` to Zenodo and swap the URL in the two `<option value="…">` lines in `web/index.html` and `web/profile.html`. A visitor who already has the old one cached picks the new one up automatically: the cache is validated against the server's size and `Last-Modified` on every load, and a mismatch re-downloads instead of serving the stale copy.
+To publish a new version, upload a fresh `gut.syldb` to Zenodo and paste the URL into the matching entry of **`web/db/biomes.json`** (see below). A visitor who already has the old one cached picks the new one up automatically: the cache is validated against the server's size and `Last-Modified` on every load, and a mismatch re-downloads instead of serving the stale copy.
+
+### One database per biome (`web/db/biomes.json`)
+
+There is one reference database per **MGnify genome catalogue** — human-gut (UHGG), human-oral, soil, marine, cow-rumen, and so on. `web/db/biomes.json` is the catalogue of catalogues: for each one, a key, a readable label, the MGnify catalogue name and version, the species count as `sylph inspect` reported it, the size in bytes, and the URL. The picker on both pages is built from that file, grouped by family (human / animal / plant & soil / marine); nothing about the list is hard-coded in the HTML except a two-entry fallback for the case where the file cannot be read.
+
+- **To publish a database:** upload `<key>.syldb` to Zenodo, then set `url` on that entry to the CORS-enabled form `https://zenodo.org/api/records/<record>/files/<file>/content` (and `doi`, optionally). That is the only field meant to be edited by hand.
+- **An entry with an empty `url` is still listed**, greyed out, with the reason — a database that exists but is not published yet is information, and an entry that silently disappears is indistinguishable from a broken catalogue.
+- **They are never merged, and only one is loaded at a time.** MGnify publishes no unified catalogue: each one is dereplicated independently and they overlap (10% of the named species are shared between human-oral and human-skin), so two loaded together would count the same species twice with its k-mers split arbitrarily. sylph's pseudotax reassignment separates close genomes *within* one database; it cannot arbitrate between two dereplicated apart.
+- **Which biome produced a result is carried with the result**, because profiling against the wrong one fails silently — sylph reports the closest genomes the loaded database holds, so a saliva sample profiled against soil comes back as a full, plausible, wrong table. The biome is named on the database status line, above the matrix, in the exported TSV/CSV header (`#` comment lines) and in the exported file name; loading a different database resets samples already profiled rather than mixing two references in one matrix; and the genome count sylph reports is checked against the count the catalogue claims, which catches a mislabelled deposit.
+- Each entry may declare a `lineage` map (genome file → species name). Only the human-gut catalogue has one today; the others show genome accessions instead of names, which is why the map is per entry and not fetched for every biome.
+
+The download cache is keyed by URL, so several biomes coexist in it: the listing names each cached entry by its biome, and switching back to one already downloaded costs nothing.
 
 ### How it is downloaded (`web/db-cache.js`)
 

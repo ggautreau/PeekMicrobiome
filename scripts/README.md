@@ -159,3 +159,133 @@ without a browser:
 ```bash
 node scripts/test_downsample.mjs /tmp/test10k.fastq.gz /tmp/out.fastq 1000
 ```
+
+## `build_screening_db.sh` — the multi-biome screening database
+
+```bash
+./scripts/build_screening_db.sh                 # ~4 min, no downloads
+C=4000 ./scripts/build_screening_db.sh          # half the size, same verdict
+```
+
+With one reference database there was no way to pick the wrong one. With
+nineteen there is, and it is the main way to get a wrong answer: sylph reports
+whatever looks closest and never says *this sample is not from here*. The
+screening database exists to answer "which catalogue should I use?" before the
+real run. It is **not** for profiling — it mixes biomes on purpose.
+
+It is built entirely from the `.syldb` files `build_biome_dbs.sh` already
+produced. Nothing is downloaded and no genome is re-sketched, because a
+`.syldb` stores FracMinHash *hashes*, kept when `hash < u64::MAX / c`
+(`seeding.rs`). Discarding the hashes at or above `u64::MAX / 2000` therefore
+yields exactly the sketch that `-c 2000` would have produced — the argument,
+and its caveat about `min_spacing`, is written out in full at the top of
+`sylph-wasm/src/bin/syldb-reduce.rs`.
+
+**The `min_spacing` caveat is not small, and the header used to say it was.**
+Reduction filters both hash vectors, so their *union* is exactly a fresh sketch
+at the new `c`; but only `genome_kmers` feeds the containment count, and that
+vector comes out ~11% smaller than in a fresh build (measured against native
+sketches of two control genomes: 2228 vs 2509 and 1555 vs 1755; on the shipped
+database 13.3% of the union sits in the pseudotax list, against 1.6–1.8% in a
+fresh `-c 2000` sketch). For containment, `screening-c2000-derep.syldb` behaves
+like a fresh sketch at c ≈ 2250: slightly less sensitive at low coverage,
+slightly more genomes under the 50-k-mer floor. It is not a correctness bug —
+the ERR14098649 cross-validation was run on a reduced database and already
+includes it — but budget for it when choosing between c=2000 and c=4000.
+
+Three pieces:
+
+- **`syldb-reduce`** (`sylph-wasm/src/bin/`, `cargo build --release --bin
+  syldb-reduce`) — re-sub-samples one or more `.syldb` to a coarser `c`, merges
+  them, and can drop sketches not on a keep-list. It filters
+  `pseudotax_tracked_nonused_kmers` with the same threshold (the browser's
+  `profile()` refuses a database without that field). What it refuses to do:
+  - `--check` (and the audit run on every input and on the output) recomputes
+    `u64::MAX/c` **independently of the tool's own `threshold()`** and walks
+    *both* hash vectors, then **exits 1**. The previous version compared each
+    hash to the very function it was validating and only printed
+    `violations=0`, always exiting 0 — with `threshold()` doubled it happily
+    wrote a file labelled c=2000 holding a c=1000 sketch and passed its own
+    check. It also fails on a mixed `k`, `min_spacing` or `c`, on a missing
+    pseudotax vector, and on duplicate genome names.
+  - the reduction ratio is checked against `c_source/c_target`: keeping 20 000
+    hashes where 2 000 were due is fatal, which is how a wrong threshold shows
+    up before any hash is looked at (the sabotaged build announced 5.01x where
+    10.10x was due).
+  - merging refuses inputs that disagree on `k` or `min_spacing`, not just on
+    `c` — a `.syldb` mixing k=21 and k=31 loads fine in the browser and only
+    traps later, inside `get_stats()`.
+  - `--min-kmers N` (default 50) now **drops** sketches left below the floor
+    instead of counting them: under `profile`'s `--min-number-kmers`,
+    `get_stats()` returns `None`, so such a genome can never be reported and
+    would only take up space. `--keep-below-min` restores the old counting
+    behaviour; `--min-kmers 0` disables the floor.
+  `--list` prints per-file stats, in a line whose field names
+  (`n=`, `c=`, `k=`, `min_genome_kmers=`, `below_floor=`) are the contract
+  `write_screening_manifest.sh` parses.
+- **`derep_screening.py`** — dereplicates the catalogues *against each other* by
+  GTDB species name, keeping one genome per species labelled with the set of
+  catalogues that contain it. This is not an optimisation. MGnify dereplicates
+  each catalogue independently, so 2114 species exist in two or more of them as
+  two or more assemblies; merged into one database those copies compete, and
+  pseudotax reassignment hands every k-mer to whichever copy scored higher.
+  Measured, before this step: a human gut sample had *Coprococcus eutactus_A*
+  and *Bacteroides uniformis* reported under mouse-gut and *Agathobacter
+  rectalis* under marine-sediment, with the human-gut copies gone from the
+  output entirely.
+  **What it cannot do, and this is unfixed:** 23 312 of the 56 782 merged
+  genomes (41.1%) carry no GTDB species name at all — novel species,
+  overwhelmingly soil (10 348), marine (5 796) and marine-sediment (2 050).
+  Dereplication by name cannot reach them, so two unnamed genomes from two
+  catalogues may be the same organism and are both kept and both counted. The
+  genome counts in `manifest.tsv` are therefore *not* species counts, those
+  three biomes are over-represented by an unknown amount, and a screening score
+  for them should be read as a floor. A real fix needs sketch-level ANI
+  clustering across catalogues, not names; nothing here does that.
+- **`screen_biome.py`** — turns a profile run against the screening database
+  into a per-catalogue verdict. Each detected species is credited to *every*
+  catalogue containing it, so the columns do not sum to 100%; they read as "how
+  much of this sample could catalogue X have explained". `excl%` is the part
+  coming from species found in that catalogue alone, and it is what the verdict
+  ranks on — a biome with a large `taxo%` but `excl%` near zero is only riding
+  on cosmopolitan species.
+
+```bash
+sylph profile data/screening/screening-c2000-derep.syldb sample.sylsp -o screen.tsv
+python3 scripts/screen_biome.py screen.tsv
+```
+
+`data/screening/manifest.tsv` is **generated**, never typed:
+`write_screening_manifest.sh` reads every column back off the files (bytes and
+sha256 with coreutils, `c`/`k`/genomes/`min_genome_kmers`/`below_floor` from
+`syldb-reduce --list`), and `check_screening_manifest.sh` regenerates it and
+diffs. The hand-written version claimed "2 genomes under the 50-kmer floor" for
+c=4000 and "121" for c=8000; the files held 4 and 140 — and c=4000 was the
+variant it recommended.
+
+```bash
+scripts/check_screening_manifest.sh          # exit 1 + diff if it drifted
+scripts/check_screening_manifest.sh --fix    # rewrite it from the files
+MANIFEST_ONLY=1 scripts/build_screening_db.sh
+```
+
+## `compare_profiles.py`
+
+Compares two `sylph profile` TSVs that differ only in the database's `c` — the
+test that a re-sub-sampled database is still the same database. Reports the
+shared/lost/gained genomes, the top-25 side by side with both ranks, Kendall
+tau on that top-25, Spearman and log-abundance Pearson over the shared set, and
+every genome the reduction dropped together with the abundance it had.
+
+```bash
+python3 scripts/compare_profiles.py full.tsv reduced.tsv --lineage web/db/lineage.json
+```
+
+## `annotate_screening_map.py`
+
+Joins the genome→biome table `syldb-reduce --biome-tsv` emits with the GTDB
+lineages in `data/biome-work/*/metadata.tsv` (and, with `--uhgg-metadata`, the
+UHGG `genomes-all_metadata.tsv`, which fills the 1187 human-gut species that
+`web/db/lineage.json` leaves empty). 41% of the 56 782 genomes have no species
+name at all — those are GTDB placeholders (empty `s__`), overwhelmingly soil and
+marine, not lookup failures.

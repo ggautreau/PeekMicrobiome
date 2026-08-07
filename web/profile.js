@@ -9,8 +9,14 @@
 import {
   sylphWorkerRpc, detectMemory64, chooseWasmBits, WORKER_VERSION,
   readsBudget, readsBudgetNote, readsOverBudgetNote, loadedBuildNote, fmtReads,
-} from "./sylph-worker-rpc.js?v=13";
-import { dbCacheClient, fmtRate, fmtEta, cacheSummary } from "./db-cache.js?v=13";
+} from "./sylph-worker-rpc.js?v=14";
+import { dbCacheClient, fmtRate, fmtEta, cacheSummary } from "./db-cache.js?v=14";
+import {
+  fetchCatalog, fallbackCatalog, renderDbSelect, biomeForUrl, biomeNote,
+  makeDbRef, refLine, refShort, genomeCountMismatch, rememberBiome, recallBiome,
+  catalogueName, LOCAL_VALUE,
+  selectionMatchesLoaded, notLoadedNote, refMetaMismatch,
+} from "./biomes.js?v=14";
 
 const $ = (id) => document.getElementById(id);
 const els = {
@@ -22,6 +28,7 @@ const els = {
   dbInfo: $("dbInfo"), memHint: $("memHint"),
   dbSelect: $("dbSelect"), loadDb: $("loadDb"), dbFile: $("dbFile"),
   cancelDb: $("cancelDb"), dbCacheInfo: $("dbCacheInfo"),
+  dbBiomeNote: $("dbBiomeNote"), resultsRef: $("resultsRef"),
 };
 
 // One resumable, locally-cached download per database — shared with the
@@ -31,6 +38,15 @@ const dbc = dbCacheClient({ version: WORKER_VERSION });
 let dbAbort = null;
 let dbSource = null;      // "cache" | "network" | "memory" | "file"
 let persistence = null;
+
+// ---- which biome ---------------------------------------------------------------
+//
+// One reference database at a time, picked by the user out of db/biomes.json —
+// see the header of biomes.js for why they cannot be merged, and why profiling
+// against the wrong one is silent rather than loud.
+let catalog = null;         // db/biomes.json, normalised
+let selectedBiome = null;   // what the picker points at, null for a local file
+let currentRef = null;      // what is actually loaded, as makeDbRef() describes it
 
 // See the note in multi.js: since the streaming rework nothing that grows with
 // the input lives in JavaScript any more, so the cap is back on the wasm address
@@ -124,7 +140,33 @@ async function ensureWasmBuildFor(maxReads) {
   // cache (or, on the fallback path, out of the buffer this page already holds).
   dbMeta = await lastDbLoad.load(rpc);
   if (dbSource === "network") dbSource = "cache";
+  revalidateRefAfterReload();
   describeDb(lastDbLoad.label, null);
+}
+
+// The bytes that come back from a reload are not necessarily the bytes the
+// reference was minted from: another tab of this site may have invalidated and
+// rewritten the cache entry for that URL in between. Nothing else can notice —
+// there is one worker here, so there is nothing to compare it with except what
+// this page still claims. See the same function in multi.js.
+function revalidateRefAfterReload() {
+  if (!currentRef || !dbMeta) return;
+  const drift = refMetaMismatch(currentRef, dbMeta);
+  if (!drift) return;
+  currentRef = makeDbRef({
+    biome: lastDbLoad?.biome ?? null,
+    dbMeta,
+    label: lastDbLoad?.label ?? currentRef.file,
+    source: dbSource,
+    url: lastDbLoad?.url ?? currentRef.url,
+  });
+  // A result on screen came from the database that WAS there. It is not this one.
+  els.results.classList.add("hide");
+  showError(`The database re-read from the local cache is not the one that was loaded ` +
+    `(${drift}). Another tab replaced the cached copy at that URL. The reference has been ` +
+    `updated to the database now in memory, and the result on screen was hidden: it was ` +
+    `profiled against the previous one.`);
+  paintBiomeNote();
 }
 
 // The database line, plus which wasm build is behind it. The build decides
@@ -140,10 +182,69 @@ function describeDb(label, seconds) {
     dbSource === "cache" ? " · loaded from local cache" :
     dbSource === "network" ? " · downloaded and cached locally" :
     dbSource === "memory" ? " · downloaded (not cached: this browser has no OPFS)" : "";
+  // The BIOME first: it is the one fact on this line that decides whether the
+  // numbers underneath mean anything.
+  const who = refShort(currentRef) || label;
   els.dbInfo.textContent =
-    `Database ready (${label}${from}): ${dbMeta.database_size} genomes, k=${dbMeta.k}, c=${dbMeta.c} ` +
-    `(${fmtBytes(dbMeta.bytes)}${when})${build}.`;
+    `Database ready — ${who}${from}: ${dbMeta.database_size} genomes, ` +
+    `k=${dbMeta.k}, c=${dbMeta.c} (${fmtBytes(dbMeta.bytes)}${when})${build}.`;
+  // The catalogue says how many genomes are in this database; sylph says how
+  // many it loaded. A disagreement means the file behind that URL is not the one
+  // the entry describes, and the biome label cannot be trusted.
+  const mismatch = genomeCountMismatch(currentRef);
+  if (mismatch) showError(mismatch);
 }
+
+// ---- the biome picker ---------------------------------------------------------
+//
+// Built from db/biomes.json (grouped by family); profile.html ships a two-entry
+// fallback in the markup for the case where that file cannot be read, so the
+// page never ends up with an empty database picker.
+
+function pickedBiome() {
+  const v = els.dbSelect?.value ?? "";
+  if (!v || v === LOCAL_VALUE) return null;
+  return biomeForUrl(catalog ?? fallbackCatalog(), v);
+}
+
+// See multi.js: this line describes the SELECTION, and a selection is not a
+// state. Once a database is in memory, moving the picker off it made this line
+// claim in the present tense that results are reported against a catalogue that
+// nothing was profiled against, while the status line above still named the real
+// one. When they differ, the loaded database is named first.
+function paintBiomeNote() {
+  if (!els.dbBiomeNote) return;
+  selectedBiome = pickedBiome();
+  const local = (els.dbSelect?.value ?? "") === LOCAL_VALUE;
+  const pending = !selectionMatchesLoaded(currentRef, selectedBiome, local);
+  const txt = local
+    ? "A .syldb from your own disk. This page cannot tell which catalogue it was built " +
+      "from, so the status line and the results will say the biome is unknown — which is " +
+      "the honest answer, and the reason to keep a note of it yourself."
+    : biomeNote(selectedBiome, { pending });
+  const full = pending ? `${notLoadedNote(currentRef)} ${txt}` : txt;
+  els.dbBiomeNote.textContent = full;
+  els.dbBiomeNote.classList.toggle("hide", !full);
+  els.dbBiomeNote.classList.toggle("db-note-pending", pending);
+}
+
+els.dbSelect?.addEventListener("change", () => {
+  paintBiomeNote();
+  if (selectedBiome) rememberBiome(selectedBiome.key);
+  renderCacheInfo();
+});
+
+(async () => {
+  try {
+    catalog = await fetchCatalog();
+  } catch (e) {
+    catalog = fallbackCatalog();
+    console.warn("[profile] db/biomes.json could not be read — falling back to the built-in list", e);
+  }
+  selectedBiome = renderDbSelect(els.dbSelect, catalog, { selected: recallBiome() });
+  paintBiomeNote();
+  renderCacheInfo();
+})();
 
 // ---- database loading (user-triggered, can be ~430 MB) -------------------------
 
@@ -240,18 +341,25 @@ async function loadDatabase() {
       lastDbLoad = null;
     }
 
+    // Read ONCE, here: the status line and the results header describe the
+    // database that is about to be loaded, not whatever the picker says later.
+    const biome = pickedBiome();
+
     let label;
-    if (url === "__local__") {
+    if (url === LOCAL_VALUE) {
       const file = await pickLocalDb();
       if (!file) { els.dbInfo.textContent = "No file selected."; return; }
       label = file.name;
       dbSource = "file";
       // loadDbFile keeps the read inside the worker, and is replayable by
       // ensureWasmBuildFor without asking the user to pick the file again.
-      lastDbLoad = { label, load: (r) => r.loadDbFile(file) };
+      lastDbLoad = { label, biome, url, load: (r) => r.loadDbFile(file) };
       els.dbInfo.textContent = `Reading ${label} (${fmtBytes(file.size)})…`;
     } else {
-      label = dbLabel(url);
+      // Named by biome wherever there is one: a five-minute progress line that
+      // says "content (zenodo.org)" names neither what is coming nor whether it
+      // is the right thing.
+      label = biome ? `${biome.label} (${biome.file})` : dbLabel(url);
       const abs = new URL(url, location.href).href;
       dbAbort = new AbortController();
       els.cancelDb?.classList.remove("hide");
@@ -268,26 +376,41 @@ async function loadDatabase() {
           signal: dbAbort.signal,
         });
         dbSource = res.opfs ? res.source : "memory";
+        // `biome` and `url` travel with it: a build switch replays this load,
+        // and a replay that forgot which catalogue it came from would relabel
+        // the reference as a local file.
         lastDbLoad = res.opfs
-          ? { label, load: (r) => r.loadDbCached(abs) }
+          ? { label, biome, url, load: (r) => r.loadDbCached(abs) }
           // No OPFS: one download, held here, copied per worker. A replay after
           // a build switch still costs nothing on the network.
-          : { label, load: (r) => r.loadDb(res.bytes.slice()) };
+          : { label, biome, url, load: (r) => r.loadDb(res.bytes.slice()) };
       } finally {
         els.cancelDb?.classList.add("hide");
         dbAbort = null;
       }
     }
 
-    // Lineage is best-effort: a custom local .syldb may not have a matching
-    // map, in which case species fall back to the raw genome filename.
-    try {
-      const lineageResp = await fetch("./db/lineage.json");
-      if (lineageResp.ok) lineage = await lineageResp.json();
-    } catch { /* leave lineage empty */ }
+    // One lineage map per catalogue: the gut map names gut genomes and says
+    // nothing about soil ones. Loaded only when the entry declares one, and
+    // cleared otherwise, so the previous biome's names can never be pinned onto
+    // this one's genomes. With no map the table shows genome accessions.
+    lineage = {};
+    if (biome?.lineage) {
+      try {
+        const lineageResp = await fetch(`./${biome.lineage}`);
+        if (lineageResp.ok) lineage = await lineageResp.json();
+      } catch { /* leave lineage empty: genome accessions instead of names */ }
+    }
 
     els.dbInfo.textContent = `Decoding database in WASM worker…`;
     dbMeta = await lastDbLoad.load(rpc);
+    // The identity of what is now in the worker. Everything that names the
+    // reference — the status line, the results header — reads this.
+    currentRef = makeDbRef({ biome, dbMeta, label, source: dbSource, url });
+    // A result on screen was profiled against the database that was loaded THEN.
+    // Loading another one makes it stale, and a stale table under a fresh
+    // reference is the exact mistake this page is trying to make impossible.
+    els.results.classList.add("hide");
     describeDb(label, (performance.now() - t0) / 1000);
     if (selectedFile) els.run.disabled = false;
   } catch (e) {
@@ -296,16 +419,50 @@ async function loadDatabase() {
       els.dbInfo.textContent = "Download cancelled — the bytes already fetched are kept, " +
         "clicking Load database again resumes where it stopped.";
     } else {
+      // Failure is total. lastDbLoad was already pointing at the NEW database by
+      // the time the load threw, so leaving dbMeta and currentRef describing the
+      // OLD one would let the next run profile against whatever the worker holds
+      // and name it something else — and a build switch would replay the load
+      // that just failed. Nothing loaded, no reference, no replay.
+      dbMeta = null;
+      currentRef = null;
+      lastDbLoad = null;
+      lineage = {};
+      els.run.disabled = true;
+      els.results.classList.add("hide");
+      els.dbInfo.textContent =
+        "No database is loaded — the load failed part-way through, so everything it had " +
+        "started on was dropped rather than left half-done. Click \"Load database\" to try again.";
       showError(`Failed to load database: ${e.message ?? e}`);
       console.error(e);
     }
   } finally {
     els.loadDb.disabled = false;
+    // The note under the picker asserts things about what is loaded, and what is
+    // loaded has just changed (or been dropped).
+    paintBiomeNote();
     renderCacheInfo();
   }
 }
 
 // ---- what is cached, and how to get rid of it --------------------------------
+
+// Same URL whatever form it was written in — the cache stores absolute URLs,
+// the catalogue may hold a relative one for the bundled database.
+function sameUrl(a, b) {
+  if (!a || !b) return false;
+  try { return new URL(a, location.href).href === new URL(b, location.href).href; }
+  catch { return a === b; }
+}
+
+// Several biomes can sit in the cache at once (it is keyed by URL). Listed by
+// file name alone they read as "gut.syldb", "soil.syldb", "marine.syldb" —
+// which is how the wrong 2.8 GB gets deleted.
+function cacheEntryName(e) {
+  const b = e.url ? biomeForUrl(catalog ?? fallbackCatalog(), e.url) : null;
+  if (b) return `${b.label} — ${catalogueName(b)} (${b.file})`;
+  return e.url ? dbLabel(e.url) : e.key;
+}
 
 async function renderCacheInfo() {
   if (!els.dbCacheInfo) return;
@@ -322,13 +479,17 @@ async function renderCacheInfo() {
       // Deleted by KEY, not by URL: an entry whose meta.json is unreadable has
       // no URL, and that is precisely the entry a user needs to be able to
       // remove.
-      const name = escapeHTML(e.url ? dbLabel(e.url) : e.key);
+      const name = escapeHTML(cacheEntryName(e));
+      // Whether clicking Load database now costs a download or nothing at all.
+      const picked = e.complete && sameUrl(e.url, els.dbSelect?.value)
+        ? ` — <strong>the biome selected above: it will load from here, nothing to download</strong>`
+        : "";
       const state = (e.complete
         ? fmtBytes(e.bytes)
         : `${fmtBytes(e.bytes)} of ${e.size ? fmtBytes(e.size) : "?"} — incomplete, will resume`)
         + (e.validators === "size-only" ? " — checked on its length only" : "");
       return `<div style="display:flex;gap:.5rem;align-items:center;margin-top:.2rem">` +
-        `<span>${name} — ${state}</span>` +
+        `<span>${name} — ${state}${picked}</span>` +
         `<button type="button" data-cache-key="${escapeHTML(e.key)}" ` +
         `style="padding:.1rem .5rem;font-size:.8rem">Delete</button></div>`;
     }).join("");
@@ -501,6 +662,16 @@ async function run() {
 // ---- output rendering ----------------------------------------------------------
 
 function renderResults(tsv) {
+  // The reference, above the rows, every time they are drawn. Nothing in a list
+  // of species names says which catalogue they came out of.
+  if (els.resultsRef) {
+    const line = refLine(currentRef);
+    els.resultsRef.textContent = line
+      ? `Profiled against ${line}. Abundances are relative to this catalogue only.`
+      : "";
+    els.resultsRef.classList.toggle("hide", !line);
+    els.resultsRef.classList.toggle("db-ref-local", !!currentRef?.local);
+  }
   const lines = tsv.trim().split("\n");
   if (lines.length < 2) {
     els.resultsBody.innerHTML = `<tr><td colspan="6">No genomes passed the profiling threshold.</td></tr>`;

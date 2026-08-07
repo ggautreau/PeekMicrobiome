@@ -799,3 +799,98 @@ table.matrix tbody tr:nth-child(even) { background: var(--bg-softer); }
   font-size: 0.9rem;
 }
 .pair-unit input { margin: 0; }
+
+/* ---------- Which biome is loaded ----------------------------------------- */
+/*
+ * Nineteen reference catalogues, one loaded at a time, and profiling against the
+ * wrong one produces a full and plausible table rather than an error. So the
+ * biome gets visual weight three times over: a warning banner above the page, a
+ * live note under the picker (before the choice is committed), and a line above
+ * every set of results (after it is). None of them is decoration — they are the
+ * only way the mistake is ever noticed.
+ */
+
+/* The picker itself. Nineteen entries in four <optgroup>s: the groups are what
+   you scan, so they have to stand out from the entries under them. */
+#dbSelect { max-width: 100%; }
+#dbSelect optgroup {
+  font-weight: 600;
+  font-style: normal;
+  color: var(--ink);
+}
+#dbSelect option { font-weight: 400; color: var(--ink); }
+/* An entry with no public URL yet stays in the list, greyed out, saying why. */
+#dbSelect option:disabled { color: var(--ink-muted); font-style: italic; }
+
+/* The live note under the picker: what this biome is, and what choosing it
+   commits the results to. Teal rather than yellow — it is guidance about the
+   choice in front of you, not an alarm. */
+.biome-note {
+  margin-top: 0.55rem;
+  padding: 0.55rem 0.75rem;
+  background: var(--bg-info);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  border-radius: var(--radius-sm);
+  color: var(--ink-soft);
+  font-size: 0.85rem;
+  line-height: 1.5;
+}
+.biome-note:empty { display: none; }
+
+/* The picker has been moved off the database that is actually in memory. The
+   note then describes something that is NOT loaded, and it has to stop looking
+   like the calm blue statement of fact it is the rest of the time — this is the
+   one state in which reading it as "this is what you are profiling against"
+   would be wrong. */
+.biome-note.db-note-pending {
+  background: #fdf2f1;
+  border-color: #e9b4ad;
+  border-left-color: #c0392b;
+  color: #7a2b20;
+  font-weight: 500;
+}
+html[data-theme="dark"] .biome-note.db-note-pending {
+  background: #2a1512;
+  border-color: #6b2a20;
+  border-left-color: #e07a63;
+  color: #f0b4a8;
+}
+
+/* The standing warning at the top of the page. Deliberately NOT the same colour
+   as the generic .notice above it: two identical yellow boxes read as one, and
+   this one says something the other does not. */
+.notice.biome-warning {
+  background: #fdf2f1;
+  border-color: #e9b4ad;
+  color: #7a2b20;
+}
+.notice.biome-warning .notice-icon { color: #c0392b; }
+.notice.biome-warning a { color: #7a2b20; }
+html[data-theme="dark"] .notice.biome-warning {
+  background: #2a1512;
+  border-color: #6b2a20;
+  color: #f0b4a8;
+}
+html[data-theme="dark"] .notice.biome-warning .notice-icon { color: #e07a63; }
+
+/* The reference line above the results. Same information the exported file
+   carries in its header — on screen, where the numbers are being read. */
+.db-ref {
+  margin: 0 0 0.75rem;
+  padding: 0.45rem 0.7rem;
+  background: var(--accent-soft);
+  border-radius: var(--radius-sm);
+  color: var(--ink);
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+.db-ref:empty { display: none; }
+/* A database off the user's disk cannot be named: say so in a colour that does
+   not look like a confirmed provenance. */
+.db-ref.db-ref-local {
+  background: var(--bg-soft);
+  border: 1px dashed var(--border-strong);
+  color: var(--ink-soft);
+  font-weight: 500;
+}

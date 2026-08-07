@@ -948,5 +948,468 @@ console.log("== pairing dropped files into samples ==");
     "an unknown extension must not be guessed at");
 }
 
+// Sources read by the biome section below. `here` and `rpcSrc` come from the
+// cache-bust section above.
+const { existsSync } = await import("node:fs");
+const indexSrcForBiome = readFileSync(here + "index.html", "utf8");
+const profileSrcForBiome = readFileSync(here + "profile.html", "utf8");
+
+// ---- the biome picker, and naming the reference on every result --------------
+//
+// There are nineteen reference databases now — one per MGnify genome catalogue —
+// and they cannot be merged: each is dereplicated independently and they overlap,
+// so two loaded together would count the same species twice. One at a time,
+// picked by the user.
+//
+// That makes "which biome" the most consequential control on the page, and its
+// failure mode is silent: sylph reports the closest genomes the loaded database
+// holds, so a saliva sample profiled against the soil catalogue comes back as a
+// full, plausible, wrong table. Nothing in the numbers reveals it. The only
+// defence is that the biome is named where the result is read — on the status
+// line, above the matrix, and inside the exported file — and every check below
+// fails if one of those goes away.
+console.log("== the biome catalogue ==");
+const biomes = await import("./biomes.js");
+const catalogJson = JSON.parse(readFileSync(here + "db/biomes.json", "utf8"));
+const catalog = biomes.normaliseCatalog(catalogJson);
+const catalogEntries = biomes.allBiomes(catalog);
+{
+  check("db/biomes.json parses into groups", catalog.groups.length >= 4,
+    `${catalog.groups.length} groups`);
+  check("...covering the four families the biomes fall into",
+    ["human", "animal", "plant-soil", "marine"].every(
+      (k) => catalog.groups.some((g) => g.key === k)),
+    catalog.groups.map((g) => g.key).join(","));
+  // Nineteen entries flat in a <select> is a scroll; the point of the file is
+  // that they arrive grouped.
+  check("every entry sits in exactly one group",
+    catalogEntries.length === new Set(catalogEntries.map((b) => b.key)).size,
+    `${catalogEntries.length} entries`);
+  check("the nineteen catalogues plus the bundled smoke test are all there",
+    catalogEntries.length >= 20, `${catalogEntries.length} entries`);
+
+  // A database is offered if and only if it has a URL. Deriving availability
+  // from the URL — rather than from a separate flag — is what makes it
+  // impossible to publish an entry that points nowhere.
+  const pending = catalogEntries.filter((b) => !b.available);
+  check("an entry with no URL is marked unavailable, not dropped",
+    pending.every((b) => b.unavailableReason.length > 10),
+    `${pending.length} pending, e.g. ${pending[0]?.key}: ${pending[0]?.unavailableReason ?? "—"}`);
+  check("...and its reason is what the option text says",
+    pending.length === 0 || biomes.optionLabel(pending[0]).includes(pending[0].unavailableReason));
+  check("...while an available one is not offered with an excuse",
+    catalogEntries.filter((b) => b.available)
+      .every((b) => b.unavailableReason === "" && b.url.length > 0));
+  check("the human-gut database, whose URL is known, is available",
+    biomes.biomeByKey(catalog, "human-gut")?.available === true);
+  check("...and so is the bundled smoke test",
+    biomes.biomeByKey(catalog, "gut-mini")?.available === true);
+
+  // The cache is keyed by URL (db-cache.js: cacheKey -> last two path segments +
+  // a hash of the whole href). Two biomes sharing a URL would therefore share a
+  // cache entry, and switching between them would silently serve the other one's
+  // bytes — which is the same wrong-reference failure, arriving through the
+  // cache instead of through the picker.
+  const urls = catalogEntries.filter((b) => b.available).map((b) => b.url);
+  check("no two biomes share a URL, so no two share a cache entry",
+    urls.length === new Set(urls).size, urls.length + " urls");
+  check("db-cache still keys entries on the whole URL",
+    /fnv1a\(u\.href\)/.test(readFileSync(here + "db-cache.js", "utf8")));
+
+  // Every entry carries what the picker and the exports need to say. A missing
+  // species count is not cosmetic: it is one half of the genome-count check that
+  // catches a mislabelled deposit.
+  check("every entry names its catalogue and version",
+    catalogEntries.every((b) => b.catalogue && b.version),
+    catalogEntries.find((b) => !b.catalogue || !b.version)?.key ?? "");
+  check("every entry carries a species count and a size",
+    catalogEntries.every((b) => Number.isFinite(b.species) && b.species > 0
+      && Number.isFinite(b.bytes) && b.bytes > 0),
+    catalogEntries.find((b) => !Number.isFinite(b.species) || !Number.isFinite(b.bytes))?.key ?? "");
+  check("the option text shows both, plus where the bytes come from",
+    /4,744 species/.test(biomes.optionLabel(biomes.biomeByKey(catalog, "human-gut")))
+    && /433 MB/.test(biomes.optionLabel(biomes.biomeByKey(catalog, "human-gut")))
+    && /Zenodo/.test(biomes.optionLabel(biomes.biomeByKey(catalog, "human-gut"))),
+    biomes.optionLabel(biomes.biomeByKey(catalog, "human-gut")));
+
+  // The lineage map names genomes, and there is one per catalogue. Declaring it
+  // per entry is what stops the gut map being fetched for a soil database.
+  check("only the catalogues that have a lineage map declare one",
+    catalogEntries.filter((b) => b.lineage).every((b) => b.catalogue === "human-gut"),
+    catalogEntries.filter((b) => b.lineage).map((b) => b.key).join(","));
+
+  // The figures come from data/biome-dbs/manifest.tsv, where the genome count is
+  // what `sylph inspect` reported for the database that was actually built. That
+  // directory is gitignored, so this cross-check runs where it exists and is
+  // skipped where it does not, rather than failing on a clean checkout.
+  const manifestPath = here + "../data/biome-dbs/manifest.tsv";
+  if (existsSync(manifestPath)) {
+    const rows = readFileSync(manifestPath, "utf8").trim().split("\n").map((l) => l.split("\t"));
+    let agree = 0, disagree = [];
+    for (const [name, version, genomes, bytes] of rows) {
+      const b = biomes.biomeByKey(catalog, name);
+      if (!b) { disagree.push(`${name}: missing from biomes.json`); continue; }
+      if (b.version !== version || b.species !== Number(genomes) || b.bytes !== Number(bytes)) {
+        disagree.push(`${name}: json=${b.version}/${b.species}/${b.bytes} ` +
+          `manifest=${version}/${genomes}/${bytes}`);
+      } else agree++;
+    }
+    check("every built database is in the catalogue with the figures sylph inspect measured",
+      disagree.length === 0 && agree === rows.length, disagree.slice(0, 3).join(" | "));
+  } else {
+    console.log("    (data/biome-dbs/manifest.tsv absent — cross-check skipped)");
+  }
+}
+
+console.log("== the picker is built from the catalogue ==");
+{
+  // A <select> stub: enough of the DOM for renderDbSelect, and nothing else.
+  // The alternative is a browser, and scripts/ena-test/page.mjs already drives
+  // one — what is being pinned here is the shape of the list, which is exactly
+  // what a stub can hold.
+  const makeNode = (tag) => {
+    const n = {
+      tagName: tag, children: [], dataset: {}, value: "", disabled: false, label: "",
+      _text: "",
+      appendChild(c) { n.children.push(c); return c; },
+    };
+    Object.defineProperty(n, "textContent", {
+      get: () => n._text,
+      set: (v) => { n._text = String(v); if (v === "") n.children.length = 0; },
+    });
+    Object.defineProperty(n, "ownerDocument", { get: () => doc });
+    return n;
+  };
+  const doc = { createElement: makeNode };
+  const select = makeNode("select");
+
+  const picked = biomes.renderDbSelect(select, catalog, { selected: "" });
+  const groups = select.children;
+  const options = groups.flatMap((g) => g.children);
+  check("the list is grouped, not nineteen entries flat",
+    groups.length === catalog.groups.length + 1, `${groups.length} optgroups`);
+  check("every catalogue entry made it into the list",
+    options.length === catalogEntries.length + 1, `${options.length} options`);
+  check("the last group is the user's own file, and it is the last option",
+    groups[groups.length - 1].children[0].value === biomes.LOCAL_VALUE
+    && options[options.length - 1].value === biomes.LOCAL_VALUE);
+  // "Local file…" is not a biome and must never be labelled as one.
+  check("a local file has no catalogue entry behind it",
+    biomes.biomeForUrl(catalog, biomes.LOCAL_VALUE) === null);
+
+  const disabled = options.filter((o) => o.disabled);
+  check("entries with no URL are present but unselectable",
+    disabled.length === catalogEntries.filter((b) => !b.available).length && disabled.length > 0,
+    `${disabled.length} disabled`);
+  check("...with no value, so they cannot be loaded even by accident",
+    disabled.every((o) => o.value === ""));
+  check("...and the reason is in the text the user reads",
+    disabled.every((o) => /not published yet|no public URL/.test(o.textContent)),
+    disabled[0]?.textContent ?? "");
+
+  check("the first available biome is selected by default",
+    picked?.key === "human-gut" && select.value === picked.url, picked?.key ?? "none");
+
+  // Remembering the choice is worth doing with nineteen entries — but a
+  // remembered entry that has since lost its URL must not leave the page
+  // pointing at nothing.
+  const select2 = makeNode("select");
+  const p2 = biomes.renderDbSelect(select2, catalog, { selected: "gut-mini" });
+  check("a remembered biome is restored", p2?.key === "gut-mini" && select2.value === p2.url);
+  const stalled = catalogEntries.find((b) => !b.available);
+  const select3 = makeNode("select");
+  const p3 = biomes.renderDbSelect(select3, catalog, { selected: stalled.key });
+  check("a remembered biome that is not downloadable falls back to one that is",
+    p3?.available === true && p3.key !== stalled.key, p3?.key ?? "none");
+
+  // Losing db/biomes.json must cost the biome choice, not the application.
+  const fb = biomes.fallbackCatalog();
+  check("the built-in fallback still offers a database and the smoke test",
+    biomes.allBiomes(fb).length === 2 && biomes.allBiomes(fb).every((b) => b.available));
+  check("...and the pages ship the same two in their markup, for the same reason",
+    /gut\.syldb\/content/.test(indexSrcForBiome) && /db\/gut_mini\.syldb/.test(indexSrcForBiome)
+    && /gut\.syldb\/content/.test(profileSrcForBiome) && /db\/gut_mini\.syldb/.test(profileSrcForBiome));
+  check("...including the local-file option, which is not a catalogue entry",
+    /value="__local__"/.test(indexSrcForBiome) && /value="__local__"/.test(profileSrcForBiome));
+}
+
+console.log("== which database a result came from ==");
+{
+  const gut = biomes.biomeByKey(catalog, "human-gut");
+  const soil = biomes.biomeByKey(catalog, "soil");
+  const meta = { database_size: 4744, k: 31, c: 200, bytes: 454021440 };
+  const ref = biomes.makeDbRef({ biome: gut, dbMeta: meta, label: "gut.syldb", source: "cache" });
+  const soilRef = biomes.makeDbRef({
+    biome: soil, dbMeta: { database_size: 19472, k: 31, c: 200, bytes: 2959289168 },
+    label: "soil.syldb", source: "network",
+  });
+  const localRef = biomes.makeDbRef({
+    biome: null, dbMeta: meta, label: "mine.syldb", source: "file",
+  });
+
+  check("the reference names the biome and the catalogue version",
+    /Human gut/.test(biomes.refLine(ref)) && /MGnify human-gut v2\.0\.2/.test(biomes.refLine(ref)),
+    biomes.refLine(ref));
+  check("a database off the user's disk is not given a biome it cannot have",
+    localRef.local === true && /biome unknown/i.test(biomes.refLine(localRef)),
+    biomes.refLine(localRef));
+  // The status line goes on to print the genome count itself, so the short form
+  // stops at the identity — but it is still an identity, file included.
+  check("the short form on the status line names the biome, the file and the catalogue",
+    /Human gut/.test(biomes.refShort(ref)) && /gut\.syldb/.test(biomes.refShort(ref))
+    && /MGnify human-gut v2\.0\.2/.test(biomes.refShort(ref)), biomes.refShort(ref));
+  check("...and says plainly when there is no biome to name",
+    /biome unknown/.test(biomes.refShort(localRef)), biomes.refShort(localRef));
+  check("two different catalogues are not the same reference",
+    biomes.sameDbRef(ref, soilRef) === false);
+  check("...and reloading the same one is",
+    biomes.sameDbRef(ref, biomes.makeDbRef({ biome: gut, dbMeta: meta, label: "gut.syldb" })));
+
+  // The check that catches a mislabelled deposit: the catalogue says how many
+  // genomes the file holds, sylph says how many it loaded.
+  check("a file with the wrong number of genomes is called out",
+    /WARNING/.test(biomes.genomeCountMismatch(biomes.makeDbRef({
+      biome: soil, dbMeta: { database_size: 4744, k: 31, c: 200 }, label: "soil.syldb",
+    }))));
+  check("...and a matching one says nothing", biomes.genomeCountMismatch(ref) === "");
+  check("...and a local file, which has nothing to compare against, is not accused",
+    biomes.genomeCountMismatch(localRef) === "");
+
+  // ---- the picker is a control, not a state ----------------------------------
+  //
+  // The note under the picker used to be rewritten on every `change` and to
+  // assert, in the present tense, that "everything you profile will be reported
+  // against THIS catalogue". Moving the dropdown after a load — one gesture, no
+  // click on Load — made that sentence false while the status line and the
+  // matrix header above and below it still named the loaded database. Two
+  // contradictory claims on screen at once, about the single fact this page
+  // exists to get right.
+  check("with nothing loaded, the picker describes a plan and that is honest",
+    biomes.selectionMatchesLoaded(null, soil) === true);
+  check("the selection matches when it IS what was loaded",
+    biomes.selectionMatchesLoaded(ref, gut) === true);
+  check("moving the picker off the loaded database is a mismatch",
+    biomes.selectionMatchesLoaded(ref, soil) === false);
+  check("...as is pointing at 'Local file…' while a catalogue is loaded",
+    biomes.selectionMatchesLoaded(ref, null, true) === false);
+  check("...and pointing at a catalogue while a file off the disk is loaded",
+    biomes.selectionMatchesLoaded(localRef, gut) === false);
+  check("a loaded local file and the local option do agree",
+    biomes.selectionMatchesLoaded(localRef, null, true) === true);
+  check("the mismatch note names the database that is really in memory",
+    /NOT LOADED/.test(biomes.notLoadedNote(ref)) && /Human gut/.test(biomes.notLoadedNote(ref))
+    && /Load database/.test(biomes.notLoadedNote(ref)), biomes.notLoadedNote(ref).slice(0, 120));
+  check("...and says which one the numbers would be reported against",
+    /reported against IT/.test(biomes.notLoadedNote(ref)), biomes.notLoadedNote(ref).slice(0, 160));
+  check("...and there is nothing to say when nothing is loaded",
+    biomes.notLoadedNote(null) === "");
+  // The entry's own sentence has to move with it: "will be reported" is a claim
+  // about memory, and in this state it is not true of anything.
+  check("the note commits in the present tense when the selection IS loaded",
+    /Everything you profile will be reported/.test(biomes.biomeNote(gut)),
+    biomes.biomeNote(gut).slice(0, 90));
+  check("...and drops to the conditional when it is not",
+    /WOULD report/.test(biomes.biomeNote(gut, { pending: true }))
+    && !/Everything you profile will be reported/.test(biomes.biomeNote(gut, { pending: true })),
+    biomes.biomeNote(gut, { pending: true }).slice(0, 140));
+  check("...while still saying a foreign sample yields a full, plausible table",
+    /another environment/.test(biomes.biomeNote(gut, { pending: true }))
+    && /full, plausible table/.test(biomes.biomeNote(gut, { pending: true })));
+
+  // ---- a reload can bring back a different database ---------------------------
+  //
+  // A 32/64-bit build switch and a bigger worker pool both re-read the database
+  // out of the local cache. Another tab is free to invalidate and rewrite that
+  // entry in between; every worker then agrees perfectly on a database this page
+  // is not describing, so worker-vs-worker comparison cannot see it.
+  check("a reload that brings back the same database says nothing",
+    biomes.refMetaMismatch(ref, meta) === "");
+  check("...one that brings back a different genome count is named",
+    /genomes 4744 → 4700/.test(biomes.refMetaMismatch(ref, { ...meta, database_size: 4700 })),
+    biomes.refMetaMismatch(ref, { ...meta, database_size: 4700 }));
+  check("...and a different k, c or size too",
+    /k 31 → 21/.test(biomes.refMetaMismatch(ref, { ...meta, k: 21 }))
+    && /c 200 → 2000/.test(biomes.refMetaMismatch(ref, { ...meta, c: 2000 }))
+    && /bytes /.test(biomes.refMetaMismatch(ref, { ...meta, bytes: 1 })));
+  check("...but a field nobody can compare is not reported as a difference",
+    biomes.refMetaMismatch(ref, { database_size: 4744 }) === "" &&
+    biomes.refMetaMismatch(biomes.makeDbRef({ biome: gut, dbMeta: {}, label: "x" }), meta) === "");
+
+  // The export. This is the one that matters after the fact: a matrix profiled
+  // against the wrong biome is only ever caught by re-reading the file.
+  const head = biomes.refCommentLines(ref, { samples: 3, rows: 120 });
+  check("every reference line in an export is a comment", head.every((l) => l.startsWith("#")));
+  check("the export names the biome, its key and its catalogue version",
+    head.some((l) => /Human gut/.test(l) && /human-gut/.test(l) && /v2\.0\.2/.test(l)),
+    head.join(" | ").slice(0, 160));
+  check("...the file and URL it came from",
+    head.some((l) => /gut\.syldb/.test(l) && /zenodo\.org/.test(l)));
+  check("...the sketching parameters and the genome count",
+    head.some((l) => /genomes=4744/.test(l) && /k=31/.test(l) && /c=200/.test(l)));
+  check("...when it was exported", head.some((l) => /# exported: \d{4}-\d\d-\d\dT/.test(l)));
+  check("...and that the numbers mean nothing outside that catalogue",
+    head.some((l) => /relative to the reference database named above/.test(l)));
+  check("a comma-separated export carries no commas inside its comment numbers",
+    head.every((l) => !/\d,\d\d\d/.test(l)), head.find((l) => /\d,\d\d\d/.test(l)) ?? "");
+  check("an export from a local file says the biome is unknown rather than guessing",
+    biomes.refCommentLines(localRef).some((l) => /LOCAL FILE/.test(l) && /biome unknown/.test(l)));
+  check("a mismatched genome count is carried into the file too",
+    biomes.refCommentLines(biomes.makeDbRef({
+      biome: soil, dbMeta: { database_size: 4744 }, label: "soil.syldb",
+    })).some((l) => /WARNING/.test(l)));
+
+  // The file name. A downloads folder is where these are actually told apart.
+  check("the biome is in the file name", biomes.refSlug(ref) === "human-gut");
+  check("...for a local file too, without pretending to know the biome",
+    /^local-/.test(biomes.refSlug(localRef)), biomes.refSlug(localRef));
+  check("...and it is always a safe file name",
+    /^[A-Za-z0-9._-]+$/.test(biomes.refSlug(biomes.makeDbRef({
+      biome: null, dbMeta: meta, label: "some name/../weird.syldb",
+    }))), biomes.refSlug(biomes.makeDbRef({ biome: null, dbMeta: meta, label: "a/../b.syldb" })));
+}
+
+console.log("== the pages carry the reference through ==");
+{
+  const multiSrc = readFileSync(here + "multi.js", "utf8");
+  const profileSrc = readFileSync(here + "profile.js", "utf8");
+
+  // The picker is data, not markup: nineteen <option>s hand-written in two HTML
+  // files is how they drift apart.
+  for (const [name, src] of [["multi.js", multiSrc], ["profile.js", profileSrc]]) {
+    check(`${name} builds the picker from db/biomes.json`,
+      /renderDbSelect\(els\.dbSelect, catalog/.test(src) && /fetchCatalog\(\)/.test(src));
+    check(`${name} survives a missing catalogue file`, /fallbackCatalog\(\)/.test(src));
+    check(`${name} reads the biome from the picker once, when the database is loaded`,
+      /const biome = pickedBiome\(\);/.test(src));
+    check(`${name} freezes it into a reference object`,
+      /makeDbRef\(\{ biome, dbMeta, label, source: dbSource, url \}\)/.test(src));
+    check(`${name} names the biome on the database status line`,
+      /const who = refShort\(currentRef\) \|\| label;/.test(src)
+      && /Database ready[^`]*\$\{who\}/.test(src));
+    check(`${name} warns when the file does not hold the genomes the catalogue promises`,
+      /genomeCountMismatch\(currentRef\)/.test(src) && /if \(mismatch\)/.test(src)
+      && /showError\(/.test(src));
+    check(`${name} fetches the lineage map only for a catalogue that has one`,
+      /lineage = \{\};\s*\n\s*if \(biome\?\.lineage\)/.test(src));
+    check(`${name} names cached databases by biome, not by file name`,
+      /function cacheEntryName/.test(src) && /escapeHTML\(cacheEntryName\(e\)\)/.test(src));
+    check(`${name} marks the cached entry the picker is on`,
+      /sameUrl\(e\.url, els\.dbSelect\?\.value\)/.test(src) && /nothing to download/.test(src));
+    check(`${name} tells the user what the chosen biome commits them to`,
+      /biomeNote\(selectedBiome, \{ pending \}\)/.test(src));
+
+    // The picker is a control the user can move at any time; the database in
+    // memory is not. When they differ the note has to say so, name the loaded
+    // one, and stop claiming the present tense — otherwise moving the dropdown
+    // alone puts a catalogue name on screen that no number underneath it came
+    // from, which is precisely the failure this whole picker exists to prevent.
+    check(`${name} compares the picker with the database actually loaded`,
+      /const pending = !selectionMatchesLoaded\(currentRef, selectedBiome, local\);/.test(src));
+    check(`${name} names the loaded database when the picker has moved off it`,
+      /notLoadedNote\(currentRef\)/.test(src) && /const full = pending \?/.test(src));
+    check(`${name} repaints that note when what is loaded changes`,
+      /paintBiomeNote\(\);\s*\n\s*(refreshRunButton\(\);\s*\n\s*)?renderCacheInfo\(\);/.test(src));
+
+    // A load that fails part-way must not leave the previous database's identity
+    // standing over a pool that no longer holds it. multi.js loads the workers
+    // one at a time and each frees its old Profiler before building the new one,
+    // so a failure half way through is a pool with two different references in
+    // it — or one and a half.
+    check(`${name} drops the reference when a load fails part-way`,
+      /dbMeta = null;\s*\n\s*currentRef = null;\s*\n\s*lastDbLoad = null;/.test(src));
+    check(`${name} says on screen that nothing is loaded any more`,
+      /No database is loaded/.test(src));
+
+    // A reload out of the local cache can hand back different bytes than the ones
+    // the reference was minted from.
+    check(`${name} re-checks the reference against a database read back from cache`,
+      /function revalidateRefAfterReload\(\)/.test(src)
+      && /refMetaMismatch\(currentRef, dbMeta\)/.test(src));
+  }
+
+  // Both reload paths in multi.js — the 32/64-bit build switch and growing the
+  // worker pool — refresh dbMeta. Neither used to re-check currentRef against it.
+  check("multi.js revalidates the reference after every reload, not just some",
+    (multiSrc.match(/revalidateRefAfterReload\(\);/g) ?? []).length === 2,
+    `${(multiSrc.match(/revalidateRefAfterReload\(\);/g) ?? []).length} call sites`);
+  check("...on the wasm build switch",
+    /dbMeta = metas\[0\];\s*\n\s*if \(dbSource === "network"\) dbSource = "cache";\s*\n\s*revalidateRefAfterReload\(\);/
+      .test(multiSrc));
+  check("...and it adopts the new reference rather than merely describing it",
+    /adoptDbRef\(makeDbRef\(\{/.test(multiSrc));
+  check("multi.js re-enables (or greys out) Profile all after a failed load",
+    /setRunControls\(false\);\s*\n(\s*\/\/[^\n]*\n)*\s*paintBiomeNote\(\);\s*\n\s*refreshRunButton\(\);/
+      .test(multiSrc));
+
+  // The matrix carries the reference it was PROFILED against, not the one that
+  // happens to be selected when it is exported.
+  check("the matrix is built with the reference of the run that filled it",
+    /const runRef = currentRef;/.test(multiSrc)
+    && /matrixToTable\(matrix, sampleOrder, runRef\)/.test(multiSrc)
+    && /return \{ samples: sampleOrder, rows, ref \}/.test(multiSrc));
+  check("...and it is shown above the matrix on screen",
+    /els\.matrixRef/.test(multiSrc) && /Profiled against \$\{line\}/.test(multiSrc));
+  check("...and written into both exports",
+    /refCommentLines\(ref, \{ samples: samples\.length, rows: rows\.length \}\)/.test(multiSrc));
+  check("...whose file name says the biome too",
+    /abundance_matrix_\$\{refSlug\(ref\)\}\.\$\{ext\}/.test(multiSrc));
+  check("the single-sample page names the reference above its results",
+    /els\.resultsRef/.test(profileSrc) && /Profiled against \$\{line\}/.test(profileSrc));
+
+  // THE cross-catalogue trap. runAll() replays already-`done` samples into the
+  // matrix without re-profiling them, which is right within one reference and
+  // catastrophic across two — the same species would appear twice, under one
+  // header, with nothing downstream able to tell.
+  check("loading a different database resets samples profiled against the previous one",
+    /function adoptDbRef\(ref\)/.test(multiSrc)
+    && /const changed = !!currentRef && !sameDbRef\(currentRef, ref\)/.test(multiSrc)
+    && /const stale = files\.filter\(\(s\) => s\.rows\)/.test(multiSrc));
+  check("...and says so, rather than dropping ten minutes of profiling in silence",
+    /abundances from two catalogues cannot/.test(multiSrc));
+  // Two messages can want the error box on one load: "your finished samples were
+  // reset" and "this file does not hold the genomes the catalogue claims".
+  // Neither is expendable, so the second is prepended rather than written over.
+  check("...and the genome-count warning does not write over that notice",
+    /const already = els\.error\.textContent;/.test(multiSrc)
+    && /already \? `\$\{mismatch\}/.test(multiSrc));
+  check("the single-sample page hides a result that was profiled against another database",
+    /els\.results\.classList\.add\("hide"\);\s*\n\s*describeDb\(label/.test(profileSrc));
+
+  // Both pages say, before anything is loaded, what the choice costs.
+  for (const [name, src] of [["index.html", indexSrcForBiome], ["profile.html", profileSrcForBiome]]) {
+    check(`${name} carries the wrong-biome warning`,
+      /biome-warning/.test(src) && /full, plausible, wrong table/.test(src));
+    check(`${name} has somewhere to say which biome is selected`, /id="dbBiomeNote"/.test(src));
+  }
+  check("index.html has somewhere to name the reference above the matrix",
+    /id="matrixRef"/.test(indexSrcForBiome));
+  check("profile.html has somewhere to name it above the results",
+    /id="resultsRef"/.test(profileSrcForBiome));
+
+  // The new module is in the pages' graph, so it is busted with the same token
+  // as everything else — see the cache-bust section above for what a mixed
+  // version pair does to a returning visitor.
+  const rpcVersion = rpcSrc.match(/WORKER_VERSION\s*=\s*"(\d+)"/)?.[1];
+  for (const [name, src] of [["multi.js", multiSrc], ["profile.js", profileSrc]]) {
+    const v = src.match(/from\s+"\.\/biomes\.js\?v=(\d+)"/)?.[1];
+    check(`${name} imports biomes.js on WORKER_VERSION`, v === rpcVersion,
+      `import=${v} rpc=${rpcVersion}`);
+  }
+  check("version was bumped past 13 for the biome picker", Number(rpcVersion) >= 14, rpcVersion);
+}
+
+console.log("== the run's reference is frozen after any reload, not before ==");
+{
+  const src = readFileSync(new URL("./multi.js", import.meta.url), "utf8");
+  const freeze = src.indexOf("const runRef = currentRef");
+  const reload = src.indexOf("await ensureWasmBuildFor(maxReads)");
+  // ensureWasmBuildFor() reloads the database and may REPLACE currentRef
+  // (revalidateRefAfterReload). Freezing before it would stamp the matrix, and
+  // every exported file, with a reference the numbers did not come from.
+  check("runAll freezes the reference", freeze > 0, String(freeze));
+  check("...after the reload that can replace it, not before",
+    freeze > reload && reload > 0, `freeze@${freeze} reload@${reload}`);
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);

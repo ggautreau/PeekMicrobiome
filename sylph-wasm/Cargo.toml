@@ -79,6 +79,14 @@ name = "sylph"
 path = "src/main.rs"
 required-features = ["native"]
 
+# Re-sub-samples an existing .syldb to a coarser `c` (and merges catalogues).
+# `required-features = ["native"]` keeps it out of the wasm32/wasm64 builds,
+# which build the cdylib only.
+[[bin]]
+name = "syldb-reduce"
+path = "src/bin/syldb-reduce.rs"
+required-features = ["native"]
+
 [profile.release]
 panic = "abort"
 lto = true

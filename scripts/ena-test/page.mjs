@@ -93,7 +93,14 @@ fs.writeFileSync(path.join(ROOT, "api/filereport"), JSON.stringify([
     library_layout: "PAIRED",
     fastq_ftp: `http://ftp.sra.ebi.ac.uk/f/ERRTEST_1.fastq.gz;http://ftp.sra.ebi.ac.uk/f/ERRTEST_2.fastq.gz`,
     fastq_bytes: `${size1};${size2}`,
-    read_count: String(RECORDS),
+    // The ENA's read_count counts SEQUENCED READS, so a paired run of N pairs
+    // publishes 2N — which is why expectedProfiledReads() halves it to compare
+    // against a pair count. The fixture is RECORDS pairs (RECORDS*4 lines cut
+    // out of each mate), so this has to be 2*RECORDS. It used to say RECORDS,
+    // which described a run of RECORDS/2 pairs and made the page correctly
+    // report the sample as INCOMPLETE — twice as many reads came out of the
+    // download as the catalogue claimed the run holds.
+    read_count: String(RECORDS * 2),
   },
   {
     run_accession: "ERRTESTSE",
@@ -267,9 +274,12 @@ try {
   check("exactly one request went to the portal API",
     (await cdp.eval(`window.__enaApiCalls`)) === 1);
   const runsText = await cdp.eval(`document.getElementById("enaRuns").textContent`);
+  // The layout tag is bracketed in the SAMPLE list below and bare in the run
+  // list here — renderEnaRuns writes `<small>PE</small>`, renderFilesList writes
+  // `<small>[PE]</small>`. This check used to demand brackets in both.
   check("both runs are listed, with their layout and size",
     /ERRTEST\b/.test(runsText) && /ERRTESTSE/.test(runsText)
-    && /\[PE\]/.test(runsText) && /\[SE\]/.test(runsText), runsText.replace(/\s+/g, " ").slice(0, 200));
+    && /\bPE\b/.test(runsText) && /\bSE\b/.test(runsText), runsText.replace(/\s+/g, " ").slice(0, 200));
   check("the download total is shown BEFORE anything starts",
     /MB|KB|GB/.test(summary) && /2 runs/.test(summary), summary);
   check("...with an ETA and where the rate came from",
@@ -286,8 +296,11 @@ try {
   check("...marked as paired-end and as coming from the ENA",
     /\[PE\]/.test(listed) && /\[ENA\]/.test(listed), listed.slice(0, 160));
   const pending = await cdp.eval(`document.getElementById("enaPending").textContent`);
+  // "never written to your disk" became "never permanently saved to your disk"
+  // when the resumable OPFS cache landed: reference databases ARE written to
+  // disk, reads are not, and the old wording no longer distinguished them.
   check("the pending download total sits next to the run button",
-    /still to download/.test(pending) && /never written to your disk/.test(pending),
+    /still to download/.test(pending) && /never permanently saved to your disk/.test(pending),
     pending.slice(0, 160));
 
   // ---- 3. the database, then the run ----------------------------------------

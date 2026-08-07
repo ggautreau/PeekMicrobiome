@@ -40,7 +40,7 @@
 // that worker has never heard of and get nothing back but a rejected promise,
 // so this bump is again what keeps a cached visitor working.
 // The check is enforced by web/fastq-trim.parity.test.mjs.
-export const WORKER_VERSION = "13";
+export const WORKER_VERSION = "14";
 
 // ---- memory64 capability probe ----------------------------------------------
 
