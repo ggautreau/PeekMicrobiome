@@ -247,15 +247,19 @@ node scripts/dbcache-test/run.mjs      # headless Chrome + scripts/flaky_server.
 
 ## Licensing
 
-This repository is MIT (see `LICENSE`, © 2026 Guillaume Gautreau), but it is not all original
-work, and the MIT terms of the code it builds on have to travel with it — the licence requires the
-copyright notice to be kept in "all copies or substantial portions of the Software".
+**GPL-3.0-or-later** (see `LICENSE` and `COPYRIGHT`, © 2026 Guillaume Gautreau, MaIAGE — INRAE).
+Use it, study it, change it, share it — and share your changes under the same terms.
+
+It is not all original work, however, and the licence of the code it builds on travels with that
+code. MIT-licensed code may be combined into a GPL work — that direction is allowed, and it is
+what happens here — but the GPL does **not** relicense it: those files stay available from their
+authors under MIT.
 
 | Path | Origin | Licence |
 |---|---|---|
 | `sylph-wasm/` | fork of [sylph](https://github.com/bluenote-1577/sylph) 0.9.0, with a wasm target added | MIT, © 2023 Jim Shaw — `sylph-wasm/LICENSE` |
 | `web/vendor/fflate.js` | vendored [fflate](https://github.com/101arrowz/fflate) | MIT, © 2026 Arjun Barrett — `web/vendor/LICENSE.fflate` |
-| everything else | this project | MIT, © 2026 Guillaume Gautreau — `LICENSE` |
+| everything else | this project | **GPL-3.0-or-later**, © 2026 Guillaume Gautreau — `LICENSE` |
 
 `sylph-wasm/` is a **modified** copy of upstream sylph: a `wasm` feature, a wasm-bindgen surface
 (`src/wasm.rs`), a streaming sketcher (`StreamSketcher` in `src/sketch.rs`), and byte-slice
@@ -264,8 +268,10 @@ database built by upstream `sylph sketch` is read here as-is, and the TSV matche
 in this port are this repository's, not upstream's; report them here rather than to the sylph
 authors.
 
-The reference databases are built from the [UHGG catalog](https://www.nature.com/articles/s41587-020-0603-3),
-whose own terms and citation requirements apply to the `.syldb` files and to `web/db/lineage.json`.
+The reference databases are **data, not code**: this licence does not cover them. They are derived
+from the [MGnify genome catalogues](https://www.ebi.ac.uk/metagenomics/browse/genomes) and the
+[UHGG catalog](https://www.nature.com/articles/s41587-020-0603-3), whose own terms and citation
+requirements apply to the `.syldb` files and to `web/db/lineage.json`.
 
 ## Citations
 

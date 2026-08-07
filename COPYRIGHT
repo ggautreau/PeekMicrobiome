@@ -1,0 +1,39 @@
+PeekMicrobiome
+Copyright (C) 2026 Guillaume Gautreau — MaIAGE (UR 1404), INRAE
+
+This program is free software: you can redistribute it and/or modify it under
+the terms of the GNU General Public License as published by the Free Software
+Foundation, either version 3 of the License, or (at your option) any later
+version.
+
+This program is distributed in the hope that it will be useful, but WITHOUT ANY
+WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A
+PARTICULAR PURPOSE. See the GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License along with
+this program. If not, see <https://www.gnu.org/licenses/>.
+
+
+THIRD-PARTY CODE INCLUDED HERE, UNDER ITS OWN TERMS
+
+The GPL applies to this work as a whole. It does not, and cannot, relicense the
+code below: those terms are the authors' and travel with their code.
+
+  sylph-wasm/          A fork of sylph (https://github.com/bluenote-1577/sylph),
+                       MIT, Copyright (c) 2023 Jim Shaw.
+                       Full text: sylph-wasm/LICENSE
+
+  web/vendor/fflate.js Vendored, MIT, Copyright (c) 2026 Arjun Barrett.
+                       Full text: web/vendor/LICENSE.fflate
+
+MIT-licensed code may be combined into a GPL-3.0 work — that direction is
+allowed, and it is what happens here. The reverse is not: a downstream user
+receives the whole under the GPL, while the files above remain available from
+their authors under MIT.
+
+REFERENCE DATABASES
+
+The .syldb files are derived from the MGnify genome catalogues
+(https://www.ebi.ac.uk/metagenomics/browse/genomes) and from the UHGG catalogue.
+They are data, not code: this licence does not cover them, and their own terms
+and citation requirements apply. See the Citations section of README.md.
