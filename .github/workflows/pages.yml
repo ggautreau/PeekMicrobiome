@@ -26,8 +26,12 @@ jobs:
       - uses: actions/configure-pages@v5
 
       # web/sylph-pkg/ ships the wasm-pack output (sylph_wasm.js +
-      # sylph_wasm_bg.wasm). The 454 MB gut.syldb is NOT in the repo —
-      # the web app fetches it from a GitHub Release at runtime.
+      # sylph_wasm_bg.wasm). The nineteen reference databases are NOT in the
+      # repo — 6.24 GiB, far past what Pages will serve. They live in Zenodo
+      # record 21842023 (DOI 10.5281/zenodo.21842023, CC0) and the web app
+      # fetches the one the user picked at runtime, from the URLs in
+      # web/db/biomes.json. Zenodo rather than a GitHub Release because Release
+      # assets return no CORS headers, so the browser cannot fetch() them.
       - uses: actions/upload-pages-artifact@v3
         with:
           path: web

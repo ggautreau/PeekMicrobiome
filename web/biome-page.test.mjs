@@ -56,6 +56,20 @@ cat.groups.find((g) => g.key === "test").biomes.push({
   catalogue: "human-gut", version: "v2.0.2", species: 50, bytes: 6516832,
   file: "mini_clone.syldb", url: "db/mini_clone.syldb", bundled: true,
 });
+// Until the nineteen databases were published, eighteen entries in the real
+// catalogue had no URL and this test asserted on those eighteen. They are all
+// published now, so asserting "18 disabled" against production data would just
+// be asserting 0 — a check that can no longer fail, which proves nothing about
+// the greying-out path. The URL-less entry is therefore injected here, and the
+// reason is a sentinel this test owns, so the assertion tests the mechanism
+// (json -> normaliseBiome -> option label) rather than the wording of the day.
+const PENDING_SENTINEL = "not published yet — sentinel reason for the biome-page test";
+cat.pendingNote = PENDING_SENTINEL;
+cat.groups.find((g) => g.key === "test").biomes.push({
+  key: "unpublished-test", label: "Unpublished test biome", hint: "built but with nowhere to fetch it from",
+  catalogue: "human-gut", version: "v2.0.2", species: 50, bytes: 6516832,
+  file: "nowhere.syldb", url: "",
+});
 fs.writeFileSync(path.join(ROOT, "db/biomes.json"), JSON.stringify(cat));
 
 // A real subsample where the run that the other benches use is already on disk,
@@ -179,14 +193,24 @@ try {
     return { groups, opts, value: s.value, note: document.getElementById("dbBiomeNote").textContent };
   })()`);
   check("the picker is grouped by family", shape.groups.length === 6, shape.groups.join(" | "));
-  check("...and lists every catalogue", shape.opts.length === 22, `${shape.opts.length} options`);
+  check("...and lists every catalogue", shape.opts.length === 23, `${shape.opts.length} options`);
   check("entries with no URL are shown, disabled, with the reason",
-    shape.opts.filter(o => o.d).length === 18
-    && shape.opts.filter(o => o.d).every(o => /not published yet/.test(o.t)),
+    shape.opts.filter(o => o.d).length === 1
+    && shape.opts.filter(o => o.d).every(o => o.t.includes(PENDING_SENTINEL)),
     shape.opts.find(o => o.d)?.t);
   check("...and cannot be selected", shape.opts.filter(o => o.d).every(o => o.v === ""));
+  // The other side of the same coin: now that they are published, the nineteen
+  // real catalogues must all be selectable. Asserting only on the disabled one
+  // would pass just as well if every entry had lost its URL.
+  check("every published biome is selectable",
+    shape.opts.filter(o => /zenodo\.org/.test(o.v)).length === 19
+    && shape.opts.filter(o => /zenodo\.org/.test(o.v)).every(o => !o.d),
+    `${shape.opts.filter(o => /zenodo\.org/.test(o.v)).length} zenodo options`);
+  check("...all from the one published record, not the superseded one",
+    shape.opts.filter(o => /zenodo\.org/.test(o.v)).every(o => o.v.includes("/records/21842023/")),
+    shape.opts.find(o => /zenodo\.org/.test(o.v) && !o.v.includes("21842023"))?.v ?? "all on 21842023");
   check("the local-file option survived", shape.opts.some(o => o.v === "__local__"));
-  check("the human-gut database is selected by default", /gut\.syldb/.test(shape.value), shape.value);
+  check("the human-gut database is selected by default", /human-gut\.syldb/.test(shape.value), shape.value);
   check("the note under the picker names the biome and warns about the wrong one",
     /Human gut/.test(shape.note) && /another environment/.test(shape.note), shape.note.slice(0, 120));
 
@@ -439,7 +463,7 @@ try {
     };
   })()`);
   check("profile.html builds the same grouped picker",
-    shape2.groups === 6 && shape2.opts === 22 && shape2.disabled === 18, JSON.stringify(shape2).slice(0, 120));
+    shape2.groups === 6 && shape2.opts === 23 && shape2.disabled === 1, JSON.stringify(shape2).slice(0, 120));
   check("...and remembers the biome chosen on the other page",
     /gut_mini/.test(shape2.remembered), shape2.remembered);
   check("...with the same note under it", /Smoke test/.test(shape2.note), shape2.note.slice(0, 80));

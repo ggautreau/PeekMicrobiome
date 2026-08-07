@@ -235,7 +235,7 @@ const MUTATIONS = [
     name: "README: take the database row out of the network table",
     file: README, bench: WIRING,
     why: "the table would say a local FASTQ costs no network traffic, which is false",
-    from: `| **Load database** (default option) | 433 MB of \`gut.syldb\` coming *down* from \`zenodo.org\`, once, then cached on your computer | Zenodo sees your IP address and that you asked for this file |`,
+    from: `| **Load database** (any published biome) | the catalogue you picked coming *down* from \`zenodo.org\`, once, then cached on your computer — 433 MB for the human-gut default, 12 MB to 2.8 GB for the others | Zenodo sees your IP address and which of these files you asked for |`,
     to: ``,
     expect: /names the Zenodo download in its network table/,
   },
@@ -261,7 +261,7 @@ const MUTATIONS = [
     file: MULTI, bench: WIRING,
     why: "a run that downloaded 40 % of its file reports 'N species detected' and nothing else",
     from: `        const verdict = s.origin === "ena"
-          ? readCountVerdict({ observed: s.reads, expected: s.enaReads, maxReads })
+          ? readCountVerdict({ observed: readsShown(s), expected: s.enaReads, maxReads })
           : { ok: true, note: "" };`,
     to: `        const verdict = { ok: true, note: "" };`,
     expect: /compared with the count the ENA published/,

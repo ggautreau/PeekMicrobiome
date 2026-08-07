@@ -27,14 +27,28 @@
 // between two catalogues that were dereplicated apart. Hence: one database, the
 // user picks it, and the page says loudly which one it is.
 
-export const CATALOG_URL = "./db/biomes.json";
+// Bump when db/biomes.json changes. Without it the file is fetched at a bare,
+// permanently cacheable path: a returning visitor keeps the copy their browser
+// already has, and a database that has just been published still shows up
+// greyed out as "no public URL yet". The JS modules are all busted through
+// WORKER_VERSION, but this is data, fetched at runtime, and nothing else
+// invalidates it.
+const CATALOG_VERSION = "2";
+export const CATALOG_URL = `./db/biomes.json?v=${CATALOG_VERSION}`;
 export const LOCAL_VALUE = "__local__";
 // Remembered across visits and shared by both pages: with nineteen entries,
 // re-picking on every load is friction, and friction is what makes people click
 // whatever is already selected.
 export const BIOME_STORAGE_KEY = "sylph-db-biome";
 
-const PENDING_DEFAULT = "no public URL yet — this database is built but not published";
+// Shown, greyed out, on any entry whose `url` is empty. Until 2026-08-07 that
+// was eighteen of the nineteen and the reason was "not published yet", which was
+// true. They are all published now, so an entry without a URL no longer means
+// the database does not exist — it means this page is holding a catalogue that
+// predates the deposit, and the honest thing to tell the user is to reload.
+const PENDING_DEFAULT =
+  "no download URL in this catalogue entry — the copy of db/biomes.json this page " +
+  "loaded may predate the Zenodo deposit; reload the page";
 
 // ---- the catalogue -----------------------------------------------------------
 
@@ -96,8 +110,9 @@ export function fallbackCatalog() {
       biomes: [
         {
           key: "human-gut", label: "Human gut", catalogue: "human-gut", version: "v2.0.2",
-          species: 4744, bytes: 454021440, file: "gut.syldb",
-          url: "https://zenodo.org/api/records/20180025/files/gut.syldb/content",
+          species: 4744, bytes: 454021440, file: "human-gut.syldb",
+          url: "https://zenodo.org/api/records/21842023/files/human-gut.syldb/content",
+          doi: "10.5281/zenodo.21842023",
           lineage: "db/lineage.json",
         },
         {

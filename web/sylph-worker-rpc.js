@@ -40,7 +40,13 @@
 // that worker has never heard of and get nothing back but a rejected promise,
 // so this bump is again what keeps a cached visitor working.
 // The check is enforced by web/fastq-trim.parity.test.mjs.
-export const WORKER_VERSION = "14";
+// v15: the nineteen biome databases were published on Zenodo, so db/biomes.json
+// gained the URLs that make them selectable and biomes.js gained a cache-buster
+// of its own for that file. A page still holding biomes.js?v=14 would fetch the
+// catalogue at its bare path and keep the cached copy in which eighteen of the
+// nineteen entries are greyed out as unpublished — the databases would be live
+// and the app would go on saying they are not.
+export const WORKER_VERSION = "15";
 
 // ---- memory64 capability probe ----------------------------------------------
 

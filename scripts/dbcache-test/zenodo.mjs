@@ -30,7 +30,7 @@ const SCRATCH = process.env.SCRATCH ?? fs.mkdtempSync(path.join(os.tmpdir(), "ze
 const ROOT = path.join(SCRATCH, "root");
 const PROFILE = path.join(SCRATCH, "chrome-profile");
 const LOG = path.join(SCRATCH, "server.jsonl");
-const ZENODO = "https://zenodo.org/api/records/20180025/files/gut.syldb/content";
+const ZENODO = "https://zenodo.org/api/records/21842023/files/human-gut.syldb/content";
 const STOP_AT = Number(process.env.MB ?? 30) * 1_000_000;
 
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));

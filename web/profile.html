@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Single sample — PeekMicrobiome</title>
   <link rel="icon" type="image/svg+xml" href="./favicon.svg">
-  <link rel="stylesheet" href="./styles.css?v=14">
+  <link rel="stylesheet" href="./styles.css?v=15">
   <script>
     (function () {
       try {
@@ -53,7 +53,7 @@
       <svg class="privacy-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="m9 12 2 2 4-4"/></svg>
       <div>
         <div><strong>100% browser-based — your files never leave your computer.</strong> The FASTQ you drop here is read, decompressed and profiled entirely inside this browser tab. Nothing about it — not the reads, not the file name, not the results — is uploaded anywhere.</div>
-        <div style="margin-top:.45rem"><strong>Loading the reference database downloads it from <code>zenodo.org</code>.</strong> You choose which biome's catalogue to load: the human-gut (UHGG) database is 433 MB, the others run from 18 MB (human-vaginal) to 2.8 GB (soil). It is fetched the first time you click <em>Load database</em>, then kept on this computer for later visits. Zenodo sees your IP address and which of these files you asked for. Choosing the bundled 6 MB smoke-test database, or a <code>.syldb</code> from your own disk, downloads nothing at all. That download is the only request this page makes, and it only travels <em>towards</em> you.</div>
+        <div style="margin-top:.45rem"><strong>Loading the reference database downloads it from <code>zenodo.org</code>.</strong> You choose which biome's catalogue to load: the human-gut (UHGG) database is 433 MB, the others run from 12 MB (zebrafish-fecal) to 2.8 GB (soil). It is fetched the first time you click <em>Load database</em>, then kept on this computer for later visits. Zenodo sees your IP address and which of these files you asked for. Choosing the bundled 6 MB smoke-test database, or a <code>.syldb</code> from your own disk, downloads nothing at all. That download is the only request this page makes, and it only travels <em>towards</em> you.</div>
       </div>
     </div>
 
@@ -76,7 +76,7 @@
                for a visitor whose catalogue file does not load. -->
           <select id="dbSelect" style="width:auto;min-width:20rem">
             <optgroup label="Human">
-              <option value="https://zenodo.org/api/records/20180025/files/gut.syldb/content">Human gut — 4,744 species, 433 MB, downloads from Zenodo</option>
+              <option value="https://zenodo.org/api/records/21842023/files/human-gut.syldb/content">Human gut — 4,744 species, 433 MB, downloads from Zenodo</option>
               <option value="db/gut_mini.syldb">Smoke test — 50 human-gut species, 6 MB, bundled</option>
             </optgroup>
             <optgroup label="Your own file">
@@ -152,14 +152,15 @@
   </main>
 
   <footer class="app-footer">
-    <span>Built on <a href="https://github.com/bluenote-1577/sylph">sylph</a> · UHGG gut reference · WebAssembly</span>
+    <span>Built on <a href="https://github.com/bluenote-1577/sylph">sylph</a> · 19 <a href="https://www.ebi.ac.uk/metagenomics/browse/genomes">MGnify</a> genome catalogues · WebAssembly</span>
     <span class="footer-links">
       <a href="https://github.com/ggautreau/PeekMicrobiome">GitHub</a>
+      <a href="https://doi.org/10.5281/zenodo.21842022">Databases (CC0)</a>
     </span>
     <span class="credit">Created using Claude Opus 5, prompted by G. Gautreau — <a href="https://maiage.inrae.fr/">MaIAGE unit (UR 1404, Mathématiques et Informatique Appliquées du Génome à l'Environnement)</a>, INRAE.</span>
   </footer>
 
   <script src="./theme.js"></script>
-  <script type="module" src="./profile.js?v=14"></script>
+  <script type="module" src="./profile.js?v=15"></script>
 </body>
 </html>

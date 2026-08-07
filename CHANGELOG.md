@@ -4,6 +4,35 @@ Figures in this file are measured on the development machine (Chrome 151, Linux,
 not estimated. Where a number replaced an assumption, the assumption is named too — several of
 them were wrong in ways that mattered.
 
+## 2026-08-07
+
+### The nineteen databases are published
+
+All nineteen `.syldb` files are deposited on Zenodo as a single record — 6.24 GiB, **CC0**,
+concept DOI [10.5281/zenodo.21842022](https://doi.org/10.5281/zenodo.21842022), this version
+[10.5281/zenodo.21842023](https://doi.org/10.5281/zenodo.21842023). Eighteen of them were built
+but had nowhere to be fetched from; the picker listed them greyed out. They are now selectable,
+and the app covers the biomes it claimed to.
+
+One record rather than nineteen: one DOI to cite, one page to maintain. The human-gut database
+moved into it from its own older record (20180025) and is now named `human-gut.syldb` rather than
+`gut.syldb`, so every biome is fetched at `.../records/21842023/files/<key>.syldb/content`.
+A visitor who had the old one cached re-downloads it once — the OPFS cache is keyed by URL.
+
+- Each file's md5 was verified against the local copy at upload, and each of the nineteen URLs
+  was checked to answer a real `Range` request with the exact byte count in `db/biomes.json`.
+  That count is not decorative: `biomes.js` refuses a database whose size disagrees with it.
+- **`db/biomes.json` was fetched at a bare, permanently cacheable path.** Publishing the
+  databases would have changed nothing for anyone who had already visited: their browser would
+  have kept the catalogue in which eighteen entries say "not published yet". It now carries a
+  version parameter of its own, bumped with the file.
+- Three hardcoded copies of the old URL survived in the fallback catalogue and in both pages'
+  static `<option>` — the path taken only when `biomes.json` cannot be read, which is precisely
+  when nobody is watching. Found by sweeping for the old record id rather than by testing.
+- `scripts/ena-test/mutations.mjs` carried a mutation whose target text had already been
+  rewritten, so it was skipping rather than testing. A mutation that cannot be applied is a hole
+  in the suite that reports itself as a pass.
+
 ## 2026-08-06
 
 ### The read ceiling: 3 M → 24 M (32-bit) / 96 M (64-bit)

@@ -21,7 +21,7 @@ file of yours, no read, no file name and no result is ever uploaded, in any mode
 | Step | What crosses the network | What the other side learns |
 |---|---|---|
 | **Drop a FASTQ** | nothing | nothing |
-| **Load database** (any published biome) | the catalogue you picked coming *down* from `zenodo.org`, once, then cached on your computer — 433 MB for the human-gut default, 18 MB to 2.8 GB for the others | Zenodo sees your IP address and which of these files you asked for |
+| **Load database** (any published biome) | the catalogue you picked coming *down* from `zenodo.org`, once, then cached on your computer — 433 MB for the human-gut default, 12 MB to 2.8 GB for the others | Zenodo sees your IP address and which of these files you asked for |
 | **Load database** (bundled 6 MB / local `.syldb`) | nothing beyond the site itself | nothing |
 | **Paste an ENA accession** | the accession, then the public FASTQ files coming *down* from the EBI | the EBI sees your IP address and which accessions you asked for |
 
@@ -203,21 +203,27 @@ biome carried into every exported file.
 
 ### Hosting
 
-The 6 MB smoke-test database (`web/db/gut_mini.syldb`) is bundled with the site. The others are too large for GitHub Pages and are fetched from **Zenodo** at runtime:
+The 6 MB smoke-test database (`web/db/gut_mini.syldb`) is bundled with the site. The other nineteen are 6.24 GiB in total, far past what GitHub Pages will serve, and are fetched from **Zenodo** at runtime — all nineteen in a single record:
 
-- DOI: [10.5281/zenodo.20180025](https://doi.org/10.5281/zenodo.20180025)
-- File URL (CORS-enabled, used by the web app): `https://zenodo.org/api/records/20180025/files/gut.syldb/content`
+- **Concept DOI** (all versions — cite this one): [10.5281/zenodo.21842022](https://doi.org/10.5281/zenodo.21842022)
+- **This version:** [10.5281/zenodo.21842023](https://doi.org/10.5281/zenodo.21842023) — <https://zenodo.org/records/21842023>, 19 files, 6.24 GiB, **CC0**, published 2026-08-07
+- File URL (CORS-enabled, used by the web app): `https://zenodo.org/api/records/21842023/files/<key>.syldb/content`, where `<key>` is the biome key in `web/db/biomes.json` — e.g. `.../files/human-gut.syldb/content`
 
-> Note: the user-facing record URL `https://zenodo.org/records/20180025/files/gut.syldb` does **not** return CORS headers, so it can't be `fetch()`-ed by the browser app. Use the `/api/records/.../content` form instead. GitHub Release assets have the same CORS limitation — that's why we host on Zenodo rather than from a GitHub Release.
+The databases are released under CC0 because a `.syldb` is a FracMinHash of genomes that are not ours: a mechanical transform with no creative step to own. Cite MGnify, the catalogue paper for the biome you used, and sylph — see [Citations](#citations).
 
-To publish a new version, upload a fresh `gut.syldb` to Zenodo and paste the URL into the matching entry of **`web/db/biomes.json`** (see below). A visitor who already has the old one cached picks the new one up automatically: the cache is validated against the server's size and `Last-Modified` on every load, and a mismatch re-downloads instead of serving the stale copy.
+> Note: the user-facing record URL `https://zenodo.org/records/21842023/files/human-gut.syldb` does **not** return CORS headers, so it can't be `fetch()`-ed by the browser app. Use the `/api/records/.../content` form instead. GitHub Release assets have the same CORS limitation — that's why we host on Zenodo rather than from a GitHub Release.
+>
+> Nor is `Content-Range` exposed: Zenodo's `Access-Control-Expose-Headers` lists only `Content-Type, ETag, Link` and the rate-limit headers. A resumable download must therefore take the total size from a full request's `Content-Length`, never from the `Content-Range` of a ranged one — the browser cannot read that header, and code that tries records the database as 1 byte.
+
+To publish a new version, upload a fresh `<key>.syldb` — the human-gut one is `human-gut.syldb`, not `gut.syldb`, which is only the local build-artifact name — as a **new version of record 21842023** rather than a new record, and paste the URL into the matching entry of **`web/db/biomes.json`** (see below). A visitor who already has the old one cached picks the new one up automatically: the cache is validated against the server's size and `Last-Modified` on every load, and a mismatch re-downloads instead of serving the stale copy.
 
 ### One database per biome (`web/db/biomes.json`)
 
 There is one reference database per **MGnify genome catalogue** — human-gut (UHGG), human-oral, soil, marine, cow-rumen, and so on. `web/db/biomes.json` is the catalogue of catalogues: for each one, a key, a readable label, the MGnify catalogue name and version, the species count as `sylph inspect` reported it, the size in bytes, and the URL. The picker on both pages is built from that file, grouped by family (human / animal / plant & soil / marine); nothing about the list is hard-coded in the HTML except a two-entry fallback for the case where the file cannot be read.
 
-- **To publish a database:** upload `<key>.syldb` to Zenodo, then set `url` on that entry to the CORS-enabled form `https://zenodo.org/api/records/<record>/files/<file>/content` (and `doi`, optionally). That is the only field meant to be edited by hand.
-- **An entry with an empty `url` is still listed**, greyed out, with the reason — a database that exists but is not published yet is information, and an entry that silently disappears is indistinguishable from a broken catalogue.
+- **All nineteen are published** (Zenodo 21842023, CC0) and selectable. `scripts/zenodo_upload.py` does the deposit; it verifies every file's md5 against the local copy and stops at the draft, because publishing mints a permanent DOI.
+- **`bytes` must match the file on Zenodo exactly.** `biomes.js` compares the downloaded database against it and refuses a mismatch, so a wrong number here does not mis-report a size — it makes the database unloadable.
+- **An entry with an empty `url` is still listed**, greyed out, with the reason — an entry that silently disappears is indistinguishable from a broken catalogue.
 - **They are never merged, and only one is loaded at a time.** MGnify publishes no unified catalogue: each one is dereplicated independently and they overlap (10% of the named species are shared between human-oral and human-skin), so two loaded together would count the same species twice with its k-mers split arbitrarily. sylph's pseudotax reassignment separates close genomes *within* one database; it cannot arbitrate between two dereplicated apart.
 - **Which biome produced a result is carried with the result**, because profiling against the wrong one fails silently — sylph reports the closest genomes the loaded database holds, so a saliva sample profiled against soil comes back as a full, plausible, wrong table. The biome is named on the database status line, above the matrix, in the exported TSV/CSV header (`#` comment lines) and in the exported file name; loading a different database resets samples already profiled rather than mixing two references in one matrix; and the genome count sylph reports is checked against the count the catalogue claims, which catches a mislabelled deposit.
 - Each entry may declare a `lineage` map (genome file → species name). Only the human-gut catalogue has one today; the others show genome accessions instead of names, which is why the map is per entry and not fetched for every biome.
@@ -268,16 +274,23 @@ database built by upstream `sylph sketch` is read here as-is, and the TSV matche
 in this port are this repository's, not upstream's; report them here rather than to the sylph
 authors.
 
-The reference databases are **data, not code**: this licence does not cover them. They are derived
-from the [MGnify genome catalogues](https://www.ebi.ac.uk/metagenomics/browse/genomes) and the
-[UHGG catalog](https://www.nature.com/articles/s41587-020-0603-3), whose own terms and citation
-requirements apply to the `.syldb` files and to `web/db/lineage.json`.
+The reference databases are **data, not code**: this licence does not cover them. The nineteen
+`.syldb` files are deposited separately under **CC0**
+([10.5281/zenodo.21842022](https://doi.org/10.5281/zenodo.21842022)) — a FracMinHash of genomes
+that are not ours is a mechanical transform, and asserting a licence over it would claim rights we
+do not hold. They are derived from the
+[MGnify genome catalogues](https://www.ebi.ac.uk/metagenomics/browse/genomes) and, for the human
+gut, the [UHGG catalog](https://www.nature.com/articles/s41587-020-0603-3); EMBL-EBI places no
+restriction on redistribution and asks for attribution as good scientific practice, which is what
+the citations below are for. `web/db/lineage.json` is derived from the same catalogues.
 
 ## Citations
 
 If you use the results, please cite:
 
 - **sylph** — Shaw, J. & Yu, Y. W. *Rapid species-level metagenome profiling and containment estimation with sylph.* Nature Biotechnology (2024). <https://www.nature.com/articles/s41587-024-02412-y> — upstream repo: <https://github.com/bluenote-1577/sylph>
-- **UHGG catalog** — Almeida, A. *et al.* *A unified catalog of 204,938 reference genomes from the human gut microbiome.* Nature Biotechnology 39, 105–114 (2021). <https://www.nature.com/articles/s41587-020-0603-3>
+- **MGnify** — Richardson, L. *et al.* *MGnify: the microbiome sequence data analysis resource in 2023.* Nucleic Acids Research 51, D753–D759 (2023). <https://doi.org/10.1093/nar/gkac1080>
+- **the catalogue paper for the biome you profiled against** — each MGnify catalogue has its own; for the human gut that is the **UHGG catalog** — Almeida, A. *et al.* *A unified catalog of 204,938 reference genomes from the human gut microbiome.* Nature Biotechnology 39, 105–114 (2021). <https://www.nature.com/articles/s41587-020-0603-3>
+- **the databases themselves**, if you want the exact sketches to be reproducible — *sylph databases for the MGnify genome catalogues (19 biomes)*, Zenodo, CC0. <https://doi.org/10.5281/zenodo.21842022>
 
-This repository is an unofficial adaptation; the authors of sylph and the UHGG catalog are not responsible for it.
+This repository is an unofficial adaptation; the authors of sylph, of MGnify and of the catalogues are not responsible for it.
