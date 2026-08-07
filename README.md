@@ -5,7 +5,7 @@ Upload-free, installation-free metagenomic profiling across biomes. A WebAssembl
 **Live site:** <https://ggautreau.github.io/PeekMicrobiome/>
 
 > [!IMPORTANT]
-> **Unofficial port.** This is an adapted WebAssembly port of sylph for quick, in-browser checks of gut metagenomic composition. It is **not supported or endorsed by the sylph authors** and does not achieve the reliability of [sylph](https://github.com/bluenote-1577/sylph), [MetaPhlAn4](https://github.com/biobakery/MetaPhlAn), or [Meteor2](https://github.com/metagenopolis/meteor) run natively — use those for real analyses. If you use the results, please cite the upstream papers below.
+> **Unofficial port.** This is an adapted WebAssembly port of sylph for quick, in-browser checks of metagenomic composition — a *preview*, which is what the name says. It is **not supported or endorsed by the sylph authors** and does not achieve the reliability of [sylph](https://github.com/bluenote-1577/sylph), [MetaPhlAn4](https://github.com/biobakery/MetaPhlAn), or [Meteor2](https://github.com/metagenopolis/meteor) run natively — use those for real analyses. If you use the results, please cite the upstream papers below.
 
 ## Goals
 
@@ -130,11 +130,17 @@ is the real one and the UI says so rather than failing unexplained.
 
 | Path | What it holds |
 |---|---|
-| `web/` | Static site: multi-sample sylph profiler with INRAE-themed UI. |
+| `web/` | Static site: multi-sample profiler with INRAE-themed UI. |
+| `web/db/biomes.json` | The catalogue of catalogues — one entry per biome, read at load time. |
+| `web/biomes.js` | Builds the picker, freezes which database a result came from. |
+| `web/db-cache.js` | One resumable, cached download per database (OPFS). |
+| `web/ena.js` | Resolves an ENA accession and streams its FASTQs. |
 | `web/sylph-pkg/` | wasm32 package (committed so the deployed site is self-contained). |
 | `web/sylph-pkg64/` | wasm64 package, same filenames — loaded when a run needs more than 4 GB. |
 | `scripts/build_wasm.sh` | Builds either package: `./scripts/build_wasm.sh 32\|64\|both`. |
-| `scripts/` | Native pipeline to build the gut `.syldb` from UHGG. |
+| `scripts/build_biome_dbs.sh` | Builds one `.syldb` per MGnify catalogue (see *Reference databases*). |
+| `scripts/build_gut_db.sh` | The original human-gut-only pipeline, kept as it was. |
+| `scripts/dbcache-test/`, `scripts/ena-test/` | Browser and Node test benches, plus `flaky_server.py`. |
 | `sylph-wasm/` | Fork of upstream sylph with a wasm32 target and JS bindings. |
 | `sylph-survey/` | Notes and porting plan for the sylph → WASM fork. |
 | `docs/` | Design notes, size estimates, deployment notes. |
@@ -168,9 +174,36 @@ Two traps that cost real time, recorded here so they are not rediscovered:
   to `io::stderr()` — a black hole in a browser, and Rust panics become invisible. This crate
   installs its own hook instead.
 
-## Database hosting
+## Reference databases
 
-The 6 MB smoke-test database (`web/db/gut_mini.syldb`) is bundled with the site. The full 433 MB UHGG `gut.syldb` is too large for GitHub Pages and is fetched from **Zenodo** at runtime:
+There are **nineteen**, one per MGnify genome catalogue, built by `scripts/build_biome_dbs.sh`
+and listed with their species counts and sizes in `data/biome-dbs/manifest.tsv`:
+
+| | species | `.syldb` | | species | `.syldb` |
+|---|---|---|---|---|---|
+| soil | 19 472 | 2.8 GB | chicken-gut | 1 322 | 115 MB |
+| marine | 13 223 | 1.2 GB | pig-gut | 1 376 | 108 MB |
+| marine-sediment | 6 158 | 674 MB | tomato-rhizosphere | 579 | 91 MB |
+| **human-gut** (UHGG) | 4 744 | 433 MB | human-skin | 579 | 59 MB |
+| mouse-gut | 2 847 | 274 MB | maize-rhizosphere | 336 | 53 MB |
+| cow-rumen | 2 729 | 237 MB | human-oral | 452 | 32 MB |
+| sheep-rumen | 2 172 | 180 MB | human-vaginal | 280 | 18 MB |
+
+plus honeybee-gut, non-model-fish-gut, barley-rhizosphere, zebrafish-fecal and
+marine-eukaryotes, all under 18 MB. A `.syldb` tracks the *size* of the genomes, not their
+number: `soil` costs 145 KB per genome against 91 KB for the gut, and sixteen marine eukaryotes
+weigh 13 MB.
+
+**They are not interchangeable, and they must not be merged.** MGnify dereplicates each catalogue
+independently and they overlap — 10 % of the named species are shared between `human-oral` and
+`human-skin`. Loading two at once would list the same species twice, splitting its k-mers
+arbitrarily: sylph's pseudotax reassignment settles close genomes *within* one database, it does
+not arbitrate between two separately dereplicated catalogues. Hence one biome at a time, and the
+biome carried into every exported file.
+
+### Hosting
+
+The 6 MB smoke-test database (`web/db/gut_mini.syldb`) is bundled with the site. The others are too large for GitHub Pages and are fetched from **Zenodo** at runtime:
 
 - DOI: [10.5281/zenodo.20180025](https://doi.org/10.5281/zenodo.20180025)
 - File URL (CORS-enabled, used by the web app): `https://zenodo.org/api/records/20180025/files/gut.syldb/content`
