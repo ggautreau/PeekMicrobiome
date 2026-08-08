@@ -93,7 +93,10 @@
 // v28: every disabled control now carries the reason it is refusing, on the
 // control itself and — for the ones frozen by a run — in a visible line, since
 // a tooltip reaches neither a touch screen nor a keyboard.
-export const WORKER_VERSION = "28";
+// v29: a finished run says so through the tab title and, if asked, a system
+// notification; the header carries a real mark instead of the letter P, and the
+// favicon no longer shows an "S" left over from sylph.
+export const WORKER_VERSION = "29";
 
 // ---- memory64 capability probe ----------------------------------------------
 

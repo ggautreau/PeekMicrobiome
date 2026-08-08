@@ -12,16 +12,16 @@ import {
   sylphWorkerRpc, detectMemory64, chooseWasmBits, WORKER_VERSION,
   readsBudget, readsBudgetNote, readsOverBudgetNote, loadedBuildNote, fmtReads,
   progressFraction,
-} from "./sylph-worker-rpc.js?v=28";
+} from "./sylph-worker-rpc.js?v=29";
 import {
   dbCacheClient, fmtRate, fmtEta, cacheSummary, assertSameDatabase,
-} from "./db-cache.js?v=28";
-import { matePattern, stripFastqExt } from "./sample-naming.js?v=28";
+} from "./db-cache.js?v=29";
+import { matePattern, stripFastqExt } from "./sample-naming.js?v=29";
 import {
   resolveAccession, validateAccession, ASSUMED_BPS,
   downloadEstimate, readCountVerdict, expectedProfiledReads,
-} from "./ena.js?v=28";
-import { normaliseMarkers, screenVerdict, SCREENING_DB, SCREENING_MARKERS } from "./screening.js?v=28";
+} from "./ena.js?v=29";
+import { normaliseMarkers, screenVerdict, SCREENING_DB, SCREENING_MARKERS } from "./screening.js?v=29";
 import {
   fetchCatalog, fallbackCatalog, renderDbSelect, biomeForUrl, biomeNote,
   mgnifyGenomeUrl,
@@ -29,7 +29,7 @@ import {
   makeDbRef, sameDbRef, refLine, refShort, refCommentLines, refSlug, genomeCountMismatch,
   rememberBiome, recallBiome, catalogueName, LOCAL_VALUE,
   selectionMatchesLoaded, notLoadedNote, refMetaMismatch,
-} from "./biomes.js?v=28";
+} from "./biomes.js?v=29";
 
 const $ = (id) => document.getElementById(id);
 const els = {
@@ -163,6 +163,58 @@ function paintScreen(html, cls = "") {
   el.className = `info${cls ? " " + cls : ""}`;
   el.innerHTML = html;
   el.classList.toggle("hide", !html);
+}
+
+// ---- telling you it is over --------------------------------------------------
+//
+// A project of 85 runs takes hours. Nobody watches it, and the page gives no
+// signal you can see from another tab — the run ends, and you find out whenever
+// you happen to look.
+//
+// Two channels, because they fail in different places:
+//   - the TAB TITLE, which costs nothing, needs no permission, works in every
+//     browser, and is visible in the tab strip from anywhere;
+//   - a system NOTIFICATION, which reaches you when the browser is behind
+//     something else, and needs permission.
+//
+// Permission is asked when the box is ticked, NOT on load: a page that asks for
+// notifications before you have done anything is a page people click "block" on,
+// and after that neither channel can be offered again.
+const BASE_TITLE = document.title;
+
+function setTabTitle(prefix) {
+  document.title = prefix ? `${prefix} ${BASE_TITLE}` : BASE_TITLE;
+}
+
+// Only when the tab is NOT in front. Notifying someone about something they are
+// already watching is noise, and noise is what makes notifications get turned off.
+function notifyDone(text) {
+  setTabTitle("✓ done —");
+  if (!document.hidden) return;
+  if (typeof Notification === "undefined" || Notification.permission !== "granted") return;
+  try {
+    const n = new Notification("PeekMicrobiome — profiling finished", {
+      body: text,
+      tag: "peek-run-done",     // a second run replaces the first rather than stacking
+    });
+    n.onclick = () => { window.focus(); n.close(); };
+  } catch { /* some browsers refuse Notification outside a service worker */ }
+}
+
+// Coming back to the tab IS the acknowledgement. Leaving "✓ done" in the title
+// for ever would make it meaningless the next time it appears.
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden && document.title.startsWith("✓")) setTabTitle("");
+});
+
+async function wantNotify() {
+  const box = document.getElementById("notifyDone");
+  if (!box?.checked) return false;
+  if (typeof Notification === "undefined") return false;
+  if (Notification.permission === "granted") return true;
+  if (Notification.permission === "denied") return false;
+  try { return (await Notification.requestPermission()) === "granted"; }
+  catch { return false; }
 }
 
 const autoMode = () => !!document.getElementById("modeAuto")?.checked;
@@ -1782,6 +1834,10 @@ els.run.addEventListener("click", runAll);
 els.cancel.addEventListener("click", () => abortCtrl?.abort());
 
 async function runAll() {
+  // Asked here, on a real click, and only if the box is ticked — never on load.
+  // The answer is not needed before the run ends, but the PROMPT must come from
+  // a user gesture or the browser refuses it outright.
+  await wantNotify();
   if (!dbMeta) return;
   els.error.textContent = "";
   els.results.classList.add("hide");
@@ -2023,12 +2079,13 @@ async function runAll() {
   // Cancelled samples are counted apart from failures: twelve red "failed:
   // aborted" lines after a deliberate click on Cancel is a report of an
   // incident that did not happen.
-  setStep(`done — ${okCount} sample${okCount === 1 ? "" : "s"} ok` +
+  const summary = `${okCount} sample${okCount === 1 ? "" : "s"} ok` +
     (shortCount ? `, ${shortCount} incomplete (fewer reads than the ENA lists)` : "") +
     (emptyCount ? `, ${emptyCount} with NO species — check the biome` : "") +
     `, ${failCount} failed` +
-    (cancelCount ? `, ${cancelCount} cancelled` : "") +
-    ` (pool=${rpcs.length})`);
+    (cancelCount ? `, ${cancelCount} cancelled` : "");
+  setStep(`done — ${summary} (pool=${rpcs.length})`);
+  notifyDone(summary);
 }
 
 function mergeRowsIntoMatrix(matrix, sampleName, rows) {
@@ -2219,6 +2276,7 @@ function csvEscape(sep) {
 function setStep(s) { els.step.textContent = s; }
 function showError(s) { els.error.textContent = s; }
 function paintOverall(doneCount, totalCount, currentFracIn) {
+  setTabTitle(totalCount ? `(${Math.floor(doneCount)}/${totalCount})` : "");
   const overall = Math.min(100, (doneCount + currentFracIn) / Math.max(1, totalCount) * 100);
   els.bar.style.width = `${overall.toFixed(1)}%`;
   // The width alone says nothing to a screen reader: role="progressbar" needs

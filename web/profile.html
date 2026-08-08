@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Single sample — PeekMicrobiome</title>
   <link rel="icon" type="image/svg+xml" href="./favicon.svg">
-  <link rel="stylesheet" href="./styles.css?v=28">
+  <link rel="stylesheet" href="./styles.css?v=29">
   <script>
     (function () {
       try {
@@ -28,7 +28,19 @@
   </div>
   <header class="app-header">
     <a class="brand" href="./index.html">
-      <div class="brand-logo">P</div>
+      <div class="brand-logo" aria-hidden="true">
+        <!-- "Peek" is the lens; the three unequal bars inside it are what the tool
+             actually produces, a relative-abundance profile. Deliberately NOT an
+             eye: an eye reads as surveillance, which is the opposite of a tool
+             whose whole argument is that nothing you drop in ever leaves. -->
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" aria-hidden="true">
+          <circle cx="10.5" cy="10.5" r="6.7" stroke-width="2"/>
+          <line x1="15.6" y1="15.6" x2="20.6" y2="20.6" stroke-width="2.6"/>
+          <line x1="7.6" y1="13.2" x2="7.6" y2="9.6" stroke-width="2"/>
+          <line x1="10.5" y1="13.2" x2="10.5" y2="6.6" stroke-width="2"/>
+          <line x1="13.4" y1="13.2" x2="13.4" y2="11" stroke-width="2"/>
+        </svg>
+      </div>
       <div class="brand-text">
         <span class="brand-title">PeekMicrobiome</span>
         <span class="brand-tagline">upload-free, installation-free metagenomic profiling across biomes</span>
@@ -161,6 +173,6 @@
   </footer>
 
   <script src="./theme.js"></script>
-  <script type="module" src="./profile.js?v=28"></script>
+  <script type="module" src="./profile.js?v=29"></script>
 </body>
 </html>

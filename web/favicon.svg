@@ -1,6 +1,16 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <!-- The lens is "peek", the unequal bars inside it are the abundance profile.
+       Rendered at 16px in a tab, so this is a coarser cut of the header mark:
+       thicker strokes, three bars rather than the header's three-plus-handle
+       detail, and the handle shortened so it does not close the gap with the
+       tile edge at small sizes. It carried an "S" (for sylph) until the project
+       was renamed. -->
   <rect width="32" height="32" rx="7" fill="#00a3a6"/>
-  <text x="50%" y="52%" text-anchor="middle" dominant-baseline="middle"
-        font-family="ui-sans-serif, system-ui, -apple-system, sans-serif"
-        font-weight="700" font-size="20" fill="#fff" letter-spacing="-1">S</text>
+  <g fill="none" stroke="#fff" stroke-linecap="round">
+    <circle cx="14" cy="14" r="8" stroke-width="2.6"/>
+    <line x1="19.8" y1="19.8" x2="25" y2="25" stroke-width="3.4"/>
+    <line x1="10.5" y1="17.2" x2="10.5" y2="13.2" stroke-width="2.6"/>
+    <line x1="14" y1="17.2" x2="14" y2="9.6" stroke-width="2.6"/>
+    <line x1="17.5" y1="17.2" x2="17.5" y2="14.6" stroke-width="2.6"/>
+  </g>
 </svg>

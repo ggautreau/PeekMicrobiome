@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>PeekMicrobiome — upload-free, installation-free metagenomic profiling across biomes</title>
   <link rel="icon" type="image/svg+xml" href="./favicon.svg">
-  <link rel="stylesheet" href="./styles.css?v=28">
+  <link rel="stylesheet" href="./styles.css?v=29">
   <script>
     (function () {
       try {
@@ -28,7 +28,19 @@
   </div>
   <header class="app-header">
     <a class="brand" href="./">
-      <div class="brand-logo">P</div>
+      <div class="brand-logo" aria-hidden="true">
+        <!-- "Peek" is the lens; the three unequal bars inside it are what the tool
+             actually produces, a relative-abundance profile. Deliberately NOT an
+             eye: an eye reads as surveillance, which is the opposite of a tool
+             whose whole argument is that nothing you drop in ever leaves. -->
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" aria-hidden="true">
+          <circle cx="10.5" cy="10.5" r="6.7" stroke-width="2"/>
+          <line x1="15.6" y1="15.6" x2="20.6" y2="20.6" stroke-width="2.6"/>
+          <line x1="7.6" y1="13.2" x2="7.6" y2="9.6" stroke-width="2"/>
+          <line x1="10.5" y1="13.2" x2="10.5" y2="6.6" stroke-width="2"/>
+          <line x1="13.4" y1="13.2" x2="13.4" y2="11" stroke-width="2"/>
+        </svg>
+      </div>
       <div class="brand-text">
         <span class="brand-title">PeekMicrobiome</span>
         <span class="brand-tagline">upload-free, installation-free metagenomic profiling across biomes</span>
@@ -44,7 +56,7 @@
 
   <main class="container wide">
     <div class="page-head">
-      <h1>Quick multi-sample metagenomic profiler</h1>
+      <h1>Easy multi-sample metagenomic profiler</h1>
       <p class="sub">Drop FASTQs, or paste an ENA accession — each sample is profiled against one MGnify biome catalogue, locally in your browser, and the results are assembled into a relative-abundance matrix. If you do not know the biome, the page can work it out from one sample.</p>
     </div>
 
@@ -185,6 +197,9 @@
 
       <div class="row">
         <button id="run" class="primary" disabled>Profile all</button>
+        <label class="notify-pick" title="A run over a whole project takes hours. Ticked, the tab title changes and — if you allow it — your system tells you when it is over. The permission is asked when you tick this, not before.">
+          <input type="checkbox" id="notifyDone"> tell me when it finishes
+        </label>
         <!-- The titles are the state these two start in; multi.js replaces them
              through setDisabled() as soon as either becomes usable. Without
              them, the two buttons that are greyed out on an empty page are the
@@ -235,6 +250,6 @@
   </footer>
 
   <script src="./theme.js"></script>
-  <script type="module" src="./multi.js?v=28"></script>
+  <script type="module" src="./multi.js?v=29"></script>
 </body>
 </html>
