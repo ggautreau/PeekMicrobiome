@@ -12,16 +12,16 @@ import {
   sylphWorkerRpc, detectMemory64, chooseWasmBits, WORKER_VERSION,
   readsBudget, readsBudgetNote, readsOverBudgetNote, loadedBuildNote, fmtReads,
   progressFraction,
-} from "./sylph-worker-rpc.js?v=22";
+} from "./sylph-worker-rpc.js?v=23";
 import {
   dbCacheClient, fmtRate, fmtEta, cacheSummary, assertSameDatabase,
-} from "./db-cache.js?v=22";
-import { matePattern, stripFastqExt } from "./sample-naming.js?v=22";
+} from "./db-cache.js?v=23";
+import { matePattern, stripFastqExt } from "./sample-naming.js?v=23";
 import {
   resolveAccession, validateAccession, ASSUMED_BPS,
   downloadEstimate, readCountVerdict, expectedProfiledReads,
-} from "./ena.js?v=22";
-import { normaliseMarkers, screenVerdict, SCREENING_DB, SCREENING_MARKERS } from "./screening.js?v=22";
+} from "./ena.js?v=23";
+import { normaliseMarkers, screenVerdict, SCREENING_DB, SCREENING_MARKERS } from "./screening.js?v=23";
 import {
   fetchCatalog, fallbackCatalog, renderDbSelect, biomeForUrl, biomeNote,
   mgnifyGenomeUrl,
@@ -29,7 +29,7 @@ import {
   makeDbRef, sameDbRef, refLine, refShort, refCommentLines, refSlug, genomeCountMismatch,
   rememberBiome, recallBiome, catalogueName, LOCAL_VALUE,
   selectionMatchesLoaded, notLoadedNote, refMetaMismatch,
-} from "./biomes.js?v=22";
+} from "./biomes.js?v=23";
 
 const $ = (id) => document.getElementById(id);
 const els = {
@@ -179,9 +179,17 @@ function refreshDbMode() {
   if (screenRow) screenRow.classList.toggle("hide", !auto);
   if (btn) btn.disabled = files.length === 0;
   if (hint && auto) {
-    hint.textContent = files.length === 0
+    // Name the sample rather than say "the first one". With twelve in the list,
+    // "the first" is a rule the user has to apply themselves against an order
+    // they did not choose — and the answer is about ONE sample's environment,
+    // which is worth knowing before the screen rather than after it.
+    const first = files[0];
+    hint.textContent = !first
       ? "Add a sample below first — screening reads one of them to decide."
-      : "Screens the first sample against a 13 MB marker set, then loads the catalogue it points to.";
+      : `Screens ${first.sampleName}` +
+        (files.length > 1 ? ` — the first of ${files.length}` : "") +
+        ` against a 13 MB marker set, then loads the catalogue it points to. ` +
+        `The whole batch is then profiled against that one catalogue.`;
   }
 }
 

@@ -75,7 +75,9 @@
 // is the compressed size while fetch() delivers them decompressed — a page on
 // v21 aborts every screening download with "the server sent more than the
 // 11736250 bytes it declared".
-export const WORKER_VERSION = "22";
+// v23: automatic mode names the sample it will screen, and says the whole batch
+// follows the one catalogue it picks.
+export const WORKER_VERSION = "23";
 
 // ---- memory64 capability probe ----------------------------------------------
 

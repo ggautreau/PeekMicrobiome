@@ -271,6 +271,23 @@ try {
     inp.dispatchEvent(new Event("change"));
     document.getElementById("loadDb").click();
   })()`);
+  // With a sample in the list, automatic mode must name the one it will read.
+  // "the first sample" is a rule the user has to apply themselves against an
+  // order they did not choose.
+  const autoHint = await cdp.eval(`(() => {
+    document.getElementById("modeAuto").click();
+    const t = document.getElementById("screenHint").textContent;
+    const d = document.getElementById("screenBtn").disabled;
+    document.getElementById("modeManual").click();
+    return { t, d };
+  })()`);
+  check("automatic mode names the sample it will screen",
+    /sampleA/.test(autoHint.t), autoHint.t.slice(0, 90));
+  check("...and says the whole batch follows that one catalogue",
+    /whole batch/.test(autoHint.t));
+  check("...and the button is live now that there is something to screen",
+    autoHint.d === false);
+
   const dbLine = await cdp.waitFor(`document.getElementById("dbInfo").textContent`, /Database ready/, 120_000, "#dbInfo");
   check("the database line names the biome that was loaded",
     /Smoke test/.test(dbLine) && /gut_mini\.syldb/.test(dbLine)
