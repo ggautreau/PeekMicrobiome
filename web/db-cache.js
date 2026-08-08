@@ -347,6 +347,17 @@ async function probeSize(url, signal) {
     if (Number.isFinite(size) && size > 0) {
       return {
         size,
+        // TRANSFER size, not content size, whenever the response is encoded.
+        // fetch() decompresses transparently, so the reader delivers MORE bytes
+        // than Content-Length declares and the overrun guard fires on a perfectly
+        // good download. Measured on GitHub Pages: db/screening.syldb is
+        // 13,319,802 bytes and is served `Content-Encoding: gzip` with
+        // Content-Length 11,736,250 — and a Range probe returns
+        // `Content-Range: bytes 0-0/11736250`, the compressed total as well, so
+        // NO header carries the real size. The browser cannot ask for identity
+        // either: Accept-Encoding is a forbidden header name for fetch().
+        // The caller's expected size is therefore the only truth available.
+        encoded: !!head.headers.get("content-encoding"),
         lastModified: head.headers.get("last-modified"),
         etag: head.headers.get("etag"),
         ranges: null,      // not asked yet
@@ -368,6 +379,7 @@ async function probeRanges(url, signal) {
   const cr = parseContentRange(resp.headers.get("content-range"));
   return {
     size: cr?.total ?? (ranges ? 0 : Number(resp.headers.get("content-length") || 0)),
+    encoded: !!resp.headers.get("content-encoding"),
     lastModified: resp.headers.get("last-modified"),
     etag: resp.headers.get("etag"),
     ranges,
@@ -1124,7 +1136,8 @@ async function downloadEntry(u, remote, { emit, signal, chunkSize }) {
 // Returns { source: "cache" | "network", size, lastModified, validators, key,
 // url, bytesFetched }. `onProgress` receives
 // { phase, received, total, bps, etaSec, attempt, note }.
-export async function ensureDb(url, { onProgress, signal, chunkSize = DEFAULT_CHUNK } = {}) {
+export async function ensureDb(url, { onProgress, signal, chunkSize = DEFAULT_CHUNK,
+  expectedSize = null } = {}) {
   const u = absUrl(url);
   if (!canWriteCache()) throw new Error("OPFS write access is unavailable in this context");
 
@@ -1152,8 +1165,26 @@ export async function ensureDb(url, { onProgress, signal, chunkSize = DEFAULT_CH
     // error, not the cache miss.
     throw unreachableError(probeError);
   }
+  // The caller usually knows how big the database is — db/biomes.json carries
+  // `bytes` for every entry, checked against the file at build time. Where it
+  // does, that number wins over anything the headers say, because a compressing
+  // host reports the size of the TRANSFER and fetch() then hands over the
+  // decompressed body. Believing the header there aborts a good download with
+  // "the server sent more than it declared".
+  if (Number.isFinite(expectedSize) && expectedSize > 0 && remote) {
+    if (remote.encoded || remote.size !== expectedSize) remote = { ...remote, size: expectedSize };
+  }
   if (!Number.isFinite(remote.size) || remote.size <= 0) {
     throw new Error("the server did not report a size for the database (no content-length)");
+  }
+  if (remote.encoded && !(Number.isFinite(expectedSize) && expectedSize > 0)) {
+    // Nothing to compare against and a size that describes the compressed body:
+    // going ahead would fail mid-download with a message blaming the server.
+    throw new Error(
+      `this host compresses the database (Content-Encoding), so the size it reports ` +
+      `(${remote.size}) is the compressed one while the browser receives it decompressed. ` +
+      `Nothing here can tell how large the file really is — serve it without compression, ` +
+      `or declare its size in db/biomes.json.`);
   }
 
   // Everything past here WRITES the entry, so: one writer at a time across every
@@ -1197,11 +1228,18 @@ export async function readCachedBytes(url) {
 // restart and the "only zero-progress attempts are strikes" rule are not
 // reimplemented here: it runs the same pumpDownload as the OPFS path, with an
 // `io` that writes into a buffer and has nowhere to checkpoint.
-export async function downloadToMemory(url, { onProgress, signal, chunkSize = DEFAULT_CHUNK } = {}) {
+export async function downloadToMemory(url, { onProgress, signal, chunkSize = DEFAULT_CHUNK,
+  expectedSize = null } = {}) {
   const u = absUrl(url);
   const emit = (phase, extra) => { try { onProgress?.({ phase, ...extra }); } catch { /* ignore */ } };
   emit("probe", { note: "asking the server for size (no local cache available)" });
-  const remote = await probe(u, signal);
+  let remote = await probe(u, signal);
+  // Same reason as in ensureDb(): on a compressing host the headers describe the
+  // transfer, and the buffer allocated below would be short by the compression
+  // ratio. Without OPFS there is no partial file to notice it either.
+  if (Number.isFinite(expectedSize) && expectedSize > 0) {
+    if (remote.encoded || remote.size !== expectedSize) remote = { ...remote, size: expectedSize };
+  }
   if (!Number.isFinite(remote.size) || remote.size <= 0) {
     throw new Error("the server did not report a size for the database");
   }
@@ -1304,7 +1342,10 @@ export function dbCacheClient({ version = "" } = {}) {
       } catch { return false; }
     },
     // -> { source, size, lastModified, url, opfs, bytes? }
-    ensure(url, { onProgress, signal, chunkSize } = {}) {
+    // `expectedSize` is what the caller knows the database to be — db/biomes.json
+    // carries it for every entry. It overrides the headers, which describe the
+    // TRANSFER on any host that compresses. See ensureDb().
+    ensure(url, { onProgress, signal, chunkSize, expectedSize } = {}) {
       const u = absUrl(url);
       const running = inflight.get(u);
       if (running) {
@@ -1313,7 +1354,7 @@ export function dbCacheClient({ version = "" } = {}) {
         return running.promise.finally(() => running.listeners.delete(onProgress));
       }
       const listeners = new Set([onProgress]);
-      const promise = call("ensure", { url: u, chunkSize }, {
+      const promise = call("ensure", { url: u, chunkSize, expectedSize }, {
         onProgress: (p) => { for (const l of listeners) { try { l?.(p); } catch { /* ignore */ } } },
         signal,
       }).finally(() => inflight.delete(u));

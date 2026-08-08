@@ -70,7 +70,12 @@
 // v21: biome screening is wired in. multi.js imports screening.js and spawns a
 // throwaway worker for it; index.html and styles.css carry the panel. A page on
 // v20 has no screening.js to import, so the module graph fails to load.
-export const WORKER_VERSION = "21";
+// v22: db-cache trusts the size the CALLER knows over the one the headers
+// report. GitHub Pages serves the bundled databases gzipped, so Content-Length
+// is the compressed size while fetch() delivers them decompressed — a page on
+// v21 aborts every screening download with "the server sent more than the
+// 11736250 bytes it declared".
+export const WORKER_VERSION = "22";
 
 // ---- memory64 capability probe ----------------------------------------------
 

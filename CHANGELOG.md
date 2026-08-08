@@ -4,6 +4,42 @@ Figures in this file are measured on the development machine (Chrome 151, Linux,
 not estimated. Where a number replaced an assumption, the assumption is named too — several of
 them were wrong in ways that mattered.
 
+## 2026-08-08 (3)
+
+### The host compresses, so Content-Length is not the file size
+
+    Screening failed: the server sent more than the 11736250 bytes it declared
+    (11789879 and counting)
+
+on a download that was perfect. GitHub Pages serves `db/screening.syldb` with
+`Content-Encoding: gzip`: Content-Length is **11,736,250**, the compressed body,
+while `fetch()` decompresses transparently and the reader delivers the real
+**13,319,802**. The overrun guard was comparing a content size against a
+transfer size.
+
+No header can settle it. A Range probe against the same host answers
+`Content-Range: bytes 0-0/11736250` — the compressed total as well — and the
+browser cannot ask for an identity encoding, because `Accept-Encoding` is a
+forbidden header name for `fetch()`. The size the CALLER knows is the only truth
+available, and it was already there: `db/biomes.json` carries `bytes` for every
+entry, and `biomes.js` already refuses a database whose size disagrees with it.
+It is now used one step earlier, where a compressing host would otherwise kill
+the download before anything could be checked. The screening database declares
+its own size in `screening-markers.json`.
+
+Where no expected size is known and the host compresses, the error now names the
+cause instead of accusing the server of overrunning.
+
+**Every bench in this repository serves files with `python3 -m http.server`,
+which does not compress** — which is exactly why production found this and none
+of them could. `scripts/dbcache-test/node-suite.mjs` now runs one scenario
+against a gzipping server, and asserts both directions: the error names
+compression when the size is unknown, and with the caller's size the file lands
+on disk byte for byte.
+
+`gut_mini.syldb` had the same latent fault — 6,236,165 declared for 6,516,832
+real — and only escaped it by being loaded before this guard existed in the path.
+
 ## 2026-08-08 (2)
 
 ### Two modes for choosing a catalogue, and the biome can be found for you

@@ -12,16 +12,16 @@ import {
   sylphWorkerRpc, detectMemory64, chooseWasmBits, WORKER_VERSION,
   readsBudget, readsBudgetNote, readsOverBudgetNote, loadedBuildNote, fmtReads,
   progressFraction,
-} from "./sylph-worker-rpc.js?v=21";
+} from "./sylph-worker-rpc.js?v=22";
 import {
   dbCacheClient, fmtRate, fmtEta, cacheSummary, assertSameDatabase,
-} from "./db-cache.js?v=21";
-import { matePattern, stripFastqExt } from "./sample-naming.js?v=21";
+} from "./db-cache.js?v=22";
+import { matePattern, stripFastqExt } from "./sample-naming.js?v=22";
 import {
   resolveAccession, validateAccession, ASSUMED_BPS,
   downloadEstimate, readCountVerdict, expectedProfiledReads,
-} from "./ena.js?v=21";
-import { normaliseMarkers, screenVerdict, SCREENING_DB, SCREENING_MARKERS } from "./screening.js?v=21";
+} from "./ena.js?v=22";
+import { normaliseMarkers, screenVerdict, SCREENING_DB, SCREENING_MARKERS } from "./screening.js?v=22";
 import {
   fetchCatalog, fallbackCatalog, renderDbSelect, biomeForUrl, biomeNote,
   mgnifyGenomeUrl,
@@ -29,7 +29,7 @@ import {
   makeDbRef, sameDbRef, refLine, refShort, refCommentLines, refSlug, genomeCountMismatch,
   rememberBiome, recallBiome, catalogueName, LOCAL_VALUE,
   selectionMatchesLoaded, notLoadedNote, refMetaMismatch,
-} from "./biomes.js?v=21";
+} from "./biomes.js?v=22";
 
 const $ = (id) => document.getElementById(id);
 const els = {
@@ -227,7 +227,8 @@ async function runScreen() {
     paintScreen(`Screening <strong>${escapeHTML(s.sampleName)}</strong> — fetching the marker set…`);
     const r = await fetch(`./${SCREENING_MARKERS}?v=${WORKER_VERSION}`, { signal: screenAbort.signal });
     if (!r.ok) throw new Error(`marker map: HTTP ${r.status}`);
-    const markers = normaliseMarkers(await r.json());
+    const markersJson = await r.json();
+    const markers = normaliseMarkers(markersJson);
 
     // Enough reads to see the dominant species, not enough to quantify them.
     const SCREEN_READS = 500_000;
@@ -238,6 +239,10 @@ async function runScreen() {
       onProgress: (p) => paintScreen(`Screening <strong>${escapeHTML(s.sampleName)}</strong> — ` +
         `marker set ${p.total ? Math.round(100 * (p.received ?? 0) / p.total) : 0}%…`),
       signal: screenAbort.signal,
+      // Declared in the marker map rather than read from a header: GitHub Pages
+      // serves this file gzipped, so Content-Length (and Content-Range) report
+      // the compressed size while fetch() hands over the decompressed body.
+      expectedSize: Number(markersJson?.dbBytes) || null,
     });
     if (res.opfs) await rpc.loadDbCached(abs); else await rpc.loadDb(res.bytes.slice());
 
@@ -645,7 +650,7 @@ function paintDbProgress(label, p) {
 
 // Download-or-reuse, exactly once, then hand every worker a way to get the
 // bytes locally. Returns the loadFn the pool will run.
-async function prepareUrlDb(url, label) {
+async function prepareUrlDb(url, label, expectedSize = null) {
   const abs = new URL(url, location.href).href;
   dbAbort = new AbortController();
   els.cancelDb.classList.remove("hide");
@@ -659,6 +664,11 @@ async function prepareUrlDb(url, label) {
     const res = await dbc.ensure(abs, {
       onProgress: (p) => paintDbProgress(label, p),
       signal: dbAbort.signal,
+      // What db/biomes.json says this database weighs, checked against the file
+      // at deposit time. It overrides the headers on any host that compresses —
+      // GitHub Pages serves the bundled databases gzipped, and its Content-Length
+      // is then the compressed size while fetch() delivers them decompressed.
+      expectedSize,
     });
     dbSource = res.opfs ? res.source : "memory";
     if (res.opfs) {
@@ -751,7 +761,11 @@ async function loadDatabase() {
       // content (zenodo.org)" tells the user nothing about what they are
       // waiting for, and nothing about whether it is the right thing.
       label = biome ? `${biome.label} (${biome.file})` : dbLabel(url);
-      loadFn = await prepareUrlDb(url, label);
+      // biome.bytes is the size db/biomes.json declares, and biomes.js already
+      // refuses a database whose size disagrees with it — so it is the same
+      // number, used one step earlier, where a compressing host would otherwise
+      // have made the download fail before it could be checked.
+      loadFn = await prepareUrlDb(url, label, Number.isFinite(biome?.bytes) ? biome.bytes : null);
     }
     // Every worker now reads the SAME local copy (OPFS file, or one in-memory
     // buffer on the fallback path). Before this, each worker ran its own

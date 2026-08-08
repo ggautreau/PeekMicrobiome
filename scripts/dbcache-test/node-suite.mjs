@@ -557,6 +557,55 @@ try {
       sizeOnly.ok && sizeOnly.validators === "size-only" && /size alone/.test(sizeOnly.why),
       JSON.stringify(sizeOnly));
   }
+  // ---- a host that COMPRESSES ------------------------------------------------
+  //
+  // Every other scenario here, and every browser bench, runs against a server
+  // that does not compress. That is why this was found in production and not
+  // by any of them: GitHub Pages serves db/screening.syldb with
+  // `Content-Encoding: gzip`, so Content-Length is 11,736,250 while fetch()
+  // hands over the 13,319,802 decompressed bytes, and the overrun guard aborts
+  // a perfectly good download with "the server sent more than it declared".
+  //
+  // A Range probe does not save it either: the same host answers
+  // `Content-Range: bytes 0-0/11736250` — the compressed total. And the browser
+  // cannot ask for identity, because Accept-Encoding is a forbidden header for
+  // fetch(). The size the CALLER knows is the only truth available.
+  {
+    const zlib = await import("node:zlib");
+    const http = await import("node:http");
+    const raw = Buffer.from(bodyA);
+    const gz = zlib.gzipSync(raw);
+    const srv = http.createServer((req, res) => {
+      res.setHeader("content-type", "application/octet-stream");
+      res.setHeader("content-encoding", "gzip");
+      res.setHeader("content-length", String(gz.length));   // the TRANSFER size
+      res.setHeader("last-modified", new Date(0).toUTCString());
+      if (req.method === "HEAD") { res.writeHead(200); res.end(); return; }
+      res.writeHead(200); res.end(gz);
+    });
+    await new Promise((r) => srv.listen(0, "127.0.0.1", r));
+    const gzUrl = `http://127.0.0.1:${srv.address().port}/db.syldb`;
+    try {
+      resetDisk();
+      const bad = await ensureWithin(gzUrl, { chunkSize: CHUNK }, 45_000);
+      check("a compressing host is named as the cause, not accused of overrunning",
+        !!bad.err && /compress/i.test(String(bad.err.message))
+        && !/sent more than/.test(String(bad.err.message)),
+        String(bad.err?.message ?? "no error").slice(0, 110));
+
+      resetDisk();
+      const good = await ensureWithin(gzUrl, { chunkSize: CHUNK, expectedSize: raw.length }, 45_000);
+      check("...and the caller's known size makes the download succeed",
+        !good.err && good.res?.size === raw.length, good.err?.message ?? `${good.res?.size}`);
+      const bytes = await readCachedBytes(gzUrl).catch(() => Buffer.alloc(0));
+      // The question is never "did it error" but "is what it kept the right file".
+      check("...with the decompressed file stored byte for byte",
+        sha(Buffer.from(bytes)) === sha(raw), `${bytes.length} of ${raw.length} bytes`);
+    } finally {
+      await new Promise((r) => srv.close(r));
+    }
+  }
+
 } finally {
   await stopServer();
 }

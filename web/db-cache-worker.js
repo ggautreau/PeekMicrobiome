@@ -24,7 +24,7 @@
 import {
   ensureDb, downloadToMemory, listCache, removeCached, removeCachedKey, clearCache,
   canWriteCache,
-} from "./db-cache.js?v=21";
+} from "./db-cache.js?v=22";
 
 const aborters = new Map();
 
@@ -40,17 +40,17 @@ self.addEventListener("message", async (e) => {
   aborters.set(id, ac);
   try {
     if (type === "ensure") {
-      const { url, chunkSize } = e.data;
+      const { url, chunkSize, expectedSize } = e.data;
       const onProgress = (p) => self.postMessage({ id, progress: p });
       if (canWriteCache()) {
-        const r = await ensureDb(url, { onProgress, signal: ac.signal, chunkSize });
+        const r = await ensureDb(url, { onProgress, signal: ac.signal, chunkSize, expectedSize });
         self.postMessage({ id, ok: true, result: { ...r, opfs: true } });
       } else {
         // No OPFS here. Still ONE download — the bytes go back to the page once
         // and the page hands a copy to each sylph worker.
         console.warn("[db-cache] OPFS is not writable in this worker; " +
           "falling back to a single in-memory download (no persistence, no resume after reload)");
-        const r = await downloadToMemory(url, { onProgress, signal: ac.signal, chunkSize });
+        const r = await downloadToMemory(url, { onProgress, signal: ac.signal, chunkSize, expectedSize });
         self.postMessage({ id, ok: true, result: { ...r, opfs: false } }, [r.bytes.buffer]);
       }
     } else if (type === "list") {
