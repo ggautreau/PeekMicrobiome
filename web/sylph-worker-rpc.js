@@ -87,7 +87,10 @@
 // v26: the three notice panels were halved — the two download paragraphs moved
 // to the controls they describe and the duplicate biome panel went — plus the
 // gut-only copy and the drop-files-only opening sentence.
-export const WORKER_VERSION = "26";
+// v27: the read cap is grouped ("3 000 000"), which needs a text field — so the
+// value must be read back through a parser. A page on v26 pairs the new markup
+// with the old handlers and reads 3 for three million.
+export const WORKER_VERSION = "27";
 
 // ---- memory64 capability probe ----------------------------------------------
 

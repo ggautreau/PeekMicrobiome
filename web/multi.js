@@ -12,16 +12,16 @@ import {
   sylphWorkerRpc, detectMemory64, chooseWasmBits, WORKER_VERSION,
   readsBudget, readsBudgetNote, readsOverBudgetNote, loadedBuildNote, fmtReads,
   progressFraction,
-} from "./sylph-worker-rpc.js?v=26";
+} from "./sylph-worker-rpc.js?v=27";
 import {
   dbCacheClient, fmtRate, fmtEta, cacheSummary, assertSameDatabase,
-} from "./db-cache.js?v=26";
-import { matePattern, stripFastqExt } from "./sample-naming.js?v=26";
+} from "./db-cache.js?v=27";
+import { matePattern, stripFastqExt } from "./sample-naming.js?v=27";
 import {
   resolveAccession, validateAccession, ASSUMED_BPS,
   downloadEstimate, readCountVerdict, expectedProfiledReads,
-} from "./ena.js?v=26";
-import { normaliseMarkers, screenVerdict, SCREENING_DB, SCREENING_MARKERS } from "./screening.js?v=26";
+} from "./ena.js?v=27";
+import { normaliseMarkers, screenVerdict, SCREENING_DB, SCREENING_MARKERS } from "./screening.js?v=27";
 import {
   fetchCatalog, fallbackCatalog, renderDbSelect, biomeForUrl, biomeNote,
   mgnifyGenomeUrl,
@@ -29,7 +29,7 @@ import {
   makeDbRef, sameDbRef, refLine, refShort, refCommentLines, refSlug, genomeCountMismatch,
   rememberBiome, recallBiome, catalogueName, LOCAL_VALUE,
   selectionMatchesLoaded, notLoadedNote, refMetaMismatch,
-} from "./biomes.js?v=26";
+} from "./biomes.js?v=27";
 
 const $ = (id) => document.getElementById(id);
 const els = {
@@ -358,7 +358,19 @@ let persistence = null;      // result of navigator.storage.persist()
 
 const READS_MIN = 10_000;
 const clampReads = (v) => Math.max(READS_MIN, Math.floor(Number(v) || 0));
-const currentReads = () => clampReads(els.maxReads.value);
+// "3000000" is a number nobody can read at a glance, and this one decides how
+// long a run takes. <input type="number"> cannot show a separator — the browser
+// only accepts bare digits — so the field is text and the grouping is ours.
+//
+// A NARROW NO-BREAK SPACE (U+202F), not a comma or a full space: a comma is a
+// decimal separator in half of Europe, and a normal space can wrap mid-number.
+const READS_SEP = "\u202f";
+const fmtGrouped = (n) =>
+  Number.isFinite(n) ? Math.floor(n).toLocaleString("en-US").replace(/,/g, READS_SEP) : "";
+// Every separator a user might paste or type: our own, plain spaces, commas,
+// and the non-breaking space Excel and Word produce.
+const readsFromField = (v) => clampReads(String(v ?? "").replace(/[\s,\u202f\u00a0]/g, ""));
+const currentReads = () => readsFromField(els.maxReads.value);
 const readsWarn = document.getElementById("readsWarn");
 // index.html carries a static note immediately before #readsWarn, and the
 // warning text inside it. Both are decided here — the budget depends on whether
@@ -444,26 +456,32 @@ function enaCostChanged() {
 }
 
 els.maxReadsSlider.addEventListener("input", () => {
-  els.maxReads.value = els.maxReadsSlider.value;
+  els.maxReads.value = fmtGrouped(Number(els.maxReadsSlider.value));
   updateReadsState(Number(els.maxReadsSlider.value));
   enaCostChanged();
 });
+// NOT reformatted while typing: re-grouping on every keystroke moves the caret
+// out from under the cursor, so "3000000" typed left to right becomes unusable.
+// The field is read through readsFromField() everywhere, so the digits are
+// understood whatever the user has typed so far.
 els.maxReads.addEventListener("input", () => {
-  const raw = Number(els.maxReads.value);
+  const raw = readsFromField(els.maxReads.value);
   if (!Number.isFinite(raw)) return;
   const budget = readsBudget(has64);
   els.maxReadsSlider.value = String(Math.max(READS_MIN, Math.min(budget.sliderMax, raw)));
   updateReadsState(raw);
   enaCostChanged();
 });
+// On leaving the field: clamp, then group. This is also what repairs anything
+// pasted in — "3,000,000", "3 000 000" or "3000000" all come back the same.
 els.maxReads.addEventListener("change", () => {
-  const v = clampReads(els.maxReads.value);
-  els.maxReads.value = String(v);
+  const v = currentReads();
+  els.maxReads.value = fmtGrouped(v);
   els.maxReadsSlider.value = String(v);
   updateReadsState(v);
   enaCostChanged();
 });
-updateReadsState(Number(els.maxReads.value));
+updateReadsState(currentReads());
 // Paint the step state on load, not only after the first click: an empty page
 // is exactly when the user needs to be told where to start.
 refreshRunButton();

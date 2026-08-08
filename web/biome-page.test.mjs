@@ -217,6 +217,35 @@ try {
     /Add a sample below first/.test(m1.hint), m1.hint.slice(0, 60));
   await cdp.eval(`document.getElementById("modeManual").click()`);
 
+  // ---- 0b. the read cap is readable ------------------------------------------
+  // "3000000" is the number that decides how long a run takes, and it was shown
+  // as seven bare digits. <input type="number"> cannot group them, so the field
+  // is text — which means the code must read it back through a parser, and a
+  // paste from a spreadsheet must not silently become 3.
+  const reads = await cdp.eval(`(() => {
+    const f = document.getElementById("maxReads");
+    const initial = f.value;
+    f.value = "2,500,000"; f.dispatchEvent(new Event("change", { bubbles: true }));
+    const afterPaste = f.value;
+    const slider = document.getElementById("maxReadsSlider").value;
+    const s = document.getElementById("maxReadsSlider");
+    s.value = "500000"; s.dispatchEvent(new Event("input", { bubbles: true }));
+    const afterSlider = f.value;
+    f.value = initial; f.dispatchEvent(new Event("change", { bubbles: true }));
+    return { initial, afterPaste, slider, afterSlider, type: f.type };
+  })()`);
+  const grouped = (v) => /^\d{1,3}(\u202f\d{3})+$/.test(v);
+  check("the read cap is grouped, not seven bare digits",
+    grouped(reads.initial), JSON.stringify(reads.initial));
+  check("...in a text field, since type=number cannot group", reads.type === "text");
+  // A spreadsheet paste is the realistic way this field gets a comma.
+  check("...a pasted '2,500,000' is understood and regrouped",
+    grouped(reads.afterPaste) && reads.slider === "2500000",
+    `${reads.afterPaste} / slider ${reads.slider}`);
+  check("...and moving the slider regroups it too",
+    reads.afterSlider.replace(/\u202f/g, "") === "500000" && grouped(reads.afterSlider),
+    JSON.stringify(reads.afterSlider));
+
   // ---- 1. the picker ---------------------------------------------------------
   const shape = await cdp.eval(`(() => {
     const s = document.getElementById("dbSelect");
