@@ -224,12 +224,12 @@ const MUTATIONS = [
 
   // ---- what the pages say and do (source-level bench) ------------------------
   {
-    name: "banner: drop the Zenodo paragraph",
+    name: "database card: drop the Zenodo paragraph",
     file: INDEX, bench: WIRING,
     why: "the page would again present the ENA mode as the only thing that leaves the tab",
-    from: `<strong>Loading the reference database downloads it from <code>zenodo.org</code>.</strong>`,
-    to: `<strong>Loading the reference database.</strong>`,
-    expect: /Zenodo download is named IN THE BANNER/,
+    from: `<strong>Loading a reference database downloads it from <code>zenodo.org</code>.</strong>`,
+    to: `<strong>Loading a reference database.</strong>`,
+    expect: /Zenodo download is named at the control that makes it/,
   },
   {
     name: "README: take the database row out of the network table",

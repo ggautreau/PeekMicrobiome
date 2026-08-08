@@ -4,6 +4,58 @@ Figures in this file are measured on the development machine (Chrome 151, Linux,
 not estimated. Where a number replaced an assumption, the assumption is named too — several of
 them were wrong in ways that mattered.
 
+## 2026-08-08 (4)
+
+### Interface review: six bugs, four accessibility failures, half the wall of text
+
+A five-lens review of the live page proposed 29 changes; 24 survived adversarial
+verification, and every number below was measured before and after.
+
+**Bugs.** The page scrolled 267 px sideways on a phone (one `<select>` with an
+inline `min-width:20rem`, sized to its longest option). A failed wasm boot turned
+*Load database* into a permanent silent hang, controls already disabled. **Zero
+species — the exact signature of the wrong catalogue — was printed in the success
+green and counted as "ok"**; it is now its own status, named, coloured, counted
+apart and re-runnable. An orphan `_1` built a sample with no files at all and
+blamed the FASTQ; it is profiled single-end now, with the note the paired branch
+already showed. The ENA rows painted the accession over the file size below
+640 px. The sticky matrix header never engaged, because its scroll box had no
+height.
+
+**Accessibility.** The FASTQ drop zone was unreachable without a mouse —
+`display:none` on the input takes it out of the tab order — so the one path where
+reads never leave the machine was the one a keyboard could not use, while the ENA
+path was fully operable. Not one live region existed: a 433 MB download started,
+progressed and finished in silence. `--ink-muted` measured **2.79:1** and white on
+the accent teal **3.09:1**, both below AA, on every status line and every primary
+button. Now 4.96:1 and 5.42:1.
+
+**Density.** Three warning panels, 1,662 px tall on a phone, put the first control
+**2,080 px** down — two and a half screens. The two download paragraphs moved to
+the controls they describe (the ENA one literally said "the ENA mode *below*",
+2,900 px below), and the red panel went: it was the third statement of the same
+warning and the only one that could not name the selected biome, which
+`#dbBiomeNote` does live, under the picker.
+
+    mobile   Step 1 at 2080 px -> 1266 px     panels 1662 px -> 820 px
+    desktop  Step 1 at  850 px ->  595 px     panels  538 px -> 280 px
+    words in <main>  898 -> 876
+
+876 words against 898: the text was moved, not deleted.
+
+**Stale copy.** The yellow panel still described "fast in-browser checks of *gut*
+metagenomic composition" and named UHGG as the citation for all nineteen
+catalogues. The page's first sentence described a drop-files-only tool — no ENA,
+no automatic biome detection.
+
+One test contract changed deliberately rather than quietly: `wiring.mjs` demanded
+that the Zenodo download be named IN THE BANNER. It is now named at the control,
+and the bench checks both halves — the banner names both kinds of request, the
+card carries the detail. Its check was also narrowed to the database card: a
+fallback `<option>` elsewhere in the file contains a zenodo.org URL and "433 MB",
+so the whole-file version passed with the paragraph deleted, which is how that
+mutation escaped once.
+
 ## 2026-08-08 (3)
 
 ### The host compresses, so Content-Length is not the file size

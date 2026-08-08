@@ -84,7 +84,10 @@
 // v25: accessibility — the FASTQ drop zone is keyboard-reachable, status lines
 // are aria-live, the progress bar has progressbar semantics, and two colour
 // tokens were darkened to clear WCAG AA.
-export const WORKER_VERSION = "25";
+// v26: the three notice panels were halved — the two download paragraphs moved
+// to the controls they describe and the duplicate biome panel went — plus the
+// gut-only copy and the drop-files-only opening sentence.
+export const WORKER_VERSION = "26";
 
 // ---- memory64 capability probe ----------------------------------------------
 

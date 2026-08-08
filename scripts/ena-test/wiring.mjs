@@ -42,19 +42,40 @@ console.log("== the privacy banner says everything that leaves this tab ==");
 // zenodo.org, and loading a database is REQUIRED before anything can be
 // profiled, including a purely local FASTQ. The omission was in the one
 // sentence the whole project is judged on.
-for (const [name, b] of [["index.html", indexBanner], ["profile.html", profileBanner]]) {
+// CONTRACT CHANGE, 2026-08-08. The banner used to carry the full detail of both
+// downloads, and on a phone that made it 894 px tall — taller than the screen —
+// with the first control 2,080 px down. The detail moved to the CONTROLS: the
+// Zenodo paragraph now sits under the biome picker, the ENA one inside the ENA
+// panel, each next to the button that makes the request.
+//
+// What must not weaken is the reason this bench exists: the banner once named
+// only the ENA download, which by structure read as "the ENA mode is the only
+// exception" when in fact loading a database is REQUIRED before anything can be
+// profiled, including a purely local FASTQ. So the banner must still name BOTH
+// requests — and the detail must exist where the decision is taken. Both halves
+// are checked; dropping either is a failure.
+// The DATABASE CARD, isolated — not the whole file. index.html also carries a
+// fallback <option> whose value is a zenodo.org URL containing "433 MB", so a
+// check against the whole source passes even with the paragraph deleted. That
+// is exactly how this mutation escaped once.
+const dbCard = (src) => src.match(/<section class="card" id="cardDb">[\s\S]*?<\/section>/)?.[0] ?? "";
+for (const [name, b, src] of [["index.html", indexBanner, dbCard(index)],
+                              ["profile.html", profileBanner, dbCard(profileHtml)]]) {
   check(`${name}: the banner exists at all`, b.length > 200, `${b.length} chars`);
   check(`${name}: your own files never leave, in any mode`,
     /never leave your computer/.test(b));
-  check(`${name}: the Zenodo download is named IN THE BANNER`,
-    /zenodo\.org/i.test(b), b.replace(/\s+/g, " ").slice(0, 120));
+  check(`${name}: the banner names BOTH kinds of request, not just the ENA one`,
+    /reference database/i.test(b) && /(ENA|EBI)/.test(b),
+    b.replace(/\s+/g, " ").slice(0, 130));
+  check(`${name}: the Zenodo download is named at the control that makes it`,
+    /zenodo\.org/i.test(src));
   check(`${name}: ...with its size and who sees the request`,
-    /433 MB/.test(b) && /IP address/.test(b));
+    /433 MB/.test(src) && /IP address/.test(src));
   check(`${name}: ...and the way to avoid it`,
-    /bundled/.test(b) && /(your own disk|local)/.test(b));
+    /bundled/.test(src) && /(your own disk|local)/.test(src));
 }
 check("index.html: the ENA download is named too, with what the EBI learns",
-  /EBI/.test(indexBanner) && /accessions you looked up/.test(indexBanner));
+  /EBI/.test(index) && /accessions you looked up/.test(index));
 check("profile.html no longer claims no data is sent to any server",
   !/No data is sent to any server/i.test(profileHtml));
 // The allow-list accepts every host under ebi.ac.uk; naming one host in the

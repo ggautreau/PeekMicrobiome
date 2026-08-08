@@ -674,8 +674,17 @@ console.log("== ENA mode wiring ==");
     /never leave your computer/.test(banner), banner.slice(0, 80));
   check("...and no longer claims that NOTHING is sent to any server",
     !/No data is sent to any server/.test(indexSrc));
-  check("...and says the ENA mode contacts the EBI", /EBI/.test(banner));
-  check("...naming what the EBI gets to see", /IP address/.test(banner) && /accession/.test(banner));
+  // Was asserted on the top banner. The paragraph now lives inside the ENA
+  // panel, at the control it is about — so that is where it must be found, and
+  // finding it merely "somewhere in the page" would be a weaker check.
+  const enaPanel = indexSrc.match(/<div class="ena-head">[\s\S]*?<\/div>/)?.[0] ?? "";
+  check("...and says the ENA mode contacts the EBI, at the ENA control",
+    /EBI/.test(enaPanel), enaPanel.slice(0, 80));
+  check("...naming what the EBI gets to see",
+    /IP address/.test(enaPanel) && /accession/.test(enaPanel));
+  // The Zenodo paragraph moved the same way, to the database card.
+  check("...and the database download names what Zenodo gets to see",
+    /zenodo\.org/.test(indexSrc) && /Zenodo sees your IP address/.test(indexSrc));
   check("...and that downloads are streamed, not stored",
     /without ever writing them to your disk|never written to your disk/.test(indexSrc));
 }
@@ -986,6 +995,7 @@ console.log("== pairing dropped files into samples ==");
 // cache-bust section above.
 const { existsSync } = await import("node:fs");
 const indexSrcForBiome = readFileSync(here + "index.html", "utf8");
+  const biomesSrc = readFileSync(here + "biomes.js", "utf8");
 const profileSrcForBiome = readFileSync(here + "profile.html", "utf8");
 
 // ---- the biome picker, and naming the reference on every result --------------
@@ -1511,8 +1521,18 @@ console.log("== the pages carry the reference through ==");
 
   // Both pages say, before anything is loaded, what the choice costs.
   for (const [name, src] of [["index.html", indexSrcForBiome], ["profile.html", profileSrcForBiome]]) {
+    // index.html said this THREE times: a red panel at the top, #dbBiomeNote
+    // under the picker, and #dbInfo. The panel was the only one that could not
+    // name the selected biome, and the furthest from the control, so it went.
+    // What must survive is that the cost of the wrong choice is stated before
+    // anything is loaded — on index.html by biomeNote(), which fills
+    // #dbBiomeNote on load, plus the static paragraph that carries the one
+    // sentence the panel alone had. profile.html still uses the panel.
     check(`${name} carries the wrong-biome warning`,
-      /biome-warning/.test(src) && /full, plausible, wrong table/.test(src));
+      name === "index.html"
+        ? /id="dbBiomeNote"/.test(src) && /cannot be combined/.test(src)
+          && /full, plausible table/.test(biomesSrc)
+        : /biome-warning/.test(src) && /full, plausible, wrong table/.test(src));
     check(`${name} has somewhere to say which biome is selected`, /id="dbBiomeNote"/.test(src));
   }
   check("index.html has somewhere to name the reference above the matrix",

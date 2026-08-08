@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>PeekMicrobiome — upload-free, installation-free metagenomic profiling across biomes</title>
   <link rel="icon" type="image/svg+xml" href="./favicon.svg">
-  <link rel="stylesheet" href="./styles.css?v=25">
+  <link rel="stylesheet" href="./styles.css?v=26">
   <script>
     (function () {
       try {
@@ -45,28 +45,23 @@
   <main class="container wide">
     <div class="page-head">
       <h1>Quick multi-sample metagenomic profiler</h1>
-      <p class="sub">Drop several FASTQs — each is profiled against the reference catalogue <em>you</em> choose (one MGnify biome at a time), locally in your browser, and the results are assembled into a relative-abundance matrix.</p>
+      <p class="sub">Drop FASTQs, or paste an ENA accession — each sample is profiled against one MGnify biome catalogue, locally in your browser, and the results are assembled into a relative-abundance matrix. If you do not know the biome, the page can work it out from one sample.</p>
     </div>
 
     <div class="privacy-notice" role="note">
       <svg class="privacy-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="m9 12 2 2 4-4"/></svg>
       <div>
         <div><strong>Your own files never leave your computer.</strong> FASTQs you drop here are read, decompressed and profiled entirely inside this browser tab. Nothing about them — not the reads, not the file names, not the results — is uploaded anywhere. That is true in every mode, whatever else this page does, and it is the reason the tool exists.</div>
-        <div style="margin-top:.45rem">This page does make two kinds of request of its own, and both are downloads <em>towards</em> you. Nothing of yours is ever sent anywhere.</div>
-        <div style="margin-top:.45rem"><strong>Loading the reference database downloads it from <code>zenodo.org</code>.</strong> You choose which biome's catalogue to load: the human-gut (UHGG) database is 433 MB, the others run from 12 MB (zebrafish-fecal) to 2.8 GB (soil). It is fetched the first time you click <em>Load database</em>, then kept on this computer for later visits. Zenodo sees your IP address and which of these files you asked for. Choosing the bundled 6 MB smoke-test database, or a <code>.syldb</code> from your own disk, downloads nothing at all.</div>
-        <div style="margin-top:.45rem"><strong>The ENA mode below downloads public FASTQs from the EBI.</strong> If you paste an accession, this page asks the <a href="https://www.ebi.ac.uk/ena/browser/home">EBI's public ENA API</a> which files it covers and then streams those public FASTQs from the EBI's servers (any host under <code>ebi.ac.uk</code> — usually <code>ftp.sra.ebi.ac.uk</code>) straight into the profiler, without ever writing them to your disk. The EBI therefore sees your IP address and which accessions you looked up, exactly as it would if you downloaded them yourself.</div>
+        <div style="margin-top:.45rem">This page does make two kinds of request of its own — downloading a reference database, and downloading public ENA reads if you ask for them. Both are downloads <em>towards</em> you, and each is explained at the control that makes it. Nothing of yours is ever sent anywhere.</div>
       </div>
     </div>
 
     <div class="notice" role="note">
       <svg class="notice-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
-      <div><strong>Quick-and-dirty preview.</strong> This tool is meant for fast in-browser checks of gut metagenomic composition. It does not achieve the reliability of <a href="https://github.com/bluenote-1577/sylph">sylph</a>, <a href="https://github.com/biobakery/MetaPhlAn">MetaPhlAn4</a>, or <a href="https://github.com/metagenopolis/meteor">Meteor2</a> run natively — use those for real analyses. This is an <strong>unofficial adapted WebAssembly port of sylph — not supported or endorsed by the sylph authors</strong>. <strong>If you use the results, please cite the <a href="https://www.nature.com/articles/s41587-024-02412-y">sylph paper</a></strong> (Shaw &amp; Yu, <em>Nat. Biotechnol.</em> 2024) <strong>and the <a href="https://www.nature.com/articles/s41587-020-0603-3">UHGG catalog</a></strong> (Almeida <em>et al.</em>, <em>Nat. Biotechnol.</em> 2021) — or, for any other biome, the <a href="https://www.ebi.ac.uk/metagenomics/browse/genomes">MGnify genome catalogue</a> you loaded.</div>
+      <div><strong>Quick-and-dirty preview.</strong> This tool is meant for fast in-browser checks of metagenomic composition, against one MGnify catalogue at a time. It does not achieve the reliability of <a href="https://github.com/bluenote-1577/sylph">sylph</a>, <a href="https://github.com/biobakery/MetaPhlAn">MetaPhlAn4</a>, or <a href="https://github.com/metagenopolis/meteor">Meteor2</a> run natively — use those for real analyses. This is an <strong>unofficial adapted WebAssembly port of sylph — not supported or endorsed by the sylph authors</strong>. <strong>If you use the results, please cite the <a href="https://www.nature.com/articles/s41587-024-02412-y">sylph paper</a></strong> (Shaw &amp; Yu, <em>Nat. Biotechnol.</em> 2024) <strong>and the <a href="https://www.ebi.ac.uk/metagenomics/browse/genomes">MGnify genome catalogue</a> you actually loaded</strong> — for the human gut that is the <a href="https://www.nature.com/articles/s41587-020-0603-3">UHGG catalog</a> (Almeida <em>et al.</em>, <em>Nat. Biotechnol.</em> 2021), and each of the other eighteen has its own paper.</div>
     </div>
 
-    <div class="notice biome-warning" role="note">
-      <svg class="notice-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
-      <div><strong>Pick the biome your samples came from.</strong> Every result is relative to the one catalogue you loaded and to nothing else: sylph names the closest genomes that catalogue contains and says nothing at all about species it does not contain. Profiling a saliva sample against the soil catalogue therefore returns a full, plausible, wrong table — with no error and no empty result. The loaded biome is named on the database line, above the matrix, and inside every TSV and CSV you download; that is where a mistake is caught. The catalogues cannot be combined: MGnify dereplicates each one separately and they overlap, so loading two would count the same species twice.</div>
-    </div>
+
 
     <section class="card" id="cardDb">
       <h2><span class="step-num">1</span>Reference database</h2>
@@ -126,7 +121,9 @@
       </div>
       <div class="info hide" id="screenResult" aria-live="polite" aria-atomic="true"></div>
       <div class="info biome-note" id="dbBiomeNote"></div>
-      <div class="info" id="dbInfo" aria-live="polite" aria-atomic="true">Pick the biome your samples come from and click <em>Load database</em>. The first load downloads that database once; it is then kept on this computer — unless the browser evicts it to reclaim disk space — so later visits start instantly.</div>
+      <div class="info" style="margin-top:.4rem"><strong>Loading a reference database downloads it from <code>zenodo.org</code>.</strong> The human-gut (UHGG) database is 433 MB; the others run from 12 MB (zebrafish-fecal) to 2.8 GB (soil). It is fetched the first time you click <em>Load database</em>, then kept on this computer for later visits. Zenodo sees your IP address and which of these files you asked for. The bundled 6 MB smoke-test database, or a <code>.syldb</code> from your own disk, downloads nothing at all.</div>
+      <div class="info" style="margin-top:.4rem">The catalogues cannot be combined: MGnify dereplicates each one separately and they overlap, so loading two would count the same species twice. The loaded biome is named on the database line, above the matrix, and inside every TSV and CSV you download; that is where a mistake is caught.</div>
+      <div class="info" id="dbInfo" aria-live="polite" aria-atomic="true"></div>
       <div class="info" id="dbCacheInfo" style="margin-top:.4rem"></div>
     </section>
 
@@ -144,6 +141,7 @@
         <div class="ena-head">
           <strong>…or profile public data from the ENA</strong>
           <span class="info">Paste a run, sample, experiment or project accession — nothing is permanently saved to your disk, the reads are streamed straight into the profiler.</span>
+          <span class="info" style="display:block;margin-top:.35rem"><strong>This mode downloads public FASTQs from the EBI.</strong> This page asks the <a href="https://www.ebi.ac.uk/ena/browser/home">EBI's public ENA API</a> which files an accession covers, then streams those public FASTQs from the EBI's servers (any host under <code>ebi.ac.uk</code> — usually <code>ftp.sra.ebi.ac.uk</code>) straight into the profiler, without ever writing them to your disk. The EBI therefore sees your IP address and which accessions you looked up, exactly as it would if you downloaded them yourself.</span>
         </div>
         <div class="row" style="margin:.6rem 0 .2rem">
           <input type="text" id="enaAcc" class="ena-input" placeholder="ERR14098592 · SAMEA115468000 · PRJEB83730"
@@ -229,6 +227,6 @@
   </footer>
 
   <script src="./theme.js"></script>
-  <script type="module" src="./multi.js?v=25"></script>
+  <script type="module" src="./multi.js?v=26"></script>
 </body>
 </html>

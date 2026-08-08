@@ -12,16 +12,16 @@ import {
   sylphWorkerRpc, detectMemory64, chooseWasmBits, WORKER_VERSION,
   readsBudget, readsBudgetNote, readsOverBudgetNote, loadedBuildNote, fmtReads,
   progressFraction,
-} from "./sylph-worker-rpc.js?v=25";
+} from "./sylph-worker-rpc.js?v=26";
 import {
   dbCacheClient, fmtRate, fmtEta, cacheSummary, assertSameDatabase,
-} from "./db-cache.js?v=25";
-import { matePattern, stripFastqExt } from "./sample-naming.js?v=25";
+} from "./db-cache.js?v=26";
+import { matePattern, stripFastqExt } from "./sample-naming.js?v=26";
 import {
   resolveAccession, validateAccession, ASSUMED_BPS,
   downloadEstimate, readCountVerdict, expectedProfiledReads,
-} from "./ena.js?v=25";
-import { normaliseMarkers, screenVerdict, SCREENING_DB, SCREENING_MARKERS } from "./screening.js?v=25";
+} from "./ena.js?v=26";
+import { normaliseMarkers, screenVerdict, SCREENING_DB, SCREENING_MARKERS } from "./screening.js?v=26";
 import {
   fetchCatalog, fallbackCatalog, renderDbSelect, biomeForUrl, biomeNote,
   mgnifyGenomeUrl,
@@ -29,7 +29,7 @@ import {
   makeDbRef, sameDbRef, refLine, refShort, refCommentLines, refSlug, genomeCountMismatch,
   rememberBiome, recallBiome, catalogueName, LOCAL_VALUE,
   selectionMatchesLoaded, notLoadedNote, refMetaMismatch,
-} from "./biomes.js?v=25";
+} from "./biomes.js?v=26";
 
 const $ = (id) => document.getElementById(id);
 const els = {
@@ -175,6 +175,14 @@ function refreshDbMode() {
   const manual = document.getElementById("manualRow");
   const screenRow = document.getElementById("screenRow");
   if (manual) manual.classList.toggle("hide", auto);
+  // The static helper text under the picker described the picker — while the
+  // picker was hidden. It is only written when no database has been loaded yet;
+  // once one is, dbInfo carries the live status and must not be overwritten.
+  if (els.dbInfo && !dbMeta && !els.dbInfo.dataset.busy) {
+    els.dbInfo.textContent = auto
+      ? "Screening reads one sample, decides which catalogue fits it, and loads that one for the whole batch."
+      : "Pick the biome your samples come from and click Load database.";
+  }
   // Automatic has nothing to screen until a sample is in the list, and saying
   // so on the button beats a button that fails when pressed.
   const btn = document.getElementById("screenBtn");
