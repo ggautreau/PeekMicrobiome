@@ -12,16 +12,16 @@ import {
   sylphWorkerRpc, detectMemory64, chooseWasmBits, WORKER_VERSION,
   readsBudget, readsBudgetNote, readsOverBudgetNote, loadedBuildNote, fmtReads,
   progressFraction,
-} from "./sylph-worker-rpc.js?v=27";
+} from "./sylph-worker-rpc.js?v=28";
 import {
   dbCacheClient, fmtRate, fmtEta, cacheSummary, assertSameDatabase,
-} from "./db-cache.js?v=27";
-import { matePattern, stripFastqExt } from "./sample-naming.js?v=27";
+} from "./db-cache.js?v=28";
+import { matePattern, stripFastqExt } from "./sample-naming.js?v=28";
 import {
   resolveAccession, validateAccession, ASSUMED_BPS,
   downloadEstimate, readCountVerdict, expectedProfiledReads,
-} from "./ena.js?v=27";
-import { normaliseMarkers, screenVerdict, SCREENING_DB, SCREENING_MARKERS } from "./screening.js?v=27";
+} from "./ena.js?v=28";
+import { normaliseMarkers, screenVerdict, SCREENING_DB, SCREENING_MARKERS } from "./screening.js?v=28";
 import {
   fetchCatalog, fallbackCatalog, renderDbSelect, biomeForUrl, biomeNote,
   mgnifyGenomeUrl,
@@ -29,7 +29,7 @@ import {
   makeDbRef, sameDbRef, refLine, refShort, refCommentLines, refSlug, genomeCountMismatch,
   rememberBiome, recallBiome, catalogueName, LOCAL_VALUE,
   selectionMatchesLoaded, notLoadedNote, refMetaMismatch,
-} from "./biomes.js?v=27";
+} from "./biomes.js?v=28";
 
 const $ = (id) => document.getElementById(id);
 const els = {
@@ -52,6 +52,7 @@ const els = {
   enaSummary: $("enaSummary"), enaRuns: $("enaRuns"), enaAll: $("enaAll"),
   enaNone: $("enaNone"), enaAdd: $("enaAdd"), enaPending: $("enaPending"),
   runHint: $("runHint"), pairsAsTwo: $("pairsAsTwo"),
+  runControlsNote: $("runControlsNote"),
   cardDb: $("cardDb"), cardSamples: $("cardSamples"),
 };
 
@@ -1384,7 +1385,8 @@ function updateEnaSummary() {
   // total is what this download is going to cost AT THE CURRENT SETTING, not
   // what the files weigh.
   const est = downloadEstimate(chosen, { maxReads: currentReads(), bps: currentBps() });
-  els.enaAdd.disabled = chosen.length === 0;
+  setDisabled(els.enaAdd, chosen.length === 0
+    ? "Tick at least one run in the list above to add it." : "");
   if (!chosen.length) {
     els.enaSummary.textContent = "Nothing selected.";
     return;
@@ -1640,11 +1642,11 @@ function renderFilesList() {
   if (files.length === 0) {
     els.filesList.classList.add("hide");
     els.filesList.innerHTML = "";
-    els.clearFiles.disabled = true;
+    setDisabled(els.clearFiles, "Nothing to clear — no samples have been added yet.");
     return;
   }
   els.filesList.classList.remove("hide");
-  els.clearFiles.disabled = false;
+  setDisabled(els.clearFiles, "");
   els.filesList.innerHTML = files.map((s) => {
     const cls = s.status;
     // How many reads actually went into the profile. It was not shown at all,
@@ -1699,19 +1701,46 @@ const RERUNNABLE = ["pending", "failed", "cancelled", "incomplete", "empty"];
 // changes nothing for the samples in flight, so leaving it live would show a
 // number that is not the one being used — and could ask for a 32/64-bit build
 // switch while the current build is busy profiling.
+// A greyed-out control with a not-allowed cursor states a refusal and gives no
+// way out of it. Every disable now carries its reason.
+//
+// The reason goes on `title` AND, for the controls whose card has room, into a
+// visible line — because a tooltip is worth nothing on a touch screen, where
+// there is no hover, and nothing to a keyboard user either, since a disabled
+// button is not focusable. (Chrome does deliver mouseover to disabled buttons —
+// measured — so the tooltip is a real bonus on desktop, not a decoration.)
+function setDisabled(el, why) {
+  if (!el) return;
+  el.disabled = !!why;
+  if (why) el.title = why; else el.removeAttribute("title");
+}
+
 function setRunControls(running) {
-  els.loadDb.disabled = running;
-  els.poolSize.disabled = running;
-  if (els.maxReads) els.maxReads.disabled = running;
-  if (els.maxReadsSlider) els.maxReadsSlider.disabled = running;
-  if (els.enaResolve) els.enaResolve.disabled = running;
-  if (els.enaAdd) els.enaAdd.disabled = running || enaSelectedRuns().length === 0;
+  // One moment, one reason: everything here is frozen for the duration of a run,
+  // because changing the database or the read cap mid-run would leave the matrix
+  // describing numbers that came from something else.
+  const busy = running
+    ? "A profiling run is going. This is frozen until it finishes, or until you click Cancel."
+    : "";
+  setDisabled(els.loadDb, busy);
+  setDisabled(els.poolSize, busy);
+  setDisabled(els.maxReads, busy);
+  setDisabled(els.maxReadsSlider, busy);
+  setDisabled(els.enaResolve, busy);
+  setDisabled(els.enaAdd, busy || (enaSelectedRuns().length === 0
+    ? "Tick at least one run in the list above to add it."
+    : ""));
+  // Visible, not only on hover: there is no hover on a phone.
+  if (els.runControlsNote) {
+    els.runControlsNote.textContent = busy;
+    els.runControlsNote.classList.toggle("hide", !busy);
+  }
 }
 
 function refreshRunButton() {
   const haveSamples = files.length > 0;
   const runnable = haveSamples && files.some(f => RERUNNABLE.includes(f.status));
-  els.run.disabled = !(dbMeta && runnable);
+  els.run.disabled = !(dbMeta && runnable);   // `why` below carries the reason
 
   // A greyed-out button that does not say why is a dead end — and the usual
   // reason is that the database has not been loaded yet, which is a separate
@@ -1758,7 +1787,7 @@ async function runAll() {
   els.results.classList.add("hide");
   els.progress.classList.remove("hide");
   els.run.disabled = true;
-  els.cancel.disabled = false;
+  setDisabled(els.cancel, "");
   setRunControls(true);
   abortCtrl = new AbortController();
 
@@ -1779,7 +1808,7 @@ async function runAll() {
     showError(`Could not switch to the ${plannedBits(maxReads)}-bit wasm build: ${e.message ?? e}. ` +
       `Click "Load database" again.`);
     console.error(e);
-    els.cancel.disabled = true;
+    setDisabled(els.cancel, "Cancelling — waiting for the workers to stop.");
     setRunControls(false);
     refreshRunButton();
     return;
@@ -1983,7 +2012,7 @@ async function runAll() {
 
   await Promise.all(rpcs.map((rpc, i) => drain(rpc, i + 1)));
 
-  els.cancel.disabled = true;
+  setDisabled(els.cancel, "Nothing is running — this stops a profiling run once one has started.");
   setRunControls(false);
   refreshRunButton();
   if (okCount > 0) {

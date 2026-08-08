@@ -217,6 +217,26 @@ try {
     /Add a sample below first/.test(m1.hint), m1.hint.slice(0, 60));
   await cdp.eval(`document.getElementById("modeManual").click()`);
 
+  // ---- 0a. no disabled control refuses in silence ----------------------------
+  // A greyed-out button under a not-allowed cursor states a refusal and offers
+  // no way out of it. The property is not "these three buttons have a title" —
+  // it is that NONE of them is mute, so a control added later fails this too.
+  const mute = await cdp.eval(`(() => {
+    const out = [];
+    for (const el of document.querySelectorAll("button, select, input")) {
+      if (!el.disabled) continue;
+      if (!(el.offsetParent !== null || el.getClientRects().length > 0)) continue;
+      if (!(el.title || "").trim()) out.push(el.id || el.tagName.toLowerCase());
+    }
+    return out;
+  })()`);
+  check("no visible disabled control refuses without saying why", mute.length === 0,
+    mute.join(", ") || "none mute");
+  // ...and the reason must survive on a phone, where there is no hover at all
+  // and a disabled button cannot be focused either.
+  const hasFrozenNote = await cdp.eval(`!!document.getElementById("runControlsNote")`);
+  check("...and there is a visible place for the reason, not only a tooltip", hasFrozenNote);
+
   // ---- 0b. the read cap is readable ------------------------------------------
   // "3000000" is the number that decides how long a run takes, and it was shown
   // as seven bare digits. <input type="number"> cannot group them, so the field

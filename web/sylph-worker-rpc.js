@@ -90,7 +90,10 @@
 // v27: the read cap is grouped ("3 000 000"), which needs a text field — so the
 // value must be read back through a parser. A page on v26 pairs the new markup
 // with the old handlers and reads 3 for three million.
-export const WORKER_VERSION = "27";
+// v28: every disabled control now carries the reason it is refusing, on the
+// control itself and — for the ones frozen by a run — in a visible line, since
+// a tooltip reaches neither a touch screen nor a keyboard.
+export const WORKER_VERSION = "28";
 
 // ---- memory64 capability probe ----------------------------------------------
 

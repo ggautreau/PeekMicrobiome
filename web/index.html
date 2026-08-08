@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>PeekMicrobiome — upload-free, installation-free metagenomic profiling across biomes</title>
   <link rel="icon" type="image/svg+xml" href="./favicon.svg">
-  <link rel="stylesheet" href="./styles.css?v=27">
+  <link rel="stylesheet" href="./styles.css?v=28">
   <script>
     (function () {
       try {
@@ -123,6 +123,10 @@
       <div class="info biome-note" id="dbBiomeNote"></div>
       <div class="info" style="margin-top:.4rem"><strong>Loading a reference database downloads it from <code>zenodo.org</code>.</strong> The human-gut (UHGG) database is 433 MB; the others run from 12 MB (zebrafish-fecal) to 2.8 GB (soil). It is fetched the first time you click <em>Load database</em>, then kept on this computer for later visits. Zenodo sees your IP address and which of these files you asked for. The bundled 6 MB smoke-test database, or a <code>.syldb</code> from your own disk, downloads nothing at all.</div>
       <div class="info" style="margin-top:.4rem">The catalogues cannot be combined: MGnify dereplicates each one separately and they overlap, so loading two would count the same species twice. The loaded biome is named on the database line, above the matrix, and inside every TSV and CSV you download; that is where a mistake is caught.</div>
+      <!-- Why the controls in this card are frozen. Visible rather than only on
+           hover: a touch screen has no hover, and a disabled button cannot be
+           focused, so a tooltip reaches neither a phone nor a keyboard. -->
+      <div class="info frozen-note hide" id="runControlsNote" aria-live="polite"></div>
       <div class="info" id="dbInfo" aria-live="polite" aria-atomic="true"></div>
       <div class="info" id="dbCacheInfo" style="margin-top:.4rem"></div>
     </section>
@@ -181,8 +185,12 @@
 
       <div class="row">
         <button id="run" class="primary" disabled>Profile all</button>
-        <button id="cancel" disabled>Cancel</button>
-        <button id="clearFiles" disabled>Clear</button>
+        <!-- The titles are the state these two start in; multi.js replaces them
+             through setDisabled() as soon as either becomes usable. Without
+             them, the two buttons that are greyed out on an empty page are the
+             two that say nothing about why. -->
+        <button id="cancel" disabled title="Nothing is running — this stops a profiling run once one has started.">Cancel</button>
+        <button id="clearFiles" disabled title="Nothing to clear — no samples have been added yet.">Clear</button>
       </div>
       <!-- Why "Profile all" is greyed out. A disabled button with no reason is a
            dead end: the database has to be loaded first, and nothing said so. -->
@@ -227,6 +235,6 @@
   </footer>
 
   <script src="./theme.js"></script>
-  <script type="module" src="./multi.js?v=27"></script>
+  <script type="module" src="./multi.js?v=28"></script>
 </body>
 </html>

@@ -45,16 +45,16 @@
 // fails the named import and kills the worker module outright.
 import {
   readAndTrim, readAndTrimMulti, streamTrim, streamTrimMulti, streamTrimPair,
-} from "./fastq-trim.js?v=27";
+} from "./fastq-trim.js?v=28";
 import {
   WORKER_VERSION, detectMemory64, chooseWasmBits, WASM32_SAFE_READS,
-} from "./sylph-worker-rpc.js?v=27";
+} from "./sylph-worker-rpc.js?v=28";
 // The database is never downloaded here: one download happens in
 // db-cache-worker.js, then every worker in the pool reads the same OPFS file.
-import { readCachedBytes } from "./db-cache.js?v=27";
+import { readCachedBytes } from "./db-cache.js?v=28";
 // FASTQs, on the other hand, ARE fetched here in ENA mode — streamed, never
 // stored. urlSource is the resumable read source; see web/ena.js.
-import { urlSource, rateMeter, fastqUrl } from "./ena.js?v=27";
+import { urlSource, rateMeter, fastqUrl } from "./ena.js?v=28";
 
 let profiler = null;
 

@@ -943,6 +943,14 @@ table.matrix tbody tr:nth-child(even) { background: var(--bg-softer); }
 .mode-pick { gap: 0.35rem !important; cursor: pointer; }
 .mode-pick input { accent-color: var(--accent); }
 
+/* The reason a control is refusing. Set apart from the ordinary help text so it
+   reads as a state, not as advice. */
+.frozen-note {
+  border-left: 3px solid var(--border-strong);
+  padding-left: 0.55rem;
+  margin-top: 0.4rem;
+}
+
 /* ---------- Biome screening ----------
    A verdict, not a profile — styled as an aside inside the database card, not
    as a results table, so it cannot be mistaken for the thing it helps choose. */
