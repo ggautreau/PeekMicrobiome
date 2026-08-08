@@ -51,7 +51,23 @@
 // ena.js?v=15 would request the old field list, get no strategy back, and every
 // run — including the 16S ones — would look profilable, which is the exact
 // silence this release is about.
-export const WORKER_VERSION = "16";
+// v17: each sample line carries a progress ring whose full mark is the READ CAP
+// when the cap is what ends the sample, and styles.css gained the ring and the
+// ENA busy spinner. A page paired with the v16 stylesheet would render the ring
+// markup unstyled — two bare SVG circles on every running line.
+// v18: every catalogue got a genome -> species-name map (web/db/lineage/*.json)
+// and both result tables link each genome to its MGnify page. A page holding
+// biomes.js?v=17 would fetch the catalogue at CATALOG_VERSION 2, whose entries
+// name no map for eighteen of the nineteen biomes — the vaginal result would go
+// on reading "(MGYG000304057.fna.gz)" instead of "Lactobacillus iners".
+// v19: readCountVerdict accepts both readings of the ENA read_count on paired
+// runs. A page holding ena.js?v=18 goes on marking every run of the "spots"
+// convention INCOMPLETE — all 91 of PRJEB34536, on downloads that were perfect.
+// v20: the read cap names its own unit. "Max reads per sample: 3,000,000" with
+// the pair box unticked meant three million PAIRS — six million sequenced reads
+// — so the label contradicted the unit. The word now follows the box and the
+// conversion is spelled out. index.html and styles.css changed with multi.js.
+export const WORKER_VERSION = "20";
 
 // ---- memory64 capability probe ----------------------------------------------
 
@@ -149,6 +165,36 @@ export const WASM64_SAFE_READS = 96_000_000;
 // en-US grouping used here put "24 000 000" and "24,000,000" side by side in
 // the same sentence.
 export const fmtReads = (n) => (Number.isFinite(n) ? Math.floor(n).toLocaleString("en-US") : "?");
+
+/**
+ * How far through a sample the run is, as 0..1, or NaN when nothing is known.
+ *
+ * A sample ends at WHICHEVER COMES FIRST: the end of the input, or the read
+ * cap. So the honest fraction is the larger of the two ratios, not the byte
+ * ratio alone — with a 3 M cap on a 10 M-read file the run stops at 30% of the
+ * bytes, and a bar creeping to 30% and vanishing looks like a crash. Nor the
+ * read ratio alone: a 1 M-read file under the same cap finishes at 100% of its
+ * bytes having reached a third of the cap, and would appear stuck at 33%.
+ *
+ * `bytesIn` is COMPRESSED bytes read from the file, which is what streamCore
+ * counts, so it is comparable with the file sizes in `total`.
+ *
+ * Either input may be missing — an ENA run can arrive with no fastq_bytes, and
+ * the cap can be Infinity — and the other one still gives a usable answer.
+ * NaN when neither does: an indeterminate spinner is honest, a 0% that never
+ * moves is not.
+ */
+export function progressFraction({ bytesIn, total, reads, cap } = {}) {
+  const byteFrac = Number.isFinite(total) && total > 0 && Number.isFinite(bytesIn)
+    ? bytesIn / total : NaN;
+  const readFrac = Number.isFinite(cap) && cap > 0 && Number.isFinite(reads)
+    ? reads / cap : NaN;
+  const known = [byteFrac, readFrac].filter(Number.isFinite);
+  if (!known.length) return NaN;
+  // Clamped: a gzip whose declared size is short, or a read cap the sketcher
+  // overshoots by part of a block, must not render as a ring past full.
+  return Math.min(1, Math.max(0, Math.max(...known)));
+}
 
 // THE POLICY. wasm64 is 1.58x-1.68x slower end-to-end than wasm32 on the same
 // profile() (measured; the cost is in the inference phase, not the sketching,

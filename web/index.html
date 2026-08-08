@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>PeekMicrobiome — upload-free, installation-free metagenomic profiling across biomes</title>
   <link rel="icon" type="image/svg+xml" href="./favicon.svg">
-  <link rel="stylesheet" href="./styles.css?v=16">
+  <link rel="stylesheet" href="./styles.css?v=20">
   <script>
     (function () {
       try {
@@ -146,16 +146,17 @@
       <div class="info hide" id="enaPending"></div>
 
       <div class="row reads-row">
-        <label>Max reads per sample: <input type="number" id="maxReads" value="3000000" min="10000" step="10000"></label>
-        <label class="pair-unit" title="A paired run has two files. Ticked, the cap and the counts are in sequenced reads, the unit the ENA publishes; unticked, they are in pairs, the unit sylph works in.">
+        <label>Max <span id="capUnitWord">reads</span> per sample: <input type="number" id="maxReads" value="3000000" min="10000" step="10000"></label>
+        <label class="pair-unit" title="A paired run has two files holding the same fragments from both ends. Unticked, the cap and every count on this page are in PAIRS — the unit sylph works in. Ticked, they are in SEQUENCED READS — the unit the ENA publishes — so a pair counts twice.">
           <input type="checkbox" id="pairsAsTwo"> count a pair as 2 reads
         </label>
         <input type="range" id="maxReadsSlider" class="reads-slider" min="10000" max="60000000" step="10000" value="3000000" aria-label="Max reads per sample (slider)">
       </div>
       <div class="info" style="margin-top:-.35rem">Fewer reads finish sooner; more reads detect species at lower abundance.</div>
+      <div class="info cap-equiv hide" id="capEquiv"></div>
       <div class="reads-warn hide" id="readsWarn">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="flex:0 0 auto;margin-top:1px"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
-        <span>Above 6,000,000 reads the trimmed FASTQ no longer fits in a single browser buffer — profiling may fail. Consider lowering the value, or running sylph on a server.</span>
+        <span>Very high read counts can exhaust this browser's memory and abort the run. The exact limit depends on your browser and is worked out for you here.</span>
       </div>
 
       <div class="row">
@@ -206,6 +207,6 @@
   </footer>
 
   <script src="./theme.js"></script>
-  <script type="module" src="./multi.js?v=16"></script>
+  <script type="module" src="./multi.js?v=20"></script>
 </body>
 </html>

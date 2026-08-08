@@ -11,21 +11,23 @@
 import {
   sylphWorkerRpc, detectMemory64, chooseWasmBits, WORKER_VERSION,
   readsBudget, readsBudgetNote, readsOverBudgetNote, loadedBuildNote, fmtReads,
-} from "./sylph-worker-rpc.js?v=16";
+  progressFraction,
+} from "./sylph-worker-rpc.js?v=20";
 import {
   dbCacheClient, fmtRate, fmtEta, cacheSummary, assertSameDatabase,
-} from "./db-cache.js?v=16";
-import { matePattern, stripFastqExt } from "./sample-naming.js?v=16";
+} from "./db-cache.js?v=20";
+import { matePattern, stripFastqExt } from "./sample-naming.js?v=20";
 import {
   resolveAccession, validateAccession, ASSUMED_BPS,
   downloadEstimate, readCountVerdict, expectedProfiledReads,
-} from "./ena.js?v=16";
+} from "./ena.js?v=20";
 import {
   fetchCatalog, fallbackCatalog, renderDbSelect, biomeForUrl, biomeNote,
+  mgnifyGenomeUrl,
   makeDbRef, sameDbRef, refLine, refShort, refCommentLines, refSlug, genomeCountMismatch,
   rememberBiome, recallBiome, catalogueName, LOCAL_VALUE,
   selectionMatchesLoaded, notLoadedNote, refMetaMismatch,
-} from "./biomes.js?v=16";
+} from "./biomes.js?v=20";
 
 const $ = (id) => document.getElementById(id);
 const els = {
@@ -175,10 +177,11 @@ const READS_MIN = 10_000;
 const clampReads = (v) => Math.max(READS_MIN, Math.floor(Number(v) || 0));
 const currentReads = () => clampReads(els.maxReads.value);
 const readsWarn = document.getElementById("readsWarn");
-// index.html carries a static "Safe up to 6,000,000 reads" line (the old
-// single-ArrayBuffer wall) immediately before #readsWarn, and the warning text
-// inside it. Both are now decided here, so rewrite them rather than leave two
-// sources of truth to disagree. Guarded: if the markup moves, we simply skip.
+// index.html carries a static note immediately before #readsWarn, and the
+// warning text inside it. Both are decided here — the budget depends on whether
+// this browser has memory64 — so rewrite them rather than leave two sources of
+// truth to disagree. The markup keeps a number-free version for the case where
+// this never runs. Guarded: if the markup moves, we simply skip.
 const staticReadsNote =
   readsWarn?.previousElementSibling?.classList.contains("info")
     ? readsWarn.previousElementSibling : null;
@@ -207,10 +210,32 @@ function readsShown(sample) {
 
 // The choice only means something once a paired sample is in the list; before
 // that it is a control for a situation the user is not in.
+//
+// It also renames the cap. "Max reads per sample: 3,000,000" with the box
+// unticked meant three million PAIRS — six million sequenced reads — so the
+// label said the opposite of the unit it was in. The word now follows the box,
+// and the conversion is spelled out underneath rather than left as arithmetic
+// the reader has to do while deciding how long a run will take.
 function refreshPairUnit() {
   const el = els.pairsAsTwo?.closest(".pair-unit");
-  if (!el) return;
-  el.classList.toggle("hide", !files.some((s) => s.kind === "pe"));
+  const anyPaired = files.some((s) => s.kind === "pe");
+  if (el) el.classList.toggle("hide", !anyPaired);
+
+  const asTwo = pairsCountAsTwo();
+  const word = document.getElementById("capUnitWord");
+  // Without a paired sample there is nothing to convert and only one unit in
+  // play, so the plain wording is the honest one.
+  if (word) word.textContent = anyPaired && !asTwo ? "pairs" : "reads";
+
+  const equiv = document.getElementById("capEquiv");
+  if (!equiv) return;
+  const v = currentReads();
+  equiv.classList.toggle("hide", !anyPaired);
+  equiv.textContent = !anyPaired ? "" : asTwo
+    ? `= ${fmtReads(Math.round(v / 2))} pairs for a paired run — the unit sylph works in. `
+      + `Single-end samples are counted in reads either way.`
+    : `= ${fmtReads(v * 2)} sequenced reads for a paired run — the unit the ENA publishes. `
+      + `Single-end samples are counted in reads either way.`;
 }
 
 function updateReadsState(v) {
@@ -223,6 +248,7 @@ function updateReadsState(v) {
   // stale one sitting in the DOM waiting to be unhidden is not.
   if (readsWarnText) readsWarnText.textContent = over ? readsOverBudgetNote(v, has64) : "";
   if (readsWarn) readsWarn.classList.toggle("hide", !over);
+  refreshPairUnit();
 }
 
 // The read cap bounds how much of each ENA run is actually downloaded, so both
@@ -860,6 +886,7 @@ els.file.addEventListener("change", () => {
 // Changing the unit re-reads every ENA expectation: they were stored in the old
 // one, and a stale expectation is exactly how a good sample gets flagged short.
 els.pairsAsTwo?.addEventListener("change", () => {
+  refreshPairUnit();
   for (const s of files) {
     if (s.origin === "ena" && Number.isFinite(s.enaReadCount)) {
       s.enaReads = expectedProfiledReads({
@@ -1015,7 +1042,25 @@ async function enaLookup() {
   els.enaAcc.value = v.acc;
   if (els.enaResolve) els.enaResolve.disabled = true;
   els.enaCancelLookup?.classList.remove("hide");
-  if (els.enaStatus) els.enaStatus.textContent = `Asking the EBI which runs ${v.acc} covers…`;
+  // A line of text that does not move is indistinguishable from a hang. The
+  // portal usually answers in well under a second, but "usually" is exactly the
+  // case that needs no feedback — it is the slow one the user is staring at.
+  // The elapsed seconds are what a spinner alone cannot give: proof that time is
+  // passing HERE rather than that an animation is looping over a dead request.
+  const askedAt = performance.now();
+  const sayWaiting = () => {
+    if (!els.enaStatus) return;
+    const sec = (performance.now() - askedAt) / 1000;
+    els.enaStatus.textContent =
+      `Asking the EBI which runs ${v.acc} covers…` + (sec >= 1.5 ? ` (${sec.toFixed(0)} s)` : "");
+  };
+  els.enaStatus?.classList.add("busy");
+  sayWaiting();
+  const waitTick = setInterval(sayWaiting, 500);
+  const stopWaiting = () => {
+    clearInterval(waitTick);
+    els.enaStatus?.classList.remove("busy");
+  };
   enaAbort = new AbortController();
   try {
     const runs = await resolveAccession(v.acc, { signal: enaAbort.signal });
@@ -1047,6 +1092,7 @@ async function enaLookup() {
     if (e?.name !== "AbortError") enaShowError(e?.message ?? String(e));
     else if (els.enaStatus) els.enaStatus.textContent = "Lookup cancelled.";
   } finally {
+    stopWaiting();
     if (els.enaResolve) els.enaResolve.disabled = false;
     els.enaCancelLookup?.classList.add("hide");
     enaAbort = null;
@@ -1311,6 +1357,45 @@ function fileSummary(s) {
   return `${s.seRuns.length} single-end run${s.seRuns.length === 1 ? "" : "s"} (${fmtBytes(totalBytes)})`;
 }
 
+// The per-sample progress ring, on the right of its line.
+//
+// Only while the sample is running: a finished line already says how many reads
+// went in and how many species came out, and a ring stuck at full next to it
+// says nothing the text does not.
+//
+// Full means "this sample is done", which under a read cap is NOT the end of
+// the file — see progressFraction(). A run capped at 3 M reads on a 10 M-read
+// file completes at 30% of the bytes, and a ring that measured only bytes
+// would vanish at a third, looking like a crash.
+//
+// SVG rather than a CSS conic-gradient: stroke-dasharray on a circle is one
+// attribute to animate, it degrades to a plain circle where SVG is styled out,
+// and it does not need a repaint of a gradient on every progress event — with
+// two workers and 100 ms events, that is 20 repaints a second.
+const RING_R = 8;
+const RING_C = 2 * Math.PI * RING_R;
+function progressRing(s) {
+  if (s.status !== "running") return "";
+  const frac = s.frac;
+  // NaN is "running, nothing measured yet" — an ENA run with no fastq_bytes and
+  // no cap, or the moment before the first progress event. It gets a spinning
+  // arc rather than a 0% ring: an empty ring that never fills reads as broken,
+  // while a spinner is honest about not knowing.
+  const known = Number.isFinite(frac);
+  const pct = known ? Math.round(frac * 100) : null;
+  const dash = known ? `${(frac * RING_C).toFixed(2)} ${RING_C.toFixed(2)}` : `${(RING_C * 0.25).toFixed(2)} ${RING_C.toFixed(2)}`;
+  const title = known
+    ? `${pct}% of this sample — whichever comes first, the end of the input or the read cap`
+    : "running — no size or read cap to measure against yet";
+  return `<span class="ring${known ? "" : " ring-spin"}" role="img"
+      aria-label="${escapeHTML(title)}" title="${escapeHTML(title)}">
+      <svg viewBox="0 0 20 20" width="20" height="20" aria-hidden="true">
+        <circle class="ring-track" cx="10" cy="10" r="${RING_R}"></circle>
+        <circle class="ring-fill" cx="10" cy="10" r="${RING_R}"
+          stroke-dasharray="${dash}" stroke-dashoffset="0"></circle>
+      </svg>${known ? `<b>${pct}%</b>` : ""}</span>`;
+}
+
 function renderFilesList() {
   renderEnaPending();
   if (files.length === 0) {
@@ -1355,6 +1440,7 @@ function renderFilesList() {
       <li class="${cls}">
         <span><strong>${escapeHTML(s.sampleName)}</strong>${kindTag}${originTag} &mdash; ${fileSummary(s)}${note}</span>
         <span>${escapeHTML(label)}</span>
+        ${progressRing(s)}
       </li>`;
   }).join("");
 }
@@ -1492,10 +1578,19 @@ async function runAll() {
       const s = queue.shift();
       if (!s) break;
       s.status = "running";
+      s.frac = NaN;   // running, nothing measured yet: indeterminate, not 0%
       const verb = s.origin === "ena" ? "downloading + decompressing" : "decompressing";
       s.progress = s.kind === "pe" ? `${verb} both mates…` : `${verb}…`;
       renderFilesList();
-      setStep(`[w${slotIdx}] ${s.sampleName} — ${verb} + trimming`);
+      // "trimming" was the word here, and it was wrong in a way that mattered:
+      // nothing is trimmed. No quality filter, no adapter clipping, not a base
+      // removed — the stream stops after the Nth record and everything past it
+      // is never read. Nor is it downsampling, which implies a random draw;
+      // these are the FIRST N, in file order. The unit is named for the same
+      // reason it is named everywhere else: "3,000,000" alone is ambiguous
+      // between reads and pairs.
+      const capUnit = s.kind === "pe" && !pairsCountAsTwo() ? "pairs" : "reads";
+      setStep(`[w${slotIdx}] ${s.sampleName} — ${verb}, first ${fmtReads(maxReads)} ${capUnit}`);
 
       const t0 = performance.now();
       let wasmTick = null;
@@ -1506,6 +1601,7 @@ async function runAll() {
       try {
         let tsv, reads;
         function startWasmHeartbeat(label, reads) {
+          s.frac = 1;
           const wasmT0 = performance.now();
           wasmTick = setInterval(() => {
             const sec = ((performance.now() - wasmT0) / 1000).toFixed(1);
@@ -1549,6 +1645,9 @@ async function runAll() {
             if (p.mate === 1) p1 = { bytesIn: p.bytesIn, reads: p.reads, fi: p.fi, bps: p.bps };
             else p2 = { bytesIn: p.bytesIn, reads: p.reads, fi: p.fi, bps: p.bps };
             const reads = Math.min(p1.reads, p2.reads);
+            s.frac = progressFraction({
+              bytesIn: p1.bytesIn + p2.bytesIn, total: total1 + total2, reads, cap,
+            });
             // Both mates stream at once, so the rate the user cares about is
             // the sum of the two.
             const bothBps = (Number.isFinite(p1.bps) ? p1.bps : 0) + (Number.isFinite(p2.bps) ? p2.bps : 0);
@@ -1572,6 +1671,9 @@ async function runAll() {
           const onProgress = (p) => {
             if (p.phase === "profile_start") { startWasmHeartbeat("reads", p.reads); return; }
             if (netRetry(p)) return;
+            s.frac = progressFraction({
+              bytesIn: p.bytesIn, total: totalSeBytes, reads: p.reads, cap,
+            });
             s.progress =
               `${p.reads.toLocaleString()} reads, file ${p.fi + 1}/${seFiles.length} ` +
               `(${fmtBytes(p.bytesIn)} / ${fmtBytes(totalSeBytes)} total)` +
@@ -1591,13 +1693,16 @@ async function runAll() {
         // a Content-Length that matches the truncation, passes every byte check
         // there is and fails only here.
         const verdict = s.origin === "ena"
-          ? readCountVerdict({ observed: readsShown(s), expected: s.enaReads, maxReads })
+          ? readCountVerdict({ observed: readsShown(s), expected: s.enaReads, maxReads,
+              // Paired runs have two possible readings of the ENA's read_count.
+              layout: s.kind === "pe" ? "PAIRED" : "SINGLE" })
           : { ok: true, note: "" };
         s.status = verdict.ok ? "done" : "incomplete";
         s.error = verdict.ok ? undefined : verdict.note;
         s.detected = rows.length;
         s.elapsed = (performance.now() - t0) / 1000;
         s.progress = undefined;
+        s.frac = undefined;
         s.rows = rows;
         sampleOrder.push(s.sampleName);
         mergeRowsIntoMatrix(matrix, s.sampleName, rows);
@@ -1614,6 +1719,7 @@ async function runAll() {
         // witness is the signal the user tripped.
         const cancelled = abortCtrl.signal.aborted || e?.name === "AbortError";
         s.status = cancelled ? "cancelled" : "failed";
+        s.frac = undefined;
         s.error = cancelled ? "" : (e?.message ?? String(e)).slice(0, 200);
         if (cancelled) cancelCount++; else { failCount++; console.error(e); }
       } finally {
@@ -1672,7 +1778,7 @@ function parseTsv(tsv) {
     const genome = (f[cGenome] || "").split("/").pop();
     return {
       genome,
-      species: lineage[genome] || `(${genome})`,
+      species: lineage[genome] ?? lineage[genome.replace(/\.gz$/i, "")] ?? `(${genome})`,
       relAbund: Number(f[cAbund]) || 0,
       ani: Number(f[cAni]) || 0,
       cov: Number(f[cCov]) || 0,
@@ -1723,7 +1829,14 @@ function renderMatrix({ samples, rows, ref }, progress = null) {
   els.matrixBody.innerHTML = rows.map(r => `
     <tr>
       <td class="species" title="${escapeHTML(r.species)}">${escapeHTML(r.species)}</td>
-      <td><code>${escapeHTML(r.genome)}</code></td>
+      <td>${(() => {
+        const u = mgnifyGenomeUrl(r.genome);
+        const code = `<code>${escapeHTML(r.genome)}</code>`;
+        return u
+          ? `<a href="${escapeHTML(u)}" target="_blank" rel="noopener noreferrer"
+               title="Open ${escapeHTML(r.genome)} on MGnify">${code}</a>`
+          : code;
+      })()}</td>
       ${r.values.map(v => {
         const display = v > 0 ? v.toFixed(2) : "";
         const bg = v > 0 ? heatColor(v) : "transparent";

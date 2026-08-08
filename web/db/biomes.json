@@ -21,7 +21,7 @@
           "url": "https://zenodo.org/api/records/21842023/files/human-gut.syldb/content",
           "source": "https://ftp.ebi.ac.uk/pub/databases/metagenomics/mgnify_genomes/human-gut/v2.0.2",
           "doi": "10.5281/zenodo.21842023",
-          "lineage": "db/lineage.json"
+          "lineage": "db/lineage/human-gut.json"
         },
         {
           "key": "human-oral",
@@ -34,7 +34,8 @@
           "file": "human-oral.syldb",
           "url": "https://zenodo.org/api/records/21842023/files/human-oral.syldb/content",
           "source": "https://ftp.ebi.ac.uk/pub/databases/metagenomics/mgnify_genomes/human-oral/v1.0.1",
-          "doi": "10.5281/zenodo.21842023"
+          "doi": "10.5281/zenodo.21842023",
+          "lineage": "db/lineage/human-oral.json"
         },
         {
           "key": "human-skin",
@@ -47,7 +48,8 @@
           "file": "human-skin.syldb",
           "url": "https://zenodo.org/api/records/21842023/files/human-skin.syldb/content",
           "source": "https://ftp.ebi.ac.uk/pub/databases/metagenomics/mgnify_genomes/human-skin/v1.0",
-          "doi": "10.5281/zenodo.21842023"
+          "doi": "10.5281/zenodo.21842023",
+          "lineage": "db/lineage/human-skin.json"
         },
         {
           "key": "human-vaginal",
@@ -60,7 +62,8 @@
           "file": "human-vaginal.syldb",
           "url": "https://zenodo.org/api/records/21842023/files/human-vaginal.syldb/content",
           "source": "https://ftp.ebi.ac.uk/pub/databases/metagenomics/mgnify_genomes/human-vaginal/v1.0",
-          "doi": "10.5281/zenodo.21842023"
+          "doi": "10.5281/zenodo.21842023",
+          "lineage": "db/lineage/human-vaginal.json"
         }
       ]
     },
@@ -79,7 +82,8 @@
           "file": "chicken-gut.syldb",
           "url": "https://zenodo.org/api/records/21842023/files/chicken-gut.syldb/content",
           "source": "https://ftp.ebi.ac.uk/pub/databases/metagenomics/mgnify_genomes/chicken-gut/v1.0.1",
-          "doi": "10.5281/zenodo.21842023"
+          "doi": "10.5281/zenodo.21842023",
+          "lineage": "db/lineage/chicken-gut.json"
         },
         {
           "key": "cow-rumen",
@@ -92,7 +96,8 @@
           "file": "cow-rumen.syldb",
           "url": "https://zenodo.org/api/records/21842023/files/cow-rumen.syldb/content",
           "source": "https://ftp.ebi.ac.uk/pub/databases/metagenomics/mgnify_genomes/cow-rumen/v1.0.1",
-          "doi": "10.5281/zenodo.21842023"
+          "doi": "10.5281/zenodo.21842023",
+          "lineage": "db/lineage/cow-rumen.json"
         },
         {
           "key": "honeybee-gut",
@@ -105,7 +110,8 @@
           "file": "honeybee-gut.syldb",
           "url": "https://zenodo.org/api/records/21842023/files/honeybee-gut.syldb/content",
           "source": "https://ftp.ebi.ac.uk/pub/databases/metagenomics/mgnify_genomes/honeybee-gut/v1.0.1",
-          "doi": "10.5281/zenodo.21842023"
+          "doi": "10.5281/zenodo.21842023",
+          "lineage": "db/lineage/honeybee-gut.json"
         },
         {
           "key": "mouse-gut",
@@ -118,7 +124,8 @@
           "file": "mouse-gut.syldb",
           "url": "https://zenodo.org/api/records/21842023/files/mouse-gut.syldb/content",
           "source": "https://ftp.ebi.ac.uk/pub/databases/metagenomics/mgnify_genomes/mouse-gut/v1.0",
-          "doi": "10.5281/zenodo.21842023"
+          "doi": "10.5281/zenodo.21842023",
+          "lineage": "db/lineage/mouse-gut.json"
         },
         {
           "key": "non-model-fish-gut",
@@ -131,7 +138,8 @@
           "file": "non-model-fish-gut.syldb",
           "url": "https://zenodo.org/api/records/21842023/files/non-model-fish-gut.syldb/content",
           "source": "https://ftp.ebi.ac.uk/pub/databases/metagenomics/mgnify_genomes/non-model-fish-gut/v2.0",
-          "doi": "10.5281/zenodo.21842023"
+          "doi": "10.5281/zenodo.21842023",
+          "lineage": "db/lineage/non-model-fish-gut.json"
         },
         {
           "key": "pig-gut",
@@ -144,7 +152,8 @@
           "file": "pig-gut.syldb",
           "url": "https://zenodo.org/api/records/21842023/files/pig-gut.syldb/content",
           "source": "https://ftp.ebi.ac.uk/pub/databases/metagenomics/mgnify_genomes/pig-gut/v1.0",
-          "doi": "10.5281/zenodo.21842023"
+          "doi": "10.5281/zenodo.21842023",
+          "lineage": "db/lineage/pig-gut.json"
         },
         {
           "key": "sheep-rumen",
@@ -157,7 +166,8 @@
           "file": "sheep-rumen.syldb",
           "url": "https://zenodo.org/api/records/21842023/files/sheep-rumen.syldb/content",
           "source": "https://ftp.ebi.ac.uk/pub/databases/metagenomics/mgnify_genomes/sheep-rumen/v1.0",
-          "doi": "10.5281/zenodo.21842023"
+          "doi": "10.5281/zenodo.21842023",
+          "lineage": "db/lineage/sheep-rumen.json"
         },
         {
           "key": "zebrafish-fecal",
@@ -170,7 +180,8 @@
           "file": "zebrafish-fecal.syldb",
           "url": "https://zenodo.org/api/records/21842023/files/zebrafish-fecal.syldb/content",
           "source": "https://ftp.ebi.ac.uk/pub/databases/metagenomics/mgnify_genomes/zebrafish-fecal/v1.0",
-          "doi": "10.5281/zenodo.21842023"
+          "doi": "10.5281/zenodo.21842023",
+          "lineage": "db/lineage/zebrafish-fecal.json"
         }
       ]
     },
@@ -189,7 +200,8 @@
           "file": "barley-rhizosphere.syldb",
           "url": "https://zenodo.org/api/records/21842023/files/barley-rhizosphere.syldb/content",
           "source": "https://ftp.ebi.ac.uk/pub/databases/metagenomics/mgnify_genomes/barley-rhizosphere/v2.0",
-          "doi": "10.5281/zenodo.21842023"
+          "doi": "10.5281/zenodo.21842023",
+          "lineage": "db/lineage/barley-rhizosphere.json"
         },
         {
           "key": "maize-rhizosphere",
@@ -202,7 +214,8 @@
           "file": "maize-rhizosphere.syldb",
           "url": "https://zenodo.org/api/records/21842023/files/maize-rhizosphere.syldb/content",
           "source": "https://ftp.ebi.ac.uk/pub/databases/metagenomics/mgnify_genomes/maize-rhizosphere/v1.0",
-          "doi": "10.5281/zenodo.21842023"
+          "doi": "10.5281/zenodo.21842023",
+          "lineage": "db/lineage/maize-rhizosphere.json"
         },
         {
           "key": "tomato-rhizosphere",
@@ -215,7 +228,8 @@
           "file": "tomato-rhizosphere.syldb",
           "url": "https://zenodo.org/api/records/21842023/files/tomato-rhizosphere.syldb/content",
           "source": "https://ftp.ebi.ac.uk/pub/databases/metagenomics/mgnify_genomes/tomato-rhizosphere/v1.0",
-          "doi": "10.5281/zenodo.21842023"
+          "doi": "10.5281/zenodo.21842023",
+          "lineage": "db/lineage/tomato-rhizosphere.json"
         },
         {
           "key": "soil",
@@ -228,7 +242,8 @@
           "file": "soil.syldb",
           "url": "https://zenodo.org/api/records/21842023/files/soil.syldb/content",
           "source": "https://ftp.ebi.ac.uk/pub/databases/metagenomics/mgnify_genomes/soil/v1.0",
-          "doi": "10.5281/zenodo.21842023"
+          "doi": "10.5281/zenodo.21842023",
+          "lineage": "db/lineage/soil.json"
         }
       ]
     },
@@ -247,7 +262,8 @@
           "file": "marine.syldb",
           "url": "https://zenodo.org/api/records/21842023/files/marine.syldb/content",
           "source": "https://ftp.ebi.ac.uk/pub/databases/metagenomics/mgnify_genomes/marine/v2.0",
-          "doi": "10.5281/zenodo.21842023"
+          "doi": "10.5281/zenodo.21842023",
+          "lineage": "db/lineage/marine.json"
         },
         {
           "key": "marine-sediment",
@@ -260,7 +276,8 @@
           "file": "marine-sediment.syldb",
           "url": "https://zenodo.org/api/records/21842023/files/marine-sediment.syldb/content",
           "source": "https://ftp.ebi.ac.uk/pub/databases/metagenomics/mgnify_genomes/marine-sediment/v1.0",
-          "doi": "10.5281/zenodo.21842023"
+          "doi": "10.5281/zenodo.21842023",
+          "lineage": "db/lineage/marine-sediment.json"
         },
         {
           "key": "marine-eukaryotes",
@@ -273,7 +290,8 @@
           "file": "marine-eukaryotes.syldb",
           "url": "https://zenodo.org/api/records/21842023/files/marine-eukaryotes.syldb/content",
           "source": "https://ftp.ebi.ac.uk/pub/databases/metagenomics/mgnify_genomes/marine-eukaryotes/vbeta",
-          "doi": "10.5281/zenodo.21842023"
+          "doi": "10.5281/zenodo.21842023",
+          "lineage": "db/lineage/marine-eukaryotes.json"
         }
       ]
     },
@@ -292,7 +310,7 @@
           "file": "gut_mini.syldb",
           "url": "db/gut_mini.syldb",
           "bundled": true,
-          "lineage": "db/lineage.json",
+          "lineage": "db/lineage/human-gut.json",
           "source": "https://ftp.ebi.ac.uk/pub/databases/metagenomics/mgnify_genomes/human-gut/v2.0.2"
         }
       ]

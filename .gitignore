@@ -3,6 +3,14 @@ data/
 # fixture for scripts/ena-test/tsv-parity.mjs, fetched on demand from the EBI
 scripts/ena-test/fx/
 *.syldb
+# ...except the two that ARE the site: the 6 MB smoke test and the 13 MB
+# screening database. Both are downloaded by the page itself, so they have to be
+# in the repo — the nineteen reference databases are on Zenodo precisely because
+# they are not. gut_mini.syldb was only tracked because it predated this rule;
+# an untracked screening database would have deployed a site whose "which biome
+# is this?" button 404s.
+!web/db/gut_mini.syldb
+!web/db/screening.syldb
 *.fastq
 *.fastq.gz
 *.fq
@@ -29,3 +37,7 @@ node_modules/
 
 # cloned upstream (kept out of our repo)
 sylph-survey/sylph/
+
+# python
+__pycache__/
+*.pyc

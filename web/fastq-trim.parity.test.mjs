@@ -23,6 +23,7 @@ import {
 } from "./fastq-trim.js";
 import {
   detectMemory64, chooseWasmBits, readsBudget, readsOverBudgetNote, loadedBuildNote,
+  progressFraction,
   WASM32_SAFE_READS, WASM32_CEILING_READS, WASM64_SAFE_READS, WASM64_CEILING_READS,
 } from "./sylph-worker-rpc.js";
 
@@ -804,6 +805,39 @@ console.log("== memory64 probe ==");
 }
 
 // ---- the 32/64 choice -------------------------------------------------------
+console.log("== per-sample progress fraction ==");
+{
+  const pf = progressFraction;
+  // THE case this function exists for. Under a read cap the sample ends long
+  // before the file does, so a ring driven by bytes alone would stop at 30% and
+  // disappear — indistinguishable from a crash.
+  check("a capped run is full when the cap is reached, not when the file ends",
+    pf({ bytesIn: 30, total: 100, reads: 3e6, cap: 3e6 }) === 1);
+  check("...and reads half the cap at half the ring", 
+    pf({ bytesIn: 15, total: 100, reads: 1.5e6, cap: 3e6 }) === 0.5);
+  // The mirror case: a file smaller than the cap never reaches it, and a ring
+  // driven by reads alone would freeze at a third.
+  check("a file shorter than the cap is full when the file ends",
+    pf({ bytesIn: 100, total: 100, reads: 1e6, cap: 3e6 }) === 1);
+  check("either input alone is enough — no declared size",
+    pf({ bytesIn: NaN, total: NaN, reads: 1.5e6, cap: 3e6 }) === 0.5);
+  check("either input alone is enough — no cap",
+    pf({ bytesIn: 50, total: 100, reads: 9e9, cap: Infinity }) === 0.5);
+  // NaN, not 0: a ring that sits at empty for ever reads as broken, while an
+  // indeterminate spinner is honest about not knowing.
+  check("neither input gives NaN, so the UI can show indeterminate rather than 0%",
+    Number.isNaN(pf({ bytesIn: NaN, total: NaN, reads: 5, cap: Infinity })));
+  check("nothing read yet is 0, which is different from unknown",
+    pf({ bytesIn: 0, total: 100, reads: 0, cap: 3e6 }) === 0);
+  // Both overshoots are real: the sketcher stops on a record boundary past the
+  // cap, and a gzip can be served with a short declared size.
+  check("overshooting the cap clamps to full, never past it",
+    pf({ bytesIn: 31, total: 100, reads: 3.05e6, cap: 3e6 }) === 1);
+  check("a short declared size clamps to full too",
+    pf({ bytesIn: 120, total: 100, reads: 10, cap: 3e6 }) === 1);
+  check("no argument at all is NaN rather than a throw", Number.isNaN(pf()));
+}
+
 console.log("== wasm package choice ==");
 {
   const bits = (maxReads, memory64) => chooseWasmBits({ maxReads, memory64 }).bits;
@@ -1033,10 +1067,19 @@ const catalogEntries = biomes.allBiomes(catalog);
     biomes.optionLabel(biomes.biomeByKey(catalog, "human-gut")));
 
   // The lineage map names genomes, and there is one per catalogue. Declaring it
-  // per entry is what stops the gut map being fetched for a soil database.
-  check("only the catalogues that have a lineage map declare one",
-    catalogEntries.filter((b) => b.lineage).every((b) => b.catalogue === "human-gut"),
-    catalogEntries.filter((b) => b.lineage).map((b) => b.key).join(","));
+  // per entry is what stops the gut map being fetched for a soil database — the
+  // names would all resolve to nothing and the table would be a column of
+  // accessions again, or worse, resolve to gut species for soil genomes.
+  //
+  // Until the maps were generated, only human-gut had one and this checked that
+  // no other entry declared it. All nineteen have their own now, so the property
+  // worth pinning is the stronger one: each entry points at ITS OWN map.
+  check("every entry declares the lineage map of its own biome",
+    catalogEntries.every((b) => b.lineage === `db/lineage/${b.key}.json`
+      // gut-mini is a 50-genome cut of human-gut; its genomes are in that map,
+      // so it shares it rather than carrying a near-duplicate copy.
+      || (b.key === "gut-mini" && b.lineage === "db/lineage/human-gut.json")),
+    catalogEntries.find((b) => b.lineage !== `db/lineage/${b.key}.json` && b.key !== "gut-mini")?.key ?? "");
 
   // The figures come from data/biome-dbs/manifest.tsv, where the genome count is
   // what `sylph inspect` reported for the database that was actually built. That
@@ -1059,6 +1102,61 @@ const catalogEntries = biomes.allBiomes(catalog);
   } else {
     console.log("    (data/biome-dbs/manifest.tsv absent — cross-check skipped)");
   }
+}
+
+console.log("== species names and MGnify links ==");
+{
+  // The bug this closes: profiling against any catalogue but human-gut returned
+  // a column of accessions — "(MGYG000304057.fna.gz)" — because only human-gut
+  // had a name map. MGYG000304057 is Lactobacillus iners.
+  const lookup = (lin, g) => lin[g] ?? lin[g.replace(/\.gz$/i, "")] ?? `(${g})`;
+  let mapped = 0, entries = 0;
+  for (const b of biomes.allBiomes(catalog)) {
+    if (!b.lineage) { check(`${b.key} declares a name map`, false, "no lineage"); continue; }
+    const f = here + b.lineage;
+    let lin;
+    try { lin = JSON.parse(readFileSync(f, "utf8")); }
+    catch (e) { check(`${b.key}: ${b.lineage} is readable`, false, String(e.message).slice(0, 70)); continue; }
+    entries += Object.keys(lin).length;
+    // A map that does not cover its database shows names for some rows and
+    // accessions for others, which reads as missing data rather than as a
+    // broken build. gut-mini is a 50-genome cut sharing the human-gut map, so
+    // its map is legitimately larger than the database.
+    if (!b.bundled && Number.isFinite(b.species)) {
+      check(`${b.key}: the map covers all ${b.species} genomes in the database`,
+        Object.keys(lin).length === b.species, `${Object.keys(lin).length} entries`);
+    }
+    mapped++;
+  }
+  check("every biome has a name map", mapped === biomes.allBiomes(catalog).length,
+    `${mapped}/${biomes.allBiomes(catalog).length}`);
+  check("the maps together cover the whole deposit", entries > 50_000, `${entries} entries`);
+
+  // The keys are stored un-gzipped; the eighteen new databases report .fna.gz.
+  // Without the fallback every row of every catalogue but human-gut misses.
+  const vag = JSON.parse(readFileSync(here + "db/lineage/human-vaginal.json", "utf8"));
+  check("a .fna.gz genome finds its name through the un-gzipped key",
+    lookup(vag, "MGYG000304057.fna.gz") === "Lactobacillus iners",
+    lookup(vag, "MGYG000304057.fna.gz"));
+  check("...and the .fna form still works, for the older human-gut database",
+    lookup(vag, "MGYG000304057.fna") === "Lactobacillus iners");
+  check("an unmapped genome still shows its accession rather than nothing",
+    lookup(vag, "NOT_IN_MAP.fna.gz") === "(NOT_IN_MAP.fna.gz)");
+  // No entry may be blank: a row with an empty Species column looks like a
+  // rendering bug. Unclassified genomes say "unclassified".
+  check("no entry is blank — unclassified is spelled out",
+    Object.values(vag).every((v) => typeof v === "string" && v.length > 0));
+
+  const url = biomes.mgnifyGenomeUrl;
+  check("a genome links to its MGnify page",
+    url("MGYG000304057.fna.gz") === "https://www.ebi.ac.uk/metagenomics/genomes/MGYG000304057",
+    url("MGYG000304057.fna.gz"));
+  check("...from the .fna form too", url("MGYG000000001.fna").endsWith("/MGYG000000001"));
+  // A database the user built themselves must not link into a catalogue its
+  // genomes are not in.
+  check("a genome that is not an MGnify accession gets no link",
+    url("my_own_genome.fna") === "" && url("GCF_000001.fna") === "" && url("") === ""
+    && url(null) === "" && url(undefined) === "");
 }
 
 console.log("== the picker is built from the catalogue ==");

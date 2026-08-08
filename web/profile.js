@@ -9,14 +9,15 @@
 import {
   sylphWorkerRpc, detectMemory64, chooseWasmBits, WORKER_VERSION,
   readsBudget, readsBudgetNote, readsOverBudgetNote, loadedBuildNote, fmtReads,
-} from "./sylph-worker-rpc.js?v=16";
-import { dbCacheClient, fmtRate, fmtEta, cacheSummary } from "./db-cache.js?v=16";
+} from "./sylph-worker-rpc.js?v=20";
+import { dbCacheClient, fmtRate, fmtEta, cacheSummary } from "./db-cache.js?v=20";
 import {
   fetchCatalog, fallbackCatalog, renderDbSelect, biomeForUrl, biomeNote,
+  mgnifyGenomeUrl,
   makeDbRef, refLine, refShort, genomeCountMismatch, rememberBiome, recallBiome,
   catalogueName, LOCAL_VALUE,
   selectionMatchesLoaded, notLoadedNote, refMetaMismatch,
-} from "./biomes.js?v=16";
+} from "./biomes.js?v=20";
 
 const $ = (id) => document.getElementById(id);
 const els = {
@@ -609,7 +610,7 @@ async function run() {
 
   const maxReads = clampReads(els.maxReads.value || 1_000_000);
   const t0 = performance.now();
-  setStep("decompressing + trimming to first N reads…");
+  setStep("decompressing, keeping the first N reads…");
 
   let lastReadsSeen = 0;
   let wasmTick = null;
@@ -625,7 +626,7 @@ async function run() {
       selectedFile, maxReads,
       (p) => {
         if (p.phase === "profile_start") {
-          // Worker just handed the trimmed bytes to sylph. The wasm call is
+          // Worker just handed the capped bytes to sylph. The wasm call is
           // synchronous in the worker — drive a heartbeat from the main
           // thread so the user sees the elapsed counter moving.
           paintProgress(100, selectedFile.size, selectedFile.size, p.reads, maxReads, t0);
@@ -640,7 +641,7 @@ async function run() {
         lastReadsSeen = p.reads;
         const pct = p.total > 0 ? Math.min(100, (p.bytesIn / p.total) * 100) : 0;
         paintProgress(pct, p.bytesIn, p.total, p.reads, maxReads, t0);
-        setStep("decompressing + trimming to first N reads in worker…");
+        setStep("decompressing in worker, keeping the first N reads…");
       },
     );
     paintProgress(100, selectedFile.size, selectedFile.size, reads ?? lastReadsSeen, maxReads, t0);
@@ -691,14 +692,21 @@ function renderResults(tsv) {
   const rows = lines.slice(1).map((l) => l.split("\t"));
   els.resultsBody.innerHTML = rows.map((r) => {
     const gname = (r[cols.genomeFile] || "").split("/").pop();
-    const species = lineage[gname] || `(${gname})`;
+    // Same two conventions as multi.js: the eighteen biome databases report
+    // "MGYG….fna.gz", the older human-gut one "MGYG….fna", and the maps hold
+    // the un-gzipped form.
+    const species = lineage[gname] ?? lineage[gname.replace(/\.gz$/i, "")] ?? `(${gname})`;
+    const mgnify = mgnifyGenomeUrl(gname);
     return `
       <tr>
         <td class="num">${fmtPct(r[cols.relAbund])}</td>
         <td class="num">${fmtPct(r[cols.seqAbund])}</td>
         <td class="num">${r[cols.ani] ?? ""}</td>
         <td class="num">${r[cols.cov] ?? ""}</td>
-        <td><code>${escapeHTML(gname)}</code></td>
+        <td>${mgnify
+          ? `<a href="${escapeHTML(mgnify)}" target="_blank" rel="noopener noreferrer"
+               title="Open ${escapeHTML(gname)} on MGnify"><code>${escapeHTML(gname)}</code></a>`
+          : `<code>${escapeHTML(gname)}</code>`}</td>
         <td>${escapeHTML(species)}</td>
       </tr>`;
   }).join("");

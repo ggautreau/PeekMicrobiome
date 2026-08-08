@@ -261,7 +261,9 @@ const MUTATIONS = [
     file: MULTI, bench: WIRING,
     why: "a run that downloaded 40 % of its file reports 'N species detected' and nothing else",
     from: `        const verdict = s.origin === "ena"
-          ? readCountVerdict({ observed: readsShown(s), expected: s.enaReads, maxReads })
+          ? readCountVerdict({ observed: readsShown(s), expected: s.enaReads, maxReads,
+              // Paired runs have two possible readings of the ENA's read_count.
+              layout: s.kind === "pe" ? "PAIRED" : "SINGLE" })
           : { ok: true, note: "" };`,
     to: `        const verdict = { ok: true, note: "" };`,
     expect: /compared with the count the ENA published/,
@@ -327,6 +329,28 @@ const MUTATIONS = [
     from: `  const why = UNPROFILABLE_STRATEGY[strategy] ?? UNPROFILABLE_SOURCE[source] ?? "";`,
     to: `  const why = "this run may not be shotgun metagenomics";`,
     expect: /WGS metagenome is NOT flagged|OTHER\/METAGENOMIC is NOT flagged/,
+  },
+  {
+    // Restores the assumption that read_count always counts both mates. That is
+    // true of ERR14098649 and false of ERR4421639, and being wrong about it
+    // marks perfectly downloaded runs "INCOMPLETE — the file served does not
+    // match the catalogue".
+    name: "read_count: assume one convention for paired runs",
+    why: "every run whose read_count counts spots is reported as corrupt",
+    from: `  if (String(layout).toUpperCase() === "PAIRED" && fits(expected * 2)) {
+    return { ok: true, capped: false, missing: expected * 2 - observed, note: "" };
+  }`,
+    to: ``,
+    expect: /read_count counts SPOTS is accepted/,
+  },
+  {
+    // The other direction: tolerating a doubling everywhere would gut the check
+    // for single-end runs, where there is no ambiguity to tolerate.
+    name: "read_count: tolerate a doubling on single-end runs too",
+    why: "a single-end file delivering twice its reads would pass unremarked",
+    from: `  if (String(layout).toUpperCase() === "PAIRED" && fits(expected * 2)) {`,
+    to: `  if (fits(expected * 2)) {`,
+    expect: /single-end run with twice the reads is still caught/,
   },
 ];
 

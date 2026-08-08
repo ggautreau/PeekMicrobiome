@@ -1049,6 +1049,46 @@ console.log("\n== N. rate meter ==");
 // The failure this exists for is not a crash: an amplicon run profiles cleanly,
 // finds nothing, and shows an empty table. Correct, and indistinguishable from a
 // bug — PRJNA1270378 (26 AMPLICON/Nanopore runs, 4.89 GiB) is what surfaced it.
+// The ENA does not use one convention for read_count on paired runs, and does
+// not say which it used. Measured live, both real:
+//   ERR14098649  read_count 13,510,300  base_count/read_count = 149.8  -> READS
+//   ERR4421639   read_count 14,091      base_count/read_count = 302.0  -> SPOTS
+// Assuming the first marked every run of the second kind INCOMPLETE with
+// "100.0% more — the file served does not match the catalogue", on downloads
+// that were perfect.
+console.log("\n== P. read_count means pairs on some runs and reads on others ==");
+{
+  const v = (o) => readCountVerdict({ maxReads: 3e6, ...o });
+  // expected is derived as round(read_count / 2); under the spots convention the
+  // observed pair count is read_count itself, i.e. twice expected.
+  check("a paired run whose read_count counts SPOTS is accepted (ERR4421639)",
+    v({ observed: 14091, expected: 7046, layout: "PAIRED" }).ok === true);
+  check("...and ERR4421640 with it",
+    v({ observed: 13441, expected: 6721, layout: "PAIRED" }).ok === true);
+  check("a paired run whose read_count counts READS is still accepted (ERR14098649)",
+    v({ observed: 6755150, expected: 6755150, layout: "PAIRED" }).ok === true);
+
+  // The check must keep its teeth. Accepting two readings is not accepting any.
+  check("a paired run truncated to 10% is still caught",
+    v({ observed: 700, expected: 7046, layout: "PAIRED" }).ok === false);
+  check("a paired run with four times too many reads is still caught",
+    v({ observed: 56364, expected: 7046, layout: "PAIRED" }).ok === false);
+  check("a paired run at half of expected is still caught — that is neither reading",
+    v({ observed: 3523, expected: 7046, layout: "PAIRED" }).ok === false);
+  // Single-end has one convention, so nothing is ambiguous and doubling must NOT
+  // be tolerated there.
+  check("a single-end run with twice the reads is still caught",
+    v({ observed: 14092, expected: 7046, layout: "SINGLE" }).ok === false);
+  check("a single-end run truncated by half is still caught",
+    v({ observed: 3523, expected: 7046, layout: "SINGLE" }).ok === false);
+
+  // The documented cost, asserted rather than described, so it cannot quietly
+  // widen: a SPOTS-convention run truncated to exactly half now passes, because
+  // that is precisely what the other reading predicts.
+  check("KNOWN BLIND SPOT: a spots-convention paired run cut to exactly half passes",
+    v({ observed: 7046, expected: 7046, layout: "PAIRED" }).ok === true);
+}
+
 console.log("\n== O. library types sylph cannot profile ==");
 {
   const row = (over) => ({

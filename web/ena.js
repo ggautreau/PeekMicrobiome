@@ -1019,15 +1019,44 @@ export function expectedProfiledReads({ readCount, layout, pairsAsTwo = false } 
   return layout === "PAIRED" ? Math.round(readCount / 2) : readCount;
 }
 
-export function readCountVerdict({ observed, expected, maxReads } = {}) {
+/**
+ * Did we profile the run the ENA describes?
+ *
+ * `layout` matters because the ENA does not use one convention for read_count
+ * on paired runs, and does not say which it used. Measured, both live:
+ *
+ *   ERR14098649  read_count 13,510,300   base_count/read_count = 149.8
+ *                -> read_count counts READS, both mates; there are 6,755,150 pairs
+ *   ERR4421639   read_count 14,091       base_count/read_count = 302.0
+ *                -> read_count counts SPOTS, i.e. pairs, each 2x151 bp
+ *
+ * Assuming the first convention marked every run of the second kind INCOMPLETE
+ * with "100.0% more ... the file served does not match the catalogue", on runs
+ * that were downloaded perfectly. A check that fires on good data is worse than
+ * no check: it teaches the user that INCOMPLETE means nothing.
+ *
+ * So for a paired run BOTH readings are accepted — `expected` and twice it,
+ * since the two conventions differ by exactly a factor of two in whichever unit
+ * the caller is working in. The cost is a blind spot: a paired file truncated to
+ * exactly half its reads now passes. That is the narrower error, and the byte
+ * and gzip checks still see an interrupted download; this one only ever caught
+ * a file whose SIZE was honest and whose CONTENT was short.
+ */
+export function readCountVerdict({ observed, expected, maxReads, layout } = {}) {
   if (!Number.isFinite(observed)) return { ok: true, capped: false, missing: NaN, note: "" };
   const capped = Number.isFinite(maxReads) && observed >= maxReads;
   if (capped) return { ok: true, capped: true, missing: NaN, note: "" };
   if (!Number.isFinite(expected) || expected <= 0) {
     return { ok: true, capped: false, missing: NaN, note: "" };
   }
+  const fits = (want) => Math.abs(want - observed) <= Math.max(1, want * READ_COUNT_TOLERANCE);
+  // The other reading of read_count, only for paired runs: for single-end there
+  // is one convention and nothing to be ambiguous about.
+  if (String(layout).toUpperCase() === "PAIRED" && fits(expected * 2)) {
+    return { ok: true, capped: false, missing: expected * 2 - observed, note: "" };
+  }
   const missing = expected - observed;
-  if (Math.abs(missing) <= Math.max(1, expected * READ_COUNT_TOLERANCE)) {
+  if (fits(expected)) {
     return { ok: true, capped: false, missing, note: "" };
   }
   const pct = (Math.abs(missing) / expected * 100).toFixed(1);

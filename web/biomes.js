@@ -33,7 +33,7 @@
 // greyed out as "no public URL yet". The JS modules are all busted through
 // WORKER_VERSION, but this is data, fetched at runtime, and nothing else
 // invalidates it.
-const CATALOG_VERSION = "2";
+const CATALOG_VERSION = "3";
 export const CATALOG_URL = `./db/biomes.json?v=${CATALOG_VERSION}`;
 export const LOCAL_VALUE = "__local__";
 // Remembered across visits and shared by both pages: with nineteen entries,
@@ -113,12 +113,12 @@ export function fallbackCatalog() {
           species: 4744, bytes: 454021440, file: "human-gut.syldb",
           url: "https://zenodo.org/api/records/21842023/files/human-gut.syldb/content",
           doi: "10.5281/zenodo.21842023",
-          lineage: "db/lineage.json",
+          lineage: "db/lineage/human-gut.json",
         },
         {
           key: "gut-mini", label: "Smoke test — 50 human-gut species", catalogue: "human-gut",
           version: "v2.0.2", species: 50, bytes: 6516832, file: "gut_mini.syldb",
-          url: "db/gut_mini.syldb", bundled: true, lineage: "db/lineage.json",
+          url: "db/gut_mini.syldb", bundled: true, lineage: "db/lineage/human-gut.json",
         },
       ],
     }],
@@ -157,6 +157,20 @@ export function biomeByKey(catalog, key) {
 }
 
 // ---- formatting --------------------------------------------------------------
+
+// https://www.ebi.ac.uk/metagenomics/genomes/MGYG000304057 — MGnify publishes a
+// page per genome, keyed on the bare accession, which is the file name with
+// every extension stripped. It is the only route from a row in the matrix to
+// the assembly, its provenance and its full GTDB lineage, none of which belongs
+// in a lookup table the browser downloads.
+//
+// Returns "" for anything that is not an MGnify accession: a database the user
+// built themselves must never produce a link into a catalogue its genomes are
+// not in.
+export function mgnifyGenomeUrl(genome) {
+  const m = /^(MGYG\d+)/i.exec(String(genome ?? "").trim());
+  return m ? `https://www.ebi.ac.uk/metagenomics/genomes/${m[1].toUpperCase()}` : "";
+}
 
 export function fmtCount(n) {
   return Number.isFinite(n) ? n.toLocaleString("en-US") : "?";
