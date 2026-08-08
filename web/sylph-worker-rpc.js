@@ -77,7 +77,11 @@
 // 11736250 bytes it declared".
 // v23: automatic mode names the sample it will screen, and says the whole batch
 // follows the one catalogue it picks.
-export const WORKER_VERSION = "23";
+// v24: six interface bugs found by review — the mobile horizontal scroll, a
+// failed wasm boot hanging Load database, zero species reported as success, an
+// orphan mate building an empty sample, the ENA rows overprinting themselves,
+// and a sticky matrix header that never engaged.
+export const WORKER_VERSION = "24";
 
 // ---- memory64 capability probe ----------------------------------------------
 

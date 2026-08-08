@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>PeekMicrobiome — upload-free, installation-free metagenomic profiling across biomes</title>
   <link rel="icon" type="image/svg+xml" href="./favicon.svg">
-  <link rel="stylesheet" href="./styles.css?v=23">
+  <link rel="stylesheet" href="./styles.css?v=24">
   <script>
     (function () {
       try {
@@ -88,7 +88,7 @@
                does not load, the picker must still offer a database and the
                user's own file, rather than leave an empty control on a page that
                cannot profile anything without one. -->
-          <select id="dbSelect" style="width:auto;min-width:20rem">
+          <select id="dbSelect">
             <optgroup label="Human">
               <option value="https://zenodo.org/api/records/21842023/files/human-gut.syldb/content">Human gut — 4,744 species, 433 MB, downloads from Zenodo</option>
               <option value="db/gut_mini.syldb">Smoke test — 50 human-gut species, 6 MB, bundled</option>
@@ -229,6 +229,6 @@
   </footer>
 
   <script src="./theme.js"></script>
-  <script type="module" src="./multi.js?v=23"></script>
+  <script type="module" src="./multi.js?v=24"></script>
 </body>
 </html>

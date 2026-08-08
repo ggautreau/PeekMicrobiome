@@ -566,6 +566,11 @@ code {
 .files li.running { color: var(--accent); }
 .files li.done { color: var(--success); }
 .files li.failed { color: var(--danger); }
+/* Zero species is not a success. It is what the wrong catalogue looks like, what
+   an amplicon run looks like, and what a blank looks like — and it was printed
+   in the same green as a good run. */
+.files li.empty { color: var(--danger); }
+.files li.incomplete { color: var(--danger); }
 .files li button {
   background: none;
   border: none;
@@ -604,22 +609,42 @@ td.num {
 tbody tr:hover { background: var(--bg-soft); }
 
 /* Matrix table (multi) */
+/* `overflow-x` alone gave the sticky header below nothing to stick INSIDE: with
+   no height constraint the wrap never scrolls vertically, so `position: sticky`
+   could not engage and a 20-sample matrix lost its column names on the way
+   down. max-height rather than height, so a three-row table stays short. */
 .matrixWrap {
-  overflow-x: auto;
+  max-height: 70vh;
+  overflow: auto;
   margin-top: 1rem;
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   background: var(--bg-card);
 }
-table.matrix { margin-top: 0; }
+table.matrix { margin-top: 0; --matrix-head1: 2.1rem; }
 table.matrix th {
   position: sticky;
   top: 0;
   background: var(--bg-soft);
-  z-index: 1;
+  z-index: 2;
   white-space: nowrap;
 }
+/* The reference row sits under the names, not over them. Driven by a variable
+   rather than a hardcoded pixel offset, because that offset depends on the
+   first row's line-height and .matrix-ref-row overrides font-size and padding. */
+table.matrix thead tr.matrix-ref-row th { top: var(--matrix-head1); z-index: 2; }
 table.matrix td { white-space: nowrap; }
+/* Scrolling sideways through 20 samples used to take the species name off
+   screen, leaving a row of numbers belonging to nothing. */
+table.matrix td.species,
+table.matrix th:first-child {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  background: var(--bg-card);
+}
+table.matrix thead th:first-child { z-index: 3; background: var(--bg-soft); }
+table.matrix tbody tr:nth-child(even) td.species { background: var(--bg-softer); }
 table.matrix td.species {
   max-width: 28ch;
   overflow: hidden;
@@ -674,6 +699,21 @@ table.matrix tbody tr:nth-child(even) { background: var(--bg-softer); }
   main.container { padding: 1.25rem 1rem 2rem; }
   .card { padding: 1.15rem 1rem; }
   h1 { font-size: 1.35rem; }
+
+  /* The ENA rows overprinted themselves: the fixed 6.5rem/9rem figure columns
+     (see .ena-figs) plus the accession do not fit in 390 px, the 1fr track
+     collapses to nothing, and the nowrap accession is painted ON TOP of the
+     size — measured, "ERR14098610" at x 75-197 over "1.22 GB" at x 81-185.
+     Restack instead: accession on one line, the figures under it. */
+  .ena-runs li { grid-template-columns: minmax(0, 1fr); }
+  .ena-figs {
+    grid-column: 1 / -1;
+    grid-template-columns: auto auto;
+    justify-content: start;
+    text-align: left;
+    gap: 0 0.75rem;
+  }
+  .ena-runs li.unusable .ena-note { text-align: left; }
 }
 
 /* ---------- ENA input mode ---------- */
@@ -930,7 +970,16 @@ table.matrix tbody tr:nth-child(even) { background: var(--bg-softer); }
 
 /* The picker itself. Nineteen entries in four <optgroup>s: the groups are what
    you scan, so they have to stand out from the entries under them. */
-#dbSelect { max-width: 100%; }
+/* The biome <select> made the whole page scroll sideways on a phone: 562 px of
+   option text ("Non-model fish gut — 178 species, 15 MB, downloads from Zenodo")
+   inside a 390 px viewport, measured at scrollWidth 657. Three things had to go
+   together — the inline min-width:20rem in the markup (a min-width always beats
+   a max-width, so the rule below could never bite), the label's default
+   min-width:auto as a flex item, and the select's own width. 36rem rather than
+   32rem: the longest option is 562 px intrinsic, and a tighter cap clips it on
+   desktop for no gain. */
+.row label { min-width: 0; max-width: 100%; }
+#dbSelect { width: 100%; min-width: 0; max-width: 36rem; }
 #dbSelect optgroup {
   font-weight: 600;
   font-style: normal;

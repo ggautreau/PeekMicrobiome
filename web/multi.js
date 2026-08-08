@@ -12,16 +12,16 @@ import {
   sylphWorkerRpc, detectMemory64, chooseWasmBits, WORKER_VERSION,
   readsBudget, readsBudgetNote, readsOverBudgetNote, loadedBuildNote, fmtReads,
   progressFraction,
-} from "./sylph-worker-rpc.js?v=23";
+} from "./sylph-worker-rpc.js?v=24";
 import {
   dbCacheClient, fmtRate, fmtEta, cacheSummary, assertSameDatabase,
-} from "./db-cache.js?v=23";
-import { matePattern, stripFastqExt } from "./sample-naming.js?v=23";
+} from "./db-cache.js?v=24";
+import { matePattern, stripFastqExt } from "./sample-naming.js?v=24";
 import {
   resolveAccession, validateAccession, ASSUMED_BPS,
   downloadEstimate, readCountVerdict, expectedProfiledReads,
-} from "./ena.js?v=23";
-import { normaliseMarkers, screenVerdict, SCREENING_DB, SCREENING_MARKERS } from "./screening.js?v=23";
+} from "./ena.js?v=24";
+import { normaliseMarkers, screenVerdict, SCREENING_DB, SCREENING_MARKERS } from "./screening.js?v=24";
 import {
   fetchCatalog, fallbackCatalog, renderDbSelect, biomeForUrl, biomeNote,
   mgnifyGenomeUrl,
@@ -29,7 +29,7 @@ import {
   makeDbRef, sameDbRef, refLine, refShort, refCommentLines, refSlug, genomeCountMismatch,
   rememberBiome, recallBiome, catalogueName, LOCAL_VALUE,
   selectionMatchesLoaded, notLoadedNote, refMetaMismatch,
-} from "./biomes.js?v=23";
+} from "./biomes.js?v=24";
 
 const $ = (id) => document.getElementById(id);
 const els = {
@@ -90,6 +90,9 @@ let dbMeta = null;            // { database_size, k, c, bytes } once loaded
 let lineage = {};             // {genome_file: "Species name"}
 let runManifest = {};         // {filename: {sample, layout, mate?}} — optional
 let wasmReady = false;        // at least the first worker's wasm is initialized
+// Set once, if the boot fails. Checked by loadDatabase() and by runAll(): both
+// otherwise wait on wasmReady for ever, with the controls already disabled.
+let wasmBootError = null;
 let abortCtrl = null;
 // {samples, rows, ref} — `ref` is the database the numbers came from, frozen at
 // the start of the run that produced them. The exports and the on-screen header
@@ -472,7 +475,12 @@ function plannedBits(maxReads) {
     await ensurePool(1, currentReads());
     wasmReady = true;
   } catch (e) {
-    showError(`WASM init failed: ${e.message ?? e}`);
+    // Remembered, not just displayed. Without this, loadDatabase() below waits
+    // on `while (!wasmReady)` for ever — having already disabled every control
+    // — so a failed boot turned the page into a dead form with a message far
+    // above it that most people scroll past.
+    wasmBootError = e?.message ?? String(e);
+    showError(`WASM init failed: ${wasmBootError}`);
     console.error(e);
   }
 })();
@@ -732,6 +740,16 @@ async function loadOnAllWorkers(loadFn, label) {
 
 async function loadDatabase() {
   setRunControls(true);
+  // BEFORE anything is disabled and before the error line is cleared: if the
+  // profiler never started, there is nothing to wait for and the wait below
+  // never ends. Say so where the click happened, and leave every control alive.
+  if (wasmBootError) {
+    els.dbInfo.textContent =
+      `The WebAssembly profiler could not start (${wasmBootError}). Nothing on this page ` +
+      `can profile until that is fixed — reload the page, and if it happens again your ` +
+      `browser may be too old or WebAssembly may be blocked here.`;
+    return;
+  }
   els.error.textContent = "";
   const url = els.dbSelect.value;
   const t0 = performance.now();
@@ -1509,9 +1527,18 @@ function resolveSampleKind(s) {
     s.peRuns = peRuns;
     s.dropped = seRuns.length > 0 ? `${seRuns.length} SE run(s) ignored` : "";
   } else {
+    // A file named _1 with no _2 is tagged PAIRED by addFiles(), pairUp() makes
+    // no pair out of it, and it used to be dropped here — leaving a sample with
+    // ZERO inputs that was still queued, sent to the worker, and reported as a
+    // broken FASTQ. It is a perfectly good single-end read set; the ENA path
+    // already says exactly that when only one mate is archived, and dropping a
+    // file the user deliberately added is the wrong answer either way.
+    const orphans = s.sources.filter(x => x.layout === "PAIRED");
     s.kind = "se";
-    s.seRuns = seRuns.map(x => x.file);
-    s.dropped = "";
+    s.seRuns = [...seRuns, ...orphans].map(x => x.file);
+    s.dropped = orphans.length
+      ? `${orphans.map(o => o.file.name).join(", ")} has no mate — profiled single-end`
+      : "";
   }
 }
 
@@ -1535,7 +1562,11 @@ function fileSummary(s) {
     return `${s.peRuns.length} paired run${s.peRuns.length === 1 ? "" : "s"} (${fmtBytes(totalBytes)})${note}`;
   }
   const totalBytes = s.seRuns.reduce((a, f) => a + f.size, 0);
-  return `${s.seRuns.length} single-end run${s.seRuns.length === 1 ? "" : "s"} (${fmtBytes(totalBytes)})`;
+  // The SE branch dropped the note the PE branch shows. That is where "no mate —
+  // profiled single-end" has to appear: a degradation the user is not told about
+  // is one they will attribute to the data.
+  const note = s.dropped ? ` <small style="color:#888">(${escapeHTML(s.dropped)})</small>` : "";
+  return `${s.seRuns.length} single-end run${s.seRuns.length === 1 ? "" : "s"} (${fmtBytes(totalBytes)})${note}`;
 }
 
 // The per-sample progress ring, on the right of its line.
@@ -1604,6 +1635,9 @@ function renderFilesList() {
       cls === "pending" ? (s.origin === "ena" ? "pending — will download from the EBI" : "pending") :
       cls === "running" ? `running (${s.progress ?? ""})` :
       cls === "done" ? `${readsPart}${s.detected ?? 0} species detected in ${s.elapsed?.toFixed(1) ?? "?"} s` :
+      cls === "empty" ? `${readsPart}NO species matched this catalogue in ${s.elapsed?.toFixed(1) ?? "?"} s — ` +
+        `the reads were profiled, nothing in them is in the catalogue that is loaded. ` +
+        `Usually the wrong biome, an amplicon (16S) run, or a blank.` :
       cls === "incomplete" ? `INCOMPLETE — ${readsPart}${s.detected ?? 0} species — ${s.error}` :
       cls === "cancelled" ? "cancelled — click Profile all to run it again" :
       cls === "failed" ? `failed: ${s.error}` : "";
@@ -1632,7 +1666,7 @@ function renderFilesList() {
 // existed and the only button that reaches it was greyed out the moment
 // nothing was `pending` any more, while the error text on the line said
 // "start it again".
-const RERUNNABLE = ["pending", "failed", "cancelled", "incomplete"];
+const RERUNNABLE = ["pending", "failed", "cancelled", "incomplete", "empty"];
 
 // Frozen for the duration of a run, alongside Load database and Threads.
 // `maxReads` is read ONCE, when the run starts: moving the slider afterwards
@@ -1752,6 +1786,7 @@ async function runAll() {
 
   const totalTodo = queue.length;
   let okCount = 0, failCount = 0, cancelCount = 0, shortCount = 0, completed = 0;
+  let emptyCount = 0;
 
   // Each worker independently drains the shared queue. Two workers run end-
   // to-end (decompress + sylph profile) in parallel.
@@ -1879,7 +1914,9 @@ async function runAll() {
               // Paired runs have two possible readings of the ENA's read_count.
               layout: s.kind === "pe" ? "PAIRED" : "SINGLE" })
           : { ok: true, note: "" };
-        s.status = verdict.ok ? "done" : "incomplete";
+        // "done" means species came out. Zero is a distinct outcome and gets its
+        // own status, so it can be counted apart and coloured apart.
+        s.status = !verdict.ok ? "incomplete" : (rows.length === 0 ? "empty" : "done");
         s.error = verdict.ok ? undefined : verdict.note;
         s.detected = rows.length;
         s.ref = runRef;
@@ -1896,7 +1933,9 @@ async function runAll() {
         lastMatrix = matrixToTable(matrix, sampleOrder, runRef,
           new Map(files.filter((f) => f.ref).map((f) => [f.sampleName, f.ref])));
         renderMatrix(lastMatrix, { done: completed + 1, total: totalTodo });
-        if (verdict.ok) okCount++; else shortCount++;
+        if (!verdict.ok) shortCount++;
+        else if (rows.length === 0) emptyCount++;
+        else okCount++;
       } catch (e) {
         // Cancelling is not failing. The worker reports an abort as a plain
         // Error("aborted"), so `e.name` is "Error" and the only reliable
@@ -1931,6 +1970,7 @@ async function runAll() {
   // incident that did not happen.
   setStep(`done — ${okCount} sample${okCount === 1 ? "" : "s"} ok` +
     (shortCount ? `, ${shortCount} incomplete (fewer reads than the ENA lists)` : "") +
+    (emptyCount ? `, ${emptyCount} with NO species — check the biome` : "") +
     `, ${failCount} failed` +
     (cancelCount ? `, ${cancelCount} cancelled` : "") +
     ` (pool=${rpcs.length})`);

@@ -243,7 +243,7 @@ const MUTATIONS = [
     name: "Profile all: only `pending` samples may re-enable it",
     file: MULTI, bench: WIRING,
     why: "the retry path exists in runAll() and no button reaches it",
-    from: `const RERUNNABLE = ["pending", "failed", "cancelled", "incomplete"];`,
+    from: `const RERUNNABLE = ["pending", "failed", "cancelled", "incomplete", "empty"];`,
     to: `const RERUNNABLE = ["pending"];`,
     expect: /re-enabled for samples that can be run again|including cancelled and incomplete/,
   },
