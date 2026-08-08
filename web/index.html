@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>PeekMicrobiome — upload-free, installation-free metagenomic profiling across biomes</title>
   <link rel="icon" type="image/svg+xml" href="./favicon.svg">
-  <link rel="stylesheet" href="./styles.css?v=24">
+  <link rel="stylesheet" href="./styles.css?v=25">
   <script>
     (function () {
       try {
@@ -22,7 +22,7 @@
   </script>
 </head>
 <body>
-  <div class="beta-bar" role="alert">
+  <div class="beta-bar">
     <span class="beta-pill">BETA</span>
     <span>In active development — bugs expected. Report issues at <a href="https://github.com/ggautreau/PeekMicrobiome/issues">github.com/ggautreau/PeekMicrobiome</a>.</span>
   </div>
@@ -124,9 +124,9 @@
         <button id="screenCancel" class="hide">Cancel</button>
         <span class="info" id="screenHint">Screens the first sample against a 13 MB marker set, then loads the catalogue it points to.</span>
       </div>
-      <div class="info hide" id="screenResult"></div>
+      <div class="info hide" id="screenResult" aria-live="polite" aria-atomic="true"></div>
       <div class="info biome-note" id="dbBiomeNote"></div>
-      <div class="info" id="dbInfo">Pick the biome your samples come from and click <em>Load database</em>. The first load downloads that database once; it is then kept on this computer — unless the browser evicts it to reclaim disk space — so later visits start instantly.</div>
+      <div class="info" id="dbInfo" aria-live="polite" aria-atomic="true">Pick the biome your samples come from and click <em>Load database</em>. The first load downloads that database once; it is then kept on this computer — unless the browser evicts it to reclaim disk space — so later visits start instantly.</div>
       <div class="info" id="dbCacheInfo" style="margin-top:.4rem"></div>
     </section>
 
@@ -151,8 +151,8 @@
           <button id="enaResolve" type="button">Look up</button>
           <button id="enaCancelLookup" type="button" class="hide">Cancel</button>
         </div>
-        <div class="info" id="enaStatus"></div>
-        <div class="err" id="enaError"></div>
+        <div class="info" id="enaStatus" aria-live="polite" aria-atomic="true"></div>
+        <div class="err" id="enaError" role="alert"></div>
         <div id="enaResult" class="hide">
           <div class="toolbar" style="margin-top:.6rem">
             <span class="info" id="enaSummary"></span>
@@ -191,11 +191,11 @@
       <div class="info hide" id="runHint"></div>
 
       <div id="progress" class="hide">
-        <div class="progress"><div id="bar"></div></div>
-        <div class="info" id="step">—</div>
+        <div class="progress" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" aria-labelledby="step"><div id="bar"></div></div>
+        <div class="info" id="step" aria-live="polite" aria-atomic="true">—</div>
       </div>
 
-      <div id="error" class="err"></div>
+      <div id="error" class="err" role="alert"></div>
     </section>
 
     <section id="results" class="card hide">
@@ -206,7 +206,7 @@
            moved since. -->
       <div class="db-ref" id="matrixRef"></div>
       <div class="toolbar">
-        <span class="info" id="resultsSummary"></span>
+        <span class="info" id="resultsSummary" aria-live="polite" aria-atomic="true"></span>
         <button id="downloadTsv">Download TSV</button>
         <button id="downloadCsv">Download CSV</button>
       </div>
@@ -229,6 +229,6 @@
   </footer>
 
   <script src="./theme.js"></script>
-  <script type="module" src="./multi.js?v=24"></script>
+  <script type="module" src="./multi.js?v=25"></script>
 </body>
 </html>

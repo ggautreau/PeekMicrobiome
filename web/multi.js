@@ -12,16 +12,16 @@ import {
   sylphWorkerRpc, detectMemory64, chooseWasmBits, WORKER_VERSION,
   readsBudget, readsBudgetNote, readsOverBudgetNote, loadedBuildNote, fmtReads,
   progressFraction,
-} from "./sylph-worker-rpc.js?v=24";
+} from "./sylph-worker-rpc.js?v=25";
 import {
   dbCacheClient, fmtRate, fmtEta, cacheSummary, assertSameDatabase,
-} from "./db-cache.js?v=24";
-import { matePattern, stripFastqExt } from "./sample-naming.js?v=24";
+} from "./db-cache.js?v=25";
+import { matePattern, stripFastqExt } from "./sample-naming.js?v=25";
 import {
   resolveAccession, validateAccession, ASSUMED_BPS,
   downloadEstimate, readCountVerdict, expectedProfiledReads,
-} from "./ena.js?v=24";
-import { normaliseMarkers, screenVerdict, SCREENING_DB, SCREENING_MARKERS } from "./screening.js?v=24";
+} from "./ena.js?v=25";
+import { normaliseMarkers, screenVerdict, SCREENING_DB, SCREENING_MARKERS } from "./screening.js?v=25";
 import {
   fetchCatalog, fallbackCatalog, renderDbSelect, biomeForUrl, biomeNote,
   mgnifyGenomeUrl,
@@ -29,7 +29,7 @@ import {
   makeDbRef, sameDbRef, refLine, refShort, refCommentLines, refSlug, genomeCountMismatch,
   rememberBiome, recallBiome, catalogueName, LOCAL_VALUE,
   selectionMatchesLoaded, notLoadedNote, refMetaMismatch,
-} from "./biomes.js?v=24";
+} from "./biomes.js?v=25";
 
 const $ = (id) => document.getElementById(id);
 const els = {
@@ -2164,8 +2164,11 @@ function csvEscape(sep) {
 function setStep(s) { els.step.textContent = s; }
 function showError(s) { els.error.textContent = s; }
 function paintOverall(doneCount, totalCount, currentFracIn) {
-  const overall = (doneCount + currentFracIn) / Math.max(1, totalCount) * 100;
-  els.bar.style.width = `${Math.min(100, overall).toFixed(1)}%`;
+  const overall = Math.min(100, (doneCount + currentFracIn) / Math.max(1, totalCount) * 100);
+  els.bar.style.width = `${overall.toFixed(1)}%`;
+  // The width alone says nothing to a screen reader: role="progressbar" needs
+  // its value kept up to date or it announces 0 for the whole run.
+  els.bar.parentElement?.setAttribute("aria-valuenow", String(Math.round(overall)));
 }
 
 function fmtBytes(n) {

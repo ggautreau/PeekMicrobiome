@@ -81,7 +81,10 @@
 // failed wasm boot hanging Load database, zero species reported as success, an
 // orphan mate building an empty sample, the ENA rows overprinting themselves,
 // and a sticky matrix header that never engaged.
-export const WORKER_VERSION = "24";
+// v25: accessibility — the FASTQ drop zone is keyboard-reachable, status lines
+// are aria-live, the progress bar has progressbar semantics, and two colour
+// tokens were darkened to clear WCAG AA.
+export const WORKER_VERSION = "25";
 
 // ---- memory64 capability probe ----------------------------------------------
 
