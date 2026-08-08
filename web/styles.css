@@ -853,6 +853,52 @@ table.matrix tbody tr:nth-child(even) { background: var(--bg-softer); }
 }
 .ena-unprofilable { color: var(--danger); }
 
+/* The catalogue each column was profiled against, under its name. It repeats
+   when one database is loaded, which is the point: the reference becomes a
+   property of the column instead of a line above the table that a screenshot
+   or a copied range leaves behind. */
+.matrix-ref-row th {
+  font-weight: 400;
+  font-size: 0.78rem;
+  color: var(--ink-muted);
+  border-bottom: 1px solid var(--border);
+  padding-top: 0;
+}
+.matrix-ref-row th.matrix-ref { color: var(--accent); }
+
+/* Which of the two situations you are in — see the comment in index.html. */
+.mode-row { gap: 0.9rem; align-items: baseline; }
+.mode-label { color: var(--ink-soft); font-size: 0.92rem; }
+.mode-pick { gap: 0.35rem !important; cursor: pointer; }
+.mode-pick input { accent-color: var(--accent); }
+
+/* ---------- Biome screening ----------
+   A verdict, not a profile — styled as an aside inside the database card, not
+   as a results table, so it cannot be mistaken for the thing it helps choose. */
+.screen-row { margin-top: 0.3rem; gap: 0.6rem; }
+.screen-table {
+  border-collapse: collapse;
+  margin: 0.5rem 0 0.35rem;
+  font-family: var(--font-mono);
+  font-size: 0.82rem;
+}
+.screen-table th, .screen-table td {
+  padding: 0.15rem 0.7rem 0.15rem 0;
+  text-align: left;
+}
+.screen-table th { color: var(--ink-muted); font-weight: 500; }
+.screen-table .num { text-align: right; font-variant-numeric: tabular-nums; }
+/* The row the exclusive column actually supports. Only ever set when the
+   verdict is confident — see screenVerdict(). */
+.screen-table .screen-win td { font-weight: 700; color: var(--accent); }
+.screen-note { margin-top: 0.25rem; }
+.screen-caveat { margin-top: 0.3rem; color: var(--ink-muted); font-size: 0.82rem; }
+#screenPick { margin-top: 0.55rem; }
+/* Nothing exclusive: the candidates are indistinguishable and the panel must
+   not look like an answer. */
+.screen-weak { border-left: 3px solid var(--border-strong); padding-left: 0.6rem; }
+.screen-bad { color: var(--danger); }
+
 /* The cap in the other unit, spelled out. Shown only when a paired sample is in
    the list: with single-end data there is one unit and nothing to convert, and
    a conversion for a situation the user is not in is noise. */

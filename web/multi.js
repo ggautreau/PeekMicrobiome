@@ -12,22 +12,24 @@ import {
   sylphWorkerRpc, detectMemory64, chooseWasmBits, WORKER_VERSION,
   readsBudget, readsBudgetNote, readsOverBudgetNote, loadedBuildNote, fmtReads,
   progressFraction,
-} from "./sylph-worker-rpc.js?v=20";
+} from "./sylph-worker-rpc.js?v=21";
 import {
   dbCacheClient, fmtRate, fmtEta, cacheSummary, assertSameDatabase,
-} from "./db-cache.js?v=20";
-import { matePattern, stripFastqExt } from "./sample-naming.js?v=20";
+} from "./db-cache.js?v=21";
+import { matePattern, stripFastqExt } from "./sample-naming.js?v=21";
 import {
   resolveAccession, validateAccession, ASSUMED_BPS,
   downloadEstimate, readCountVerdict, expectedProfiledReads,
-} from "./ena.js?v=20";
+} from "./ena.js?v=21";
+import { normaliseMarkers, screenVerdict, SCREENING_DB, SCREENING_MARKERS } from "./screening.js?v=21";
 import {
   fetchCatalog, fallbackCatalog, renderDbSelect, biomeForUrl, biomeNote,
   mgnifyGenomeUrl,
+  biomeByKey,
   makeDbRef, sameDbRef, refLine, refShort, refCommentLines, refSlug, genomeCountMismatch,
   rememberBiome, recallBiome, catalogueName, LOCAL_VALUE,
   selectionMatchesLoaded, notLoadedNote, refMetaMismatch,
-} from "./biomes.js?v=20";
+} from "./biomes.js?v=21";
 
 const $ = (id) => document.getElementById(id);
 const els = {
@@ -139,6 +141,163 @@ let lastDbLoad = null;
 // note explaining why the old "the HTTP cache collapses the N fetches" comment
 // that used to sit here was wrong.
 const dbc = dbCacheClient({ version: WORKER_VERSION });
+
+// ---- biome screening ---------------------------------------------------------
+//
+// Runs in a worker of its OWN, created for the screen and terminated after it.
+// The obvious implementation — load the marker database into one of the pool
+// workers — would silently REPLACE the reference database that worker holds,
+// and the next sample it drained would be profiled against 4,169 screening
+// markers while the matrix went on naming the catalogue the user chose. There
+// is no cheaper way to be sure: a module worker has one module graph for life,
+// and the pool's whole design is that every worker holds the same database.
+let screenAbort = null;
+
+function paintScreen(html, cls = "") {
+  const el = document.getElementById("screenResult");
+  if (!el) return;
+  el.className = `info${cls ? " " + cls : ""}`;
+  el.innerHTML = html;
+  el.classList.toggle("hide", !html);
+}
+
+const autoMode = () => !!document.getElementById("modeAuto")?.checked;
+
+// Manual and automatic are two situations, not two skins: one needs the picker,
+// the other needs a sample and no picker at all. Showing both at once invites
+// choosing a biome and then screening for it, which is two answers to one
+// question.
+function refreshDbMode() {
+  const auto = autoMode();
+  const manual = document.getElementById("manualRow");
+  const screenRow = document.getElementById("screenRow");
+  if (manual) manual.classList.toggle("hide", auto);
+  // Automatic has nothing to screen until a sample is in the list, and saying
+  // so on the button beats a button that fails when pressed.
+  const btn = document.getElementById("screenBtn");
+  const hint = document.getElementById("screenHint");
+  if (screenRow) screenRow.classList.toggle("hide", !auto);
+  if (btn) btn.disabled = files.length === 0;
+  if (hint && auto) {
+    hint.textContent = files.length === 0
+      ? "Add a sample below first — screening reads one of them to decide."
+      : "Screens the first sample against a 13 MB marker set, then loads the catalogue it points to.";
+  }
+}
+
+function paintScreenVerdict(sample, v) {
+  if (!v.detected) { paintScreen(escapeHTML(v.note), "screen-bad"); return; }
+  const rows = v.rows.slice(0, 5).map((r) => {
+    const strong = r === v.best && v.confident;
+    return `<tr${strong ? ' class="screen-win"' : ""}>` +
+      `<td>${escapeHTML(r.biome)}</td><td class="num">${r.taxo.toFixed(1)}%</td>` +
+      `<td class="num">${r.excl.toFixed(1)}%</td><td class="num">${r.n}</td>` +
+      `<td>${escapeHTML(r.top)}</td></tr>`;
+  }).join("");
+  const winner = v.confident ? biomeByKey(catalog, v.best.biome) : null;
+  const pick = winner?.url
+    ? `<button id="screenPick" class="primary" data-key="${escapeHTML(v.best.biome)}">Choose ${escapeHTML(winner.label)} above</button>`
+    : `<button id="screenManual">Choose the catalogue myself</button>`;
+  paintScreen(
+    `<div><strong>${escapeHTML(sample.sampleName)}</strong> — ${v.detected} marker species detected` +
+    (v.unmapped ? ` (${v.unmapped} not in the marker map)` : "") + `.</div>` +
+    `<table class="screen-table"><tr><th>catalogue</th><th>explains</th>` +
+    `<th>exclusive</th><th>n</th><th>top species</th></tr>${rows}</table>` +
+    `<div class="screen-note">${escapeHTML(v.note)}</div>` +
+    `<div class="screen-caveat">A hint about which catalogue to load — not a profile, and not a ` +
+    `diagnosis. Only the <em>exclusive</em> column distinguishes: shared species raise every ` +
+    `catalogue they belong to.</div>${pick}`,
+    v.confident ? "" : "screen-weak");
+}
+
+async function runScreen() {
+  const btn = document.getElementById("screenBtn");
+  const cancel = document.getElementById("screenCancel");
+  // The first sample, not a chosen one: screening asks which ENVIRONMENT this
+  // batch came from, and a batch whose samples disagree on that is a mistake the
+  // user has to resolve themselves.
+  const s = files[0];
+  if (!s) return;
+
+  screenAbort = new AbortController();
+  if (btn) btn.disabled = true;
+  cancel?.classList.remove("hide");
+  let rpc = null;
+  try {
+    paintScreen(`Screening <strong>${escapeHTML(s.sampleName)}</strong> — fetching the marker set…`);
+    const r = await fetch(`./${SCREENING_MARKERS}?v=${WORKER_VERSION}`, { signal: screenAbort.signal });
+    if (!r.ok) throw new Error(`marker map: HTTP ${r.status}`);
+    const markers = normaliseMarkers(await r.json());
+
+    // Enough reads to see the dominant species, not enough to quantify them.
+    const SCREEN_READS = 500_000;
+    rpc = sylphWorkerRpc();
+    await rpc.init(SCREEN_READS, chooseWasmBits({ maxReads: SCREEN_READS, memory64: has64 }).bits);
+    const abs = new URL(SCREENING_DB, location.href).href;
+    const res = await dbc.ensure(abs, {
+      onProgress: (p) => paintScreen(`Screening <strong>${escapeHTML(s.sampleName)}</strong> — ` +
+        `marker set ${p.total ? Math.round(100 * (p.received ?? 0) / p.total) : 0}%…`),
+      signal: screenAbort.signal,
+    });
+    if (res.opfs) await rpc.loadDbCached(abs); else await rpc.loadDb(res.bytes.slice());
+
+    const onProgress = (p) => {
+      if (p.phase || !Number.isFinite(p.reads)) return;
+      paintScreen(`Screening <strong>${escapeHTML(s.sampleName)}</strong> — ` +
+        `${p.reads.toLocaleString("en-US")} reads read…`);
+    };
+    // R1 alone: screening needs presence, and one mate carries the same species.
+    const inputs = s.kind === "pe" ? s.peRuns.map((p) => p.r1) : s.seRuns;
+    const { tsv } = s.origin === "ena"
+      ? await rpc.profileUrls(inputs.map(toUrlDesc), SCREEN_READS, onProgress, screenAbort.signal)
+      : await rpc.profileFilesMulti(inputs, SCREEN_READS, onProgress, screenAbort.signal);
+    const v = screenVerdict(tsv, markers);
+    paintScreenVerdict(s, v);
+    // Terminate before loading: the screening worker has served its purpose and
+    // loadDatabase() is about to build the real pool.
+    rpc.terminate(); rpc = null;
+    const winner = v.confident ? biomeByKey(catalog, v.best.biome) : null;
+    if (winner?.url) {
+      els.dbSelect.value = winner.url;
+      els.dbSelect.dispatchEvent(new Event("change"));
+      await loadDatabase();
+    }
+  } catch (e) {
+    const cancelled = screenAbort?.signal.aborted;
+    paintScreen(cancelled ? "Screening cancelled."
+      : `Screening failed: ${escapeHTML(e?.message ?? String(e))}`,
+      cancelled ? "" : "screen-bad");
+  } finally {
+    rpc?.terminate();          // the whole point: it never outlives the screen
+    screenAbort = null;
+    if (btn) btn.disabled = false;
+    cancel?.classList.add("hide");
+  }
+}
+
+document.getElementById("screenBtn")?.addEventListener("click", runScreen);
+for (const id of ["modeManual", "modeAuto"]) {
+  document.getElementById(id)?.addEventListener("change", refreshDbMode);
+}
+// Apply the mode once at load: renderFilesList() only runs when there are
+// samples, and until then the screening row would be visible in manual mode.
+refreshDbMode();
+document.getElementById("screenCancel")?.addEventListener("click", () => screenAbort?.abort());
+document.getElementById("screenResult")?.addEventListener("click", (e) => {
+  if (e.target.closest("#screenManual")) {
+    const m = document.getElementById("modeManual");
+    if (m) { m.checked = true; refreshDbMode(); }
+    els.dbSelect?.scrollIntoView({ behavior: "smooth", block: "center" });
+    return;
+  }
+  const b = e.target.closest("#screenPick");
+  if (!b) return;
+  const biome = biomeByKey(catalog, b.dataset.key);
+  if (!biome?.url) return;
+  els.dbSelect.value = biome.url;
+  els.dbSelect.dispatchEvent(new Event("change"));
+  els.dbSelect.scrollIntoView({ behavior: "smooth", block: "center" });
+});
 let dbAbort = null;          // AbortController for the download in flight
 let dbSource = null;         // "cache" | "network" | "memory" | "file"
 let persistence = null;      // result of navigator.storage.persist()
@@ -1397,6 +1556,7 @@ function progressRing(s) {
 }
 
 function renderFilesList() {
+  refreshDbMode();
   renderEnaPending();
   if (files.length === 0) {
     els.filesList.classList.add("hide");
@@ -1700,6 +1860,7 @@ async function runAll() {
         s.status = verdict.ok ? "done" : "incomplete";
         s.error = verdict.ok ? undefined : verdict.note;
         s.detected = rows.length;
+        s.ref = runRef;
         s.elapsed = (performance.now() - t0) / 1000;
         s.progress = undefined;
         s.frac = undefined;
@@ -1710,7 +1871,8 @@ async function runAll() {
         // 85 runs the end is hours away, and the first few samples are usually
         // enough to tell whether the run is worth waiting for. The download
         // buttons work on what is there — the summary says how much that is.
-        lastMatrix = matrixToTable(matrix, sampleOrder, runRef);
+        lastMatrix = matrixToTable(matrix, sampleOrder, runRef,
+          new Map(files.filter((f) => f.ref).map((f) => [f.sampleName, f.ref])));
         renderMatrix(lastMatrix, { done: completed + 1, total: totalTodo });
         if (verdict.ok) okCount++; else shortCount++;
       } catch (e) {
@@ -1738,7 +1900,8 @@ async function runAll() {
   setRunControls(false);
   refreshRunButton();
   if (okCount > 0) {
-    lastMatrix = matrixToTable(matrix, sampleOrder, runRef);
+    lastMatrix = matrixToTable(matrix, sampleOrder, runRef,
+      new Map(files.filter((f) => f.ref).map((f) => [f.sampleName, f.ref])));
     renderMatrix(lastMatrix);
   }
   // Cancelled samples are counted apart from failures: twelve red "failed:
@@ -1786,7 +1949,9 @@ function parseTsv(tsv) {
   });
 }
 
-function matrixToTable(matrix, sampleOrder, ref) {
+// `refBySample` is what each column was ACTUALLY profiled against, which is
+// not necessarily `ref`: see the note where s.ref is set.
+function matrixToTable(matrix, sampleOrder, ref, refBySample = new Map()) {
   const rows = Object.entries(matrix).map(([genome, m]) => {
     const values = sampleOrder.map(s => m[s] ?? 0);
     return {
@@ -1798,7 +1963,9 @@ function matrixToTable(matrix, sampleOrder, ref) {
   });
   rows.sort((a, b) => b.maxAbund - a.maxAbund);
   // `ref` travels WITH the numbers, all the way to the exported file.
-  return { samples: sampleOrder, rows, ref };
+  const refs = sampleOrder.map((n) => refBySample.get(n) ?? ref);
+  const mixed = refs.some((r) => !sameDbRef(r, refs[0]));
+  return { samples: sampleOrder, rows, ref, refs, mixed };
 }
 
 // ---- matrix rendering --------------------------------------------------------
@@ -1807,7 +1974,7 @@ function matrixToTable(matrix, sampleOrder, ref) {
 // fills, and the summary has to say so — a matrix that looks finished but holds
 // 3 of 85 samples is worse than no matrix at all, because it will be exported
 // and read as the whole thing.
-function renderMatrix({ samples, rows, ref }, progress = null) {
+function renderMatrix({ samples, rows, ref, refs, mixed }, progress = null) {
   // The reference, above the numbers, every time they are drawn. A matrix on
   // screen with no reference beside it is the same trap as an export with none:
   // nothing in the species names says which catalogue they were drawn from.
@@ -1819,11 +1986,23 @@ function renderMatrix({ samples, rows, ref }, progress = null) {
     els.matrixRef.classList.toggle("hide", !line);
     els.matrixRef.classList.toggle("db-ref-local", !!ref?.local);
   }
+  // A second header row naming the catalogue each COLUMN was profiled against.
+  // With one database loaded it repeats — and that repetition is the point: the
+  // reference stops being a line above the table that a screenshot or a copied
+  // range leaves behind, and becomes a property of the column. It is also the
+  // only thing that could show a mixed matrix if the invariant ever broke.
+  const refCells = (refs ?? []).map((r) => {
+    const short = r ? refShort(r) : "—";
+    return `<th class="matrix-ref" title="${escapeHTML(short)}">${escapeHTML(r?.label || r?.file || "—")}</th>`;
+  }).join("");
   els.matrixHead.innerHTML = `
     <tr>
       <th>Species</th>
       <th>Genome</th>
       ${samples.map(s => `<th title="${escapeHTML(s)}">${escapeHTML(s)}</th>`).join("")}
+    </tr>
+    <tr class="matrix-ref-row">
+      <th></th><th>profiled against</th>${refCells}
     </tr>`;
 
   els.matrixBody.innerHTML = rows.map(r => `
@@ -1876,10 +2055,24 @@ els.downloadCsv.addEventListener("click", () => downloadMatrix(",", "csv"));
 // told apart and "abundance_matrix.tsv" is the same name for all nineteen.
 function downloadMatrix(sep, ext) {
   if (!lastMatrix) return;
-  const { samples, rows, ref } = lastMatrix;
+  const { samples, rows, ref, refs, mixed } = lastMatrix;
   const header = ["species", "genome", ...samples];
+  // Per-column reference, as a comment line, in the same order as the header.
+  // The block above already names the reference once; this names it per sample,
+  // so a file read months later cannot be misattributed column by column — and
+  // if a matrix ever did mix catalogues, the file says so rather than averaging
+  // it into one heading.
+  const perSample = (refs ?? []).length === samples.length
+    ? ["# reference per sample: " +
+       samples.map((n, i) => `${n}=${refs[i]?.label || refs[i]?.file || "unknown"}`).join("; ")]
+    : [];
+  const mixedLine = mixed
+    ? ["# WARNING: these columns were NOT all profiled against the same catalogue. " +
+       "Abundances from different catalogues are not comparable."]
+    : [];
   const lines = [
     ...refCommentLines(ref, { samples: samples.length, rows: rows.length }),
+    ...perSample, ...mixedLine,
     header.map(csvEscape(sep)).join(sep),
   ];
   for (const r of rows) {

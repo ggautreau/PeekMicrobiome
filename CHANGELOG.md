@@ -4,6 +4,46 @@ Figures in this file are measured on the development machine (Chrome 151, Linux,
 not estimated. Where a number replaced an assumption, the assumption is named too — several of
 them were wrong in ways that mattered.
 
+## 2026-08-08 (2)
+
+### Two modes for choosing a catalogue, and the biome can be found for you
+
+Picking the wrong catalogue is the main way to be misled by this tool, and until
+now the only answer was "you tell us". Step 1 now asks how you want to choose:
+
+- **myself** (default) — the picker, as before. Automatic is not the default: it
+  costs a 13 MB download and a screening pass, and most users know their biome.
+- **automatically, from a sample** — screens the first sample against the 13 MB
+  marker database, then loads the catalogue it points to. One click from an
+  unlabelled FASTQ to a loaded reference.
+
+The screen runs in a worker of its OWN, created for it and terminated after. The
+obvious implementation — load the markers into one of the pool workers — would
+silently replace the reference database that worker holds, and the next sample it
+drained would be profiled against 4,169 screening markers while the matrix went
+on naming the catalogue the user chose.
+
+A verdict is ranked by EXCLUSIVE support, never by how much a catalogue explains:
+shared species raise every catalogue they belong to, so the plain figure crowns
+whichever is largest and most cosmopolitan. Measured on a gut sample, human-gut
+96.1% explained / 42.1% exclusive against mouse-gut 46.7% / **0.0%** — mouse-gut
+is riding, not indicated. When nothing is exclusive the verdict is refused rather
+than guessed, and the panel offers the manual picker instead.
+
+### The matrix names the catalogue of every column
+
+The reference was one line above the table — which a screenshot, or a copied
+range, leaves behind. Each sample now records the reference it was profiled
+against as it is profiled, and the matrix header carries it per column. Both
+exports gain a `# reference per sample:` line, and a warning line if the columns
+ever disagree.
+
+With one database loaded they all repeat, and that repetition is the point: the
+reference becomes a property of the column instead of a caption. It is also the
+only thing that could reveal a mixed matrix if the invariant that prevents one
+were ever lost — and automatic mode loads a database mid-session, which is
+exactly the kind of change that loses invariants.
+
 ## 2026-08-08
 
 ### Every catalogue names its species, and links them

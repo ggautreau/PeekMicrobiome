@@ -67,7 +67,10 @@
 // the pair box unticked meant three million PAIRS — six million sequenced reads
 // — so the label contradicted the unit. The word now follows the box and the
 // conversion is spelled out. index.html and styles.css changed with multi.js.
-export const WORKER_VERSION = "20";
+// v21: biome screening is wired in. multi.js imports screening.js and spawns a
+// throwaway worker for it; index.html and styles.css carry the panel. A page on
+// v20 has no screening.js to import, so the module graph fails to load.
+export const WORKER_VERSION = "21";
 
 // ---- memory64 capability probe ----------------------------------------------
 

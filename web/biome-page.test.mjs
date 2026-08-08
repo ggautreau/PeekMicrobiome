@@ -185,6 +185,38 @@ try {
   }
   const cdp = await launch("index.html");
 
+  // ---- 0. the two modes ------------------------------------------------------
+  // Manual and automatic need different controls, and showing both at once
+  // invites choosing a biome and then screening for it — two answers to one
+  // question. Automatic must NOT be the default: it costs a 13 MB download and
+  // a screening pass, and most users know their biome.
+  const m0 = await cdp.eval(`(() => ({
+    manual: document.getElementById("modeManual").checked,
+    pickerShown: !document.getElementById("manualRow").classList.contains("hide"),
+    screenShown: !document.getElementById("screenRow").classList.contains("hide"),
+  }))()`);
+  check("manual is the default mode", m0.manual === true);
+  check("...so the picker is shown", m0.pickerShown === true);
+  check("...and the screening row is not", m0.screenShown === false);
+
+  const m1 = await cdp.eval(`(() => {
+    document.getElementById("modeAuto").click();
+    return {
+      pickerShown: !document.getElementById("manualRow").classList.contains("hide"),
+      screenShown: !document.getElementById("screenRow").classList.contains("hide"),
+      btnDisabled: document.getElementById("screenBtn").disabled,
+      hint: document.getElementById("screenHint").textContent,
+    };
+  })()`);
+  check("switching to automatic hides the picker", m1.pickerShown === false);
+  check("...and shows the screening control", m1.screenShown === true);
+  // Nothing to screen yet: a button that fails when pressed is worse than one
+  // that says why it cannot be pressed.
+  check("...with the button disabled while no sample is loaded", m1.btnDisabled === true);
+  check("...and says so rather than leaving a dead button",
+    /Add a sample below first/.test(m1.hint), m1.hint.slice(0, 60));
+  await cdp.eval(`document.getElementById("modeManual").click()`);
+
   // ---- 1. the picker ---------------------------------------------------------
   const shape = await cdp.eval(`(() => {
     const s = document.getElementById("dbSelect");

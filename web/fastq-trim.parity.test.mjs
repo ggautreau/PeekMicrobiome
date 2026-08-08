@@ -1467,8 +1467,20 @@ console.log("== the pages carry the reference through ==");
   // happens to be selected when it is exported.
   check("the matrix is built with the reference of the run that filled it",
     /const runRef = currentRef;/.test(multiSrc)
-    && /matrixToTable\(matrix, sampleOrder, runRef\)/.test(multiSrc)
-    && /return \{ samples: sampleOrder, rows, ref \}/.test(multiSrc));
+    && /matrixToTable\(matrix, sampleOrder, runRef,/.test(multiSrc)
+    && /return \{ samples: sampleOrder, rows, ref, refs, mixed \}/.test(multiSrc));
+  // Stronger than the above, and the reason it changed shape: the reference is
+  // recorded on each SAMPLE as it is profiled, so a column can name the
+  // catalogue it actually came from rather than inheriting a matrix-wide one.
+  // With one database loaded these agree — the point is that if they ever stop
+  // agreeing, the table and the exports say so instead of averaging it away.
+  check("...and each sample records the reference it was profiled against",
+    /s\.ref = runRef;/.test(multiSrc));
+  check("...which the matrix header shows per column",
+    /matrix-ref-row/.test(multiSrc) && /profiled against/.test(multiSrc));
+  check("...and both exports carry per-sample references and warn if they differ",
+    /# reference per sample: /.test(multiSrc)
+    && /these columns were NOT all profiled against the same catalogue/.test(multiSrc));
   check("...and it is shown above the matrix on screen",
     /els\.matrixRef/.test(multiSrc) && /Profiled against \$\{line\}/.test(multiSrc));
   check("...and written into both exports",

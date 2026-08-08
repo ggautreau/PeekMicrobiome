@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>PeekMicrobiome — upload-free, installation-free metagenomic profiling across biomes</title>
   <link rel="icon" type="image/svg+xml" href="./favicon.svg">
-  <link rel="stylesheet" href="./styles.css?v=20">
+  <link rel="stylesheet" href="./styles.css?v=21">
   <script>
     (function () {
       try {
@@ -70,7 +70,17 @@
 
     <section class="card" id="cardDb">
       <h2><span class="step-num">1</span>Reference database</h2>
-      <div class="row" style="margin-top:.4rem">
+      <!-- Two modes, because there are two situations and they need different
+           controls. Someone who knows their samples are gut wants one click;
+           someone handed an unlabelled FASTQ cannot answer the question the
+           picker asks. Automatic is NOT the default: it costs a 13 MB download
+           and a screening pass, and most users do know their biome. -->
+      <div class="row mode-row" style="margin-top:.4rem">
+        <span class="mode-label">Choose the catalogue:</span>
+        <label class="mode-pick"><input type="radio" name="dbMode" id="modeManual" value="manual" checked> myself</label>
+        <label class="mode-pick"><input type="radio" name="dbMode" id="modeAuto" value="auto"> automatically, from a sample</label>
+      </div>
+      <div class="row" style="margin-top:.4rem" id="manualRow">
         <label>Biome:
           <!-- Rebuilt at load time from db/biomes.json — one entry per MGnify
                genome catalogue, grouped by family (see web/biomes.js). What is
@@ -103,6 +113,18 @@
       <!-- Which biome is about to be loaded, and what that commits you to. This
            is the only moment at which the choice is still free, so the warning
            belongs here rather than beside the results. -->
+      <!-- Not sure which biome? Screen one sample against a 13 MB marker database
+           first. It sits here, at the choice, because this is the moment the
+           choice is still free — and because the wrong choice produces a full,
+           plausible, wrong table rather than an error. Hidden until a sample is
+           in the list: with nothing to screen it is a control for a situation
+           the user is not in. -->
+      <div class="row screen-row hide" id="screenRow" style="margin-top:.3rem">
+        <button id="screenBtn" class="primary">Identify the biome and load it</button>
+        <button id="screenCancel" class="hide">Cancel</button>
+        <span class="info" id="screenHint">Screens the first sample against a 13 MB marker set, then loads the catalogue it points to.</span>
+      </div>
+      <div class="info hide" id="screenResult"></div>
       <div class="info biome-note" id="dbBiomeNote"></div>
       <div class="info" id="dbInfo">Pick the biome your samples come from and click <em>Load database</em>. The first load downloads that database once; it is then kept on this computer — unless the browser evicts it to reclaim disk space — so later visits start instantly.</div>
       <div class="info" id="dbCacheInfo" style="margin-top:.4rem"></div>
@@ -207,6 +229,6 @@
   </footer>
 
   <script src="./theme.js"></script>
-  <script type="module" src="./multi.js?v=20"></script>
+  <script type="module" src="./multi.js?v=21"></script>
 </body>
 </html>
