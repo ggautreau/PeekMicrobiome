@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>PeekMicrobiome — upload-free, installation-free metagenomic profiling across biomes</title>
   <link rel="icon" type="image/svg+xml" href="./favicon.svg">
-  <link rel="stylesheet" href="./styles.css?v=37">
+  <link rel="stylesheet" href="./styles.css?v=38">
   <script>
     (function () {
       try {
@@ -272,7 +272,11 @@
             <option value="p">Phylum</option>
           </select>
         </label>
+        <label class="rank-pick" title="Reorder rows and columns so that similar ones sit together — samples by Bray-Curtis, taxa by how they rise and fall together. Recomputed as each sample finishes, so the blocks appear as the run fills them in.">
+          <input type="checkbox" id="clusterPick"> cluster
+        </label>
         <span class="info" id="resultsSummary" aria-live="polite" aria-atomic="true"></span>
+        <span class="info" id="clusterNote"></span>
         <button id="downloadTsv">Download TSV</button>
         <button id="downloadCsv">Download CSV</button>
       </div>
@@ -335,6 +339,6 @@
   </footer>
 
   <script src="./theme.js"></script>
-  <script type="module" src="./multi.js?v=37"></script>
+  <script type="module" src="./multi.js?v=38"></script>
 </body>
 </html>

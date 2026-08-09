@@ -118,7 +118,9 @@
 // only green text — on a dark theme it was a black tile beside a black tile.
 // v37: the lineage maps carry the full GTDB ranks (schema 2), and the matrix can
 // be shown at genus, family, order, class or phylum instead of species.
-export const WORKER_VERSION = "37";
+// v38: the matrix can be ordered by similarity on both axes, recomputed as each
+// sample lands. multi.js imports cluster.js, which a page on v37 does not have.
+export const WORKER_VERSION = "38";
 
 // ---- memory64 capability probe ----------------------------------------------
 

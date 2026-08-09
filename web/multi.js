@@ -12,16 +12,17 @@ import {
   sylphWorkerRpc, detectMemory64, chooseWasmBits, WORKER_VERSION,
   readsBudget, readsBudgetNote, readsOverBudgetNote, loadedBuildNote, fmtReads,
   progressFraction, basesForReads, BUDGET_READ_BP,
-} from "./sylph-worker-rpc.js?v=37";
+} from "./sylph-worker-rpc.js?v=38";
 import {
   dbCacheClient, fmtRate, fmtEta, cacheSummary, assertSameDatabase,
-} from "./db-cache.js?v=37";
-import { matePattern, stripFastqExt } from "./sample-naming.js?v=37";
+} from "./db-cache.js?v=38";
+import { matePattern, stripFastqExt } from "./sample-naming.js?v=38";
 import {
   resolveAccession, validateAccession, ASSUMED_BPS,
   downloadEstimate, readCountVerdict, expectedProfiledReads,
-} from "./ena.js?v=37";
-import { normaliseMarkers, screenVerdict, SCREENING_DB, SCREENING_MARKERS } from "./screening.js?v=37";
+} from "./ena.js?v=38";
+import { normaliseMarkers, screenVerdict, SCREENING_DB, SCREENING_MARKERS } from "./screening.js?v=38";
+import { clusterTable, MAX_ROWS as CLUSTER_MAX_ROWS } from "./cluster.js?v=38";
 import {
   fetchCatalog, fallbackCatalog, renderDbSelect, biomeForUrl, biomeNote,
   mgnifyGenomeUrl,
@@ -29,7 +30,7 @@ import {
   makeDbRef, sameDbRef, refLine, refShort, refCommentLines, refSlug, genomeCountMismatch,
   rememberBiome, recallBiome, catalogueName, LOCAL_VALUE,
   selectionMatchesLoaded, notLoadedNote, refMetaMismatch,
-} from "./biomes.js?v=37";
+} from "./biomes.js?v=38";
 
 const $ = (id) => document.getElementById(id);
 const els = {
@@ -2268,7 +2269,7 @@ async function runAll() {
         lastRaw = { matrix, sampleOrder, ref: runRef,
           refBySample: new Map(files.filter((f) => f.ref).map((f) => [f.sampleName, f.ref])) };
         lastMatrix = matrixToTable(lastRaw.matrix, lastRaw.sampleOrder, lastRaw.ref, lastRaw.refBySample);
-        renderMatrix(lastMatrix, { done: completed + 1, total: totalTodo });
+        renderMatrix(viewOf(lastMatrix), { done: completed + 1, total: totalTodo });
         if (!verdict.ok) shortCount++;
         else if (rows.length === 0) emptyCount++;
         else okCount++;
@@ -2300,7 +2301,7 @@ async function runAll() {
     lastRaw = { matrix, sampleOrder, ref: runRef,
       refBySample: new Map(files.filter((f) => f.ref).map((f) => [f.sampleName, f.ref])) };
     lastMatrix = matrixToTable(lastRaw.matrix, lastRaw.sampleOrder, lastRaw.ref, lastRaw.refBySample);
-    renderMatrix(lastMatrix);
+    renderMatrix(viewOf(lastMatrix));
   }
   // Cancelled samples are counted apart from failures: twelve red "failed:
   // aborted" lines after a deliberate click on Cancel is a report of an
@@ -2407,13 +2408,38 @@ const currentRank = () => document.getElementById("rankPick")?.value || "s";
 // output is already aggregated and cannot be un-aggregated.
 let lastRaw = null;
 
+const clusterOn = () => !!document.getElementById("clusterPick")?.checked;
+
+// Similarity ordering, applied to the aggregated table just before it is drawn.
+// A view, never the data: the numbers are untouched and the exports keep the
+// order the user is looking at, which is the one they will describe.
+function viewOf(table) {
+  if (!clusterOn() || !table?.rows?.length) return table;
+  const t0 = performance.now();
+  const out = clusterTable(table);
+  const ms = performance.now() - t0;
+  const note = document.getElementById("clusterNote");
+  if (note) {
+    note.textContent = out.clustered.rows
+      ? `rows and samples ordered by similarity (${ms.toFixed(0)} ms)`
+      // Past the ceiling the samples still cluster — they are few — and the rows
+      // stay in abundance order rather than freezing the page after every
+      // sample. Said out loud, because an order that means nothing must not
+      // look like one that does.
+      : `samples ordered by similarity; ${table.rows.length} rows is past the ` +
+        `${CLUSTER_MAX_ROWS}-row limit, so rows stay in abundance order`;
+  }
+  return out;
+}
+
 function rerankMatrix() {
   const wrap = document.getElementById("rankPickWrap");
   if (wrap) wrap.classList.toggle("hide", !canAggregate() || !lastRaw);
   if (!lastRaw) return;
   lastMatrix = matrixToTable(lastRaw.matrix, lastRaw.sampleOrder, lastRaw.ref, lastRaw.refBySample);
-  renderMatrix(lastMatrix);
+  renderMatrix(viewOf(lastMatrix));
 }
+document.getElementById("clusterPick")?.addEventListener("change", rerankMatrix);
 document.getElementById("rankPick")?.addEventListener("change", rerankMatrix);
 const canAggregate = () => taxonomy.rankKeys.length > 0;
 

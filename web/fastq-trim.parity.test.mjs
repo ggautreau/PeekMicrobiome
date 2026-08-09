@@ -1165,6 +1165,65 @@ const catalogEntries = biomes.allBiomes(catalog);
   }
 }
 
+console.log("== clustering orders the matrix without changing it ==");
+{
+  const { clusterOrder, clusterTable, brayCurtis, correlationDistance } =
+    await import("./cluster.js");
+
+  // THE property. Anything else is a nicety; losing or duplicating a row is a
+  // corrupted table. An early version of clusterOrder() walked a merge tree it
+  // built wrongly and only kept every leaf because of a fallback — this is the
+  // check that would have caught it.
+  let permOk = true;
+  for (let trial = 0; trial < 30 && permOk; trial++) {
+    const n = 3 + Math.floor(Math.random() * 40);
+    const v = Array.from({ length: n }, () =>
+      Array.from({ length: 6 }, () => Math.random() * 10));
+    const o = clusterOrder(v, correlationDistance);
+    permOk = o.length === n && new Set(o).size === n && o.every((i) => i >= 0 && i < n);
+  }
+  check("the order is always a permutation — no row lost, none twice", permOk);
+
+  // Distances, at their defining points.
+  check("Bray-Curtis is 0 for identical and 1 for disjoint",
+    brayCurtis([1, 2, 3], [1, 2, 3]) === 0 && brayCurtis([1, 0], [0, 1]) === 1);
+  check("correlation distance is 0 for proportional and 2 for opposed",
+    correlationDistance([1, 2, 3], [2, 4, 6]) < 1e-9
+    && Math.abs(correlationDistance([1, 2, 3], [3, 2, 1]) - 2) < 1e-9);
+  // A flat vector has no rises and falls to compare; NaN here would poison
+  // every merge it took part in.
+  check("...and a zero-variance vector is 'unrelated', not NaN",
+    correlationDistance([5, 5, 5], [1, 2, 3]) === 1);
+
+  // It has to actually find structure, not merely return something.
+  const g = (k) => [k === 0 ? 90 : 1, k === 1 ? 90 : 1, k === 2 ? 90 : 1];
+  const labels = [0, 1, 2, 0, 1, 2, 0];
+  const grouped = clusterOrder(labels.map(g), brayCurtis).map((i) => labels[i]).join("");
+  check("...and groups really do end up adjacent", /^0+1+2+$|^0+2+1+$|^1+0+2+$|^1+2+0+$|^2+0+1+$|^2+1+0+$/.test(grouped), grouped);
+
+  // The table wrapper must permute everything that is aligned with an axis, or
+  // a column ends up labelled with another sample's name.
+  const samples = ["S1", "S2", "S3", "S4"];
+  const rows = [0, 1, 2, 3].map((t) => ({
+    species: `t${t}`, genome: `g${t}`,
+    values: samples.map((_, i) => (i % 2 === t % 2 ? 40 : 1)), maxAbund: 40,
+  }));
+  const out = clusterTable({ samples, rows, ref: null, refs: samples.map((s) => ({ label: s })) });
+  check("clusterTable permutes samples, refs and every row's values together",
+    out.samples.length === 4 && out.refs.length === 4 && out.rows.length === 4
+    && out.rows.every((r) => r.values.length === 4)
+    && out.refs.every((r, i) => r.label === out.samples[i]),
+    JSON.stringify(out.samples));
+  // Above the row ceiling the samples still cluster and the rows do not, and
+  // the caller is told which — an order that means nothing must not look like
+  // one that does.
+  const many = { samples, rows: Array.from({ length: 5 }, (_, t) => rows[t % 4]), ref: null, refs: null };
+  const capped = clusterTable(many, { maxRows: 4 });
+  check("...and past the row limit it says rows were NOT ordered",
+    capped.clustered.rows === false && capped.clustered.samples === true,
+    JSON.stringify(capped.clustered));
+}
+
 console.log("== every row of an exported matrix is a distinct label ==");
 {
   // CroCoDeEL, phyloseq and every other consumer key on the species column and
