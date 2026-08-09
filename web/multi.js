@@ -12,16 +12,16 @@ import {
   sylphWorkerRpc, detectMemory64, chooseWasmBits, WORKER_VERSION,
   readsBudget, readsBudgetNote, readsOverBudgetNote, loadedBuildNote, fmtReads,
   progressFraction, basesForReads, BUDGET_READ_BP,
-} from "./sylph-worker-rpc.js?v=34";
+} from "./sylph-worker-rpc.js?v=35";
 import {
   dbCacheClient, fmtRate, fmtEta, cacheSummary, assertSameDatabase,
-} from "./db-cache.js?v=34";
-import { matePattern, stripFastqExt } from "./sample-naming.js?v=34";
+} from "./db-cache.js?v=35";
+import { matePattern, stripFastqExt } from "./sample-naming.js?v=35";
 import {
   resolveAccession, validateAccession, ASSUMED_BPS,
   downloadEstimate, readCountVerdict, expectedProfiledReads,
-} from "./ena.js?v=34";
-import { normaliseMarkers, screenVerdict, SCREENING_DB, SCREENING_MARKERS } from "./screening.js?v=34";
+} from "./ena.js?v=35";
+import { normaliseMarkers, screenVerdict, SCREENING_DB, SCREENING_MARKERS } from "./screening.js?v=35";
 import {
   fetchCatalog, fallbackCatalog, renderDbSelect, biomeForUrl, biomeNote,
   mgnifyGenomeUrl,
@@ -29,7 +29,7 @@ import {
   makeDbRef, sameDbRef, refLine, refShort, refCommentLines, refSlug, genomeCountMismatch,
   rememberBiome, recallBiome, catalogueName, LOCAL_VALUE,
   selectionMatchesLoaded, notLoadedNote, refMetaMismatch,
-} from "./biomes.js?v=34";
+} from "./biomes.js?v=35";
 
 const $ = (id) => document.getElementById(id);
 const els = {
@@ -1948,6 +1948,101 @@ document.getElementById("stepper")?.addEventListener("click", (e) => {
   if (!el || el.classList.contains("hide")) return;
   el.scrollIntoView({ behavior: "smooth", block: "start" });
 });
+
+// ---- resource monitor --------------------------------------------------------
+//
+// Three things bound this page: linear memory, disk, and the link. The first two
+// were invisible until they failed — an out-of-memory abort is unrecoverable and
+// arrives with no warning, and a full disk stops a download that looked fine.
+//
+// Polled, not pushed, and only while the panel is open: a figure nobody is
+// looking at is not worth a message per second across four workers.
+const MON_MS = 1000;
+let monTimer = null;
+
+const monEl = (id) => document.getElementById(id);
+const setBar = (id, frac, danger = 0.85) => {
+  const b = monEl(id);
+  if (!b) return;
+  const v = Number.isFinite(frac) ? Math.max(0, Math.min(1, frac)) : 0;
+  b.style.width = `${(v * 100).toFixed(1)}%`;
+  b.classList.toggle("hot", v >= danger);
+};
+
+async function refreshMonitor() {
+  const mon = document.getElementById("monitor");
+  if (!mon || mon.classList.contains("collapsed")) return;
+
+  // WASM: the real linear memory, summed across the pool. This is the number the
+  // reads budget is a proxy for, and the only one that can end a run outright.
+  try {
+    const all = await Promise.all(rpcs.map((r) => r.stats().catch(() => null)));
+    const live = all.filter((s) => s && Number.isFinite(s.wasmBytes));
+    if (live.length) {
+      const total = live.reduce((a, s) => a + s.wasmBytes, 0);
+      const bits = live[0].bits ?? (has64 ? 64 : 32);
+      // What the engine will hand out at all: 4 GB for wasm32, 16 GB for V8's
+      // memory64. Per worker, since each has its own linear memory.
+      const ceiling = (bits === 64 ? 16 : 4) * 2 ** 30 * live.length;
+      monEl("monWasm").textContent = fmtBytes(total);
+      setBar("monWasmBar", total / ceiling);
+      monEl("monWasmNote").textContent =
+        `${live.length} × ${bits}-bit · ceiling ${fmtBytes(ceiling)} · never released until reload`;
+    } else {
+      // The wasm module takes several seconds to boot, and a bare "—" during
+      // that window reads as "this panel is broken" rather than "not yet".
+      monEl("monWasm").textContent = rpcs.length ? "starting" : "—";
+      setBar("monWasmBar", 0);
+      monEl("monWasmNote").textContent = rpcs.length
+        ? "the WebAssembly module is still loading" : "no worker yet";
+    }
+  } catch { /* a worker mid-restart is not an error worth showing */ }
+
+  // Disk: what the browser will admit to. Both figures are the origin's, not
+  // this page's alone, so they are labelled as such.
+  try {
+    const est = await navigator.storage?.estimate?.();
+    if (est && Number.isFinite(est.quota)) {
+      monEl("monDisk").textContent = fmtBytes(est.usage ?? 0);
+      setBar("monDiskBar", (est.usage ?? 0) / est.quota);
+      monEl("monDiskNote").textContent =
+        `of ${fmtBytes(est.quota)} this browser allows${persistence ? " · persistent" : " · evictable"}`;
+    }
+  } catch { /* storage estimate is not available everywhere */ }
+
+  // Network: the same trailing-window rate the ETA uses, so the two agree.
+  const bps = currentBps();
+  const active = netActive;
+  monEl("monNet").textContent = active && Number.isFinite(bps) ? fmtRate(bps) : "idle";
+  // 12.5 MB/s is a fast domestic link; the bar is a feel, not a limit.
+  setBar("monNetBar", Number.isFinite(bps) ? bps / (12.5 * 2 ** 20) : 0, 2);
+  monEl("monNetNote").textContent = active
+    ? `${active} stream${active === 1 ? "" : "s"} downloading`
+    : "nothing downloading";
+
+  const running = files.filter((f) => f.status === "running").length;
+  monEl("monPool").textContent = `${running} / ${rpcs.length}`;
+  monEl("monPoolNote").textContent = rpcs.length
+    ? `${rpcs.length} worker${rpcs.length === 1 ? "" : "s"}, ${running} profiling`
+    : "no workers yet";
+}
+
+function setMonitorOpen(open) {
+  const mon = document.getElementById("monitor");
+  const btn = document.getElementById("monitorToggle");
+  if (!mon) return;
+  mon.classList.toggle("collapsed", !open);
+  btn?.setAttribute("aria-expanded", String(open));
+  try { localStorage.setItem("peek-monitor", open ? "1" : "0"); } catch { /* private mode */ }
+  clearInterval(monTimer);
+  monTimer = null;
+  if (open) { refreshMonitor(); monTimer = setInterval(refreshMonitor, MON_MS); }
+}
+
+document.getElementById("monitorToggle")?.addEventListener("click", () => {
+  setMonitorOpen(document.getElementById("monitor")?.classList.contains("collapsed"));
+});
+try { if (localStorage.getItem("peek-monitor") === "1") setMonitorOpen(true); } catch { /* ignore */ }
 
 // ---- run all -----------------------------------------------------------------
 

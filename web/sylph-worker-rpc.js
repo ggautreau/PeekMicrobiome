@@ -110,7 +110,10 @@
 // drops the dead "Choose X above" button, which wrote into a hidden <select>.
 // v34: a sticky step strip at the top of the page says which of the three steps
 // is done, which can be acted on, and what to do about the one that cannot.
-export const WORKER_VERSION = "34";
+// v35: a resource monitor reads the workers' real linear memory through a new
+// "stats" message, alongside disk and link. A page on v34 talks to a worker that
+// has never heard of it.
+export const WORKER_VERSION = "35";
 
 // ---- memory64 capability probe ----------------------------------------------
 
@@ -444,6 +447,15 @@ export function sylphWorkerRpc() {
     },
     async profileUrlsPe(r1, r2, maxReads, onProgress, signal) {
       return call("profileUrlsPe", { r1, r2, maxReads }, { onProgress, signal });
+    },
+    // Linear memory as the worker sees it. Deliberately a pull rather than a
+    // push: the page asks when it is showing the figure, so a hidden panel
+    // costs nothing.
+    async stats() {
+      // call() resolves with the whole envelope, as every method here does —
+      // returning it unwrapped made every field read as undefined.
+      const { result } = await call("stats", {});
+      return result;
     },
     terminate() {
       worker.terminate();

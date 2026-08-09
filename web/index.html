@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>PeekMicrobiome — upload-free, installation-free metagenomic profiling across biomes</title>
   <link rel="icon" type="image/svg+xml" href="./favicon.svg">
-  <link rel="stylesheet" href="./styles.css?v=34">
+  <link rel="stylesheet" href="./styles.css?v=35">
   <script>
     (function () {
       try {
@@ -272,6 +272,46 @@
     </section>
   </main>
 
+  <!-- Resource monitor. Everything this page does is bounded by three things —
+       linear memory, disk, and the link — and until now the first two were
+       invisible until they failed. Collapsed by default and remembered, because
+       most runs never come near a limit and a panel nobody asked for is noise. -->
+  <aside class="monitor collapsed" id="monitor" aria-label="Resource monitor">
+    <button class="monitor-toggle" id="monitorToggle" type="button" aria-expanded="false"
+            title="Memory, disk and network while this page works">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true">
+        <line x1="6" y1="20" x2="6" y2="13"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="18" y1="20" x2="18" y2="9"/>
+      </svg>
+      <span>Resources</span>
+    </button>
+    <div class="monitor-body" id="monitorBody">
+      <div class="monitor-row">
+        <span class="monitor-k">WebAssembly memory</span>
+        <span class="monitor-v" id="monWasm">—</span>
+        <span class="monitor-bar"><i id="monWasmBar"></i></span>
+        <span class="monitor-note" id="monWasmNote"></span>
+      </div>
+      <div class="monitor-row">
+        <span class="monitor-k">Databases on disk</span>
+        <span class="monitor-v" id="monDisk">—</span>
+        <span class="monitor-bar"><i id="monDiskBar"></i></span>
+        <span class="monitor-note" id="monDiskNote"></span>
+      </div>
+      <div class="monitor-row">
+        <span class="monitor-k">Network</span>
+        <span class="monitor-v" id="monNet">idle</span>
+        <span class="monitor-bar"><i id="monNetBar"></i></span>
+        <span class="monitor-note" id="monNetNote"></span>
+      </div>
+      <div class="monitor-row">
+        <span class="monitor-k">Workers</span>
+        <span class="monitor-v" id="monPool">—</span>
+        <span class="monitor-bar"></span>
+        <span class="monitor-note" id="monPoolNote"></span>
+      </div>
+    </div>
+  </aside>
+
   <footer class="app-footer">
     <span>Built on <a href="https://github.com/bluenote-1577/sylph">sylph</a> · 19 <a href="https://www.ebi.ac.uk/metagenomics/browse/genomes">MGnify</a> genome catalogues · WebAssembly</span>
     <span class="footer-links">
@@ -282,6 +322,6 @@
   </footer>
 
   <script src="./theme.js"></script>
-  <script type="module" src="./multi.js?v=34"></script>
+  <script type="module" src="./multi.js?v=35"></script>
 </body>
 </html>

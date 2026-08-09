@@ -45,16 +45,16 @@
 // fails the named import and kills the worker module outright.
 import {
   readAndTrim, readAndTrimMulti, streamTrim, streamTrimMulti, streamTrimPair,
-} from "./fastq-trim.js?v=34";
+} from "./fastq-trim.js?v=35";
 import {
   WORKER_VERSION, detectMemory64, chooseWasmBits, WASM32_SAFE_READS,
-} from "./sylph-worker-rpc.js?v=34";
+} from "./sylph-worker-rpc.js?v=35";
 // The database is never downloaded here: one download happens in
 // db-cache-worker.js, then every worker in the pool reads the same OPFS file.
-import { readCachedBytes } from "./db-cache.js?v=34";
+import { readCachedBytes } from "./db-cache.js?v=35";
 // FASTQs, on the other hand, ARE fetched here in ENA mode — streamed, never
 // stored. urlSource is the resumable read source; see web/ena.js.
-import { urlSource, rateMeter, fastqUrl } from "./ena.js?v=34";
+import { urlSource, rateMeter, fastqUrl } from "./ena.js?v=35";
 
 let profiler = null;
 
@@ -86,12 +86,19 @@ const WASM_PATH = {
 let Profiler = null;      // filled in by loadPkg()
 let wasmInfo = null;      // { bits, capped, memory64, reason, pkg } once loaded
 let initPromise = null;
+// The wasm instance's exports, kept for `memory.buffer.byteLength`. wasm never
+// returns linear memory to the OS, so this only ever goes up within a worker —
+// which is exactly what makes it worth watching.
+let wasmExports = null;
 
 async function loadPkg(bits) {
   const mod = await import(`${PKG_PATH[bits]}?v=${WORKER_VERSION}`);
   // wasm-bindgen would otherwise derive the .wasm URL from its own import.meta,
   // dropping the query and letting a stale binary pair with fresh glue.
-  await mod.default({
+  // The return value is the instance's exports, which carries `memory` — the
+  // only way to read the linear memory that actually decides whether a run
+  // fits. Everything else on this page is a proxy for it.
+  wasmExports = await mod.default({
     module_or_path: new URL(`${WASM_PATH[bits]}?v=${WORKER_VERSION}`, import.meta.url),
   });
   Profiler = mod.Profiler;
@@ -279,6 +286,18 @@ function cancelSample() {
 
 self.addEventListener("message", async (e) => {
   const { id, type } = e.data;
+
+  // Cheap enough to answer while a sample is being sketched: it reads two
+  // numbers and allocates nothing.
+  if (type === "stats") {
+    const bytes = wasmExports?.memory?.buffer?.byteLength;
+    self.postMessage({ id, ok: true, result: {
+      wasmBytes: Number.isFinite(bytes) ? bytes : NaN,
+      bits: wasmInfo?.bits ?? null,
+      hasDb: !!profiler,
+    } });
+    return;
+  }
 
   if (type === "cancel") {
     const ac = aborters.get(e.data.target);

@@ -962,6 +962,88 @@ table.matrix tbody tr:nth-child(even) { background: var(--bg-softer); }
 }
 .matrix-ref-row th.matrix-ref { color: var(--accent); }
 
+/* ---------- Resource monitor ----------
+   Fixed to the right edge, collapsed to a tab. Everything this page does is
+   bounded by linear memory, disk and the link, and the first two were invisible
+   until they failed — an out-of-memory abort is unrecoverable and arrives with
+   no warning at all. */
+.monitor {
+  position: fixed;
+  right: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 20;
+  display: flex;
+  align-items: stretch;
+  max-width: min(24rem, 92vw);
+  font-size: 0.82rem;
+}
+.monitor-toggle {
+  flex: 0 0 auto;
+  writing-mode: vertical-rl;
+  transform: rotate(180deg);
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.85rem 0.35rem;
+  background: var(--bg-card);
+  color: var(--ink-soft);
+  border: 1px solid var(--border);
+  border-right: none;
+  border-radius: var(--radius-md) 0 0 var(--radius-md);
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.78rem;
+  box-shadow: var(--shadow-sm);
+}
+.monitor-toggle:hover { color: var(--accent-ink); border-color: var(--accent); }
+.monitor-toggle svg { transform: rotate(90deg); }
+.monitor-body {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-right: none;
+  border-radius: var(--radius-md) 0 0 var(--radius-md);
+  box-shadow: var(--shadow-md);
+  padding: 0.75rem 0.9rem;
+  display: grid;
+  gap: 0.7rem;
+  min-width: 15rem;
+}
+.monitor.collapsed .monitor-body { display: none; }
+
+.monitor-row { display: grid; grid-template-columns: 1fr auto; gap: 0.15rem 0.6rem; }
+.monitor-k { color: var(--ink-muted); font-size: 0.76rem; }
+.monitor-v {
+  font-family: var(--font-mono);
+  font-weight: 600;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.monitor-bar {
+  grid-column: 1 / -1;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--bg-soft);
+  overflow: hidden;
+}
+.monitor-bar i {
+  display: block;
+  height: 100%;
+  width: 0;
+  background: var(--accent);
+  border-radius: 2px;
+  transition: width 0.3s ease;
+}
+/* Near the ceiling. The one state worth a colour, because past it the run does
+   not slow down — it aborts unrecoverably. */
+.monitor-bar i.hot { background: var(--danger); }
+.monitor-note { grid-column: 1 / -1; color: var(--ink-muted); font-size: 0.72rem; }
+
+/* On a phone the panel would cover the page it is reporting on. */
+@media (max-width: 640px) {
+  .monitor { display: none; }
+}
+
 /* ---------- Step strip ----------
    Sticky, because the question it answers ("what is missing?") is asked from
    the bottom of the page, where the numbered cards are long gone. */
