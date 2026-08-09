@@ -12,21 +12,21 @@ import {
   sylphWorkerRpc, detectMemory64, chooseWasmBits, WORKER_VERSION,
   readsBudget, readsBudgetNote, readsOverBudgetNote, loadedBuildNote, fmtReads,
   progressFraction, basesForReads, BUDGET_READ_BP,
-} from "./sylph-worker-rpc.js?v=43";
+} from "./sylph-worker-rpc.js?v=44";
 import {
   dbCacheClient, fmtRate, fmtEta, cacheSummary, assertSameDatabase,
-} from "./db-cache.js?v=43";
-import { matePattern, stripFastqExt } from "./sample-naming.js?v=43";
+} from "./db-cache.js?v=44";
+import { matePattern, stripFastqExt } from "./sample-naming.js?v=44";
 import {
   resolveAccession, validateAccession, ASSUMED_BPS,
   downloadEstimate, readCountVerdict, expectedProfiledReads,
-} from "./ena.js?v=43";
-import { normaliseMarkers, screenVerdict, SCREENING_DB, SCREENING_MARKERS } from "./screening.js?v=43";
-import { clusterTable, MAX_ROWS as CLUSTER_MAX_ROWS } from "./cluster.js?v=43";
-import { compositionSvg, alphaSvg, pcoaSvg, alphaDiversity } from "./figures.js?v=43";
-import { toMetaphlan, toBiom, toSylphTsv, toSession, fromSession } from "./exports.js?v=43";
+} from "./ena.js?v=44";
+import { normaliseMarkers, screenVerdict, SCREENING_DB, SCREENING_MARKERS } from "./screening.js?v=44";
+import { clusterTable, MAX_ROWS as CLUSTER_MAX_ROWS } from "./cluster.js?v=44";
+import { compositionSvg, alphaSvg, pcoaSvg, alphaDiversity } from "./figures.js?v=44";
+import { toMetaphlan, toBiom, toSylphTsv, toSession, fromSession } from "./exports.js?v=44";
 import { currentMode as themeMode, setMode as setThemeMode, applyTheme,
-  loadSchedule, saveSchedule } from "./theme.js?v=43";
+  loadSchedule, saveSchedule } from "./theme.js?v=44";
 import {
   fetchCatalog, fallbackCatalog, renderDbSelect, biomeForUrl, biomeNote,
   mgnifyGenomeUrl,
@@ -34,7 +34,7 @@ import {
   makeDbRef, sameDbRef, refLine, refShort, refCommentLines, refSlug, genomeCountMismatch,
   rememberBiome, recallBiome, catalogueName, LOCAL_VALUE,
   selectionMatchesLoaded, notLoadedNote, refMetaMismatch,
-} from "./biomes.js?v=43";
+} from "./biomes.js?v=44";
 
 const $ = (id) => document.getElementById(id);
 const els = {
@@ -103,6 +103,10 @@ let wasmReady = false;        // at least the first worker's wasm is initialized
 // Set once, if the boot fails. Checked by loadDatabase() and by runAll(): both
 // otherwise wait on wasmReady for ever, with the controls already disabled.
 let wasmBootError = null;
+// The last failure on the "Load database" path, kept for the diagnostics panel:
+// the message the user saw is the one thing a bug report needs and the one
+// thing that scrolls away.
+let lastLoadError = null;
 let abortCtrl = null;
 // {samples, rows, ref} — `ref` is the database the numbers came from, frozen at
 // the start of the run that produced them. The exports and the on-screen header
@@ -996,6 +1000,9 @@ async function loadDatabase() {
       dbMeta = null;
       currentRef = null;
       lastDbLoad = null;
+      // Kept for the diagnostics panel: this message is what a bug report needs,
+      // and it is also the one that scrolls away first.
+      lastLoadError = String(e?.message ?? e).slice(0, 300);
       lineage = {}; ambiguousNames = new Set(); taxonomy = normaliseLineage(null);
       els.dbInfo.textContent =
         "No database is loaded. The load failed part-way through, and a pool where some " +
@@ -2008,7 +2015,61 @@ async function paintSettings() {
   }
 }
 
+// What this browser actually offers on the path "Load database" takes. Every
+// line is a real feature test, not a user-agent guess: the point is to tell a
+// Firefox that works from one that does not, and the UA string says neither.
+async function diagnostics() {
+  const has = (v) => (v ? "yes" : "NO");
+  const out = [
+    ["userAgent", navigator.userAgent],
+    ["secure context", has(window.isSecureContext)],
+    ["OPFS (storage.getDirectory)", has(typeof navigator.storage?.getDirectory === "function")],
+    ["createSyncAccessHandle", has(typeof FileSystemFileHandle !== "undefined"
+      && typeof FileSystemFileHandle.prototype?.createSyncAccessHandle === "function")],
+    ["createWritable", has(typeof FileSystemFileHandle !== "undefined"
+      && typeof FileSystemFileHandle.prototype?.createWritable === "function")],
+    ["Web Locks", has(typeof navigator.locks?.request === "function")],
+    ["module workers", has(true)],   // this file is one; if it were not, nothing would run
+    ["WebAssembly.validate", has(typeof WebAssembly?.validate === "function")],
+    ["memory64", detectMemory64().ok ? "yes" : `no — ${detectMemory64().reason}`],
+    ["wasm booted", wasmBootError ? `NO — ${wasmBootError}` : has(wasmReady)],
+    ["workers in pool", String(rpcs.length)],
+  ];
+  try {
+    const est = await navigator.storage?.estimate?.();
+    out.push(["storage quota", est ? `${fmtBytes(est.usage ?? 0)} of ${fmtBytes(est.quota ?? 0)}` : "unavailable"]);
+    out.push(["persistent storage", has(await navigator.storage?.persisted?.())]);
+  } catch (e) { out.push(["storage estimate", `failed: ${e?.message ?? e}`]); }
+  // The last thing that went wrong on this path, whatever it was.
+  if (lastLoadError) out.push(["last load error", lastLoadError]);
+  return out;
+}
+
+async function paintDiagnostics() {
+  const el = document.getElementById("settingsDiag");
+  if (!el) return;
+  const rows = await diagnostics();
+  el.textContent = rows.map(([k, v]) => `${k}: ${v}`).join("\n");
+}
+
+document.getElementById("copyDiag")?.addEventListener("click", async () => {
+  const btn = document.getElementById("copyDiag");
+  try {
+    await navigator.clipboard.writeText(document.getElementById("settingsDiag")?.textContent ?? "");
+    btn.textContent = "Copied";
+    setTimeout(() => { btn.textContent = "Copy for a bug report"; }, 2000);
+  } catch {
+    // Clipboard needs a permission in some browsers; selecting the text is the
+    // fallback that always works.
+    const r = document.createRange();
+    r.selectNodeContents(document.getElementById("settingsDiag"));
+    getSelection().removeAllRanges(); getSelection().addRange(r);
+    btn.textContent = "Selected — press Ctrl+C";
+  }
+});
+
 document.getElementById("settingsBtn")?.addEventListener("click", async () => {
+  paintDiagnostics();
   await paintSettings();
   document.getElementById("settings")?.showModal();
 });

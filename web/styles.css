@@ -1203,6 +1203,18 @@ details[open] > .ena-summary::before { transform: rotate(90deg); }
 .settings-row .info { grid-column: 1 / -1; font-size: 0.8rem; }
 .settings-row input[type="number"], .settings-row input[type="text"] { width: 7rem; }
 .settings-note { margin: 0; font-size: 0.8rem; }
+.settings-diag {
+  font-family: var(--font-mono);
+  font-size: 0.74rem;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 11rem;
+  overflow: auto;
+  background: var(--bg-soft);
+  border-radius: var(--radius-sm);
+  padding: 0.5rem 0.6rem;
+}
 .settings-actions { display: flex; gap: 0.6rem; justify-content: flex-end; flex-wrap: wrap; }
 
 /* ---------- Step strip ----------

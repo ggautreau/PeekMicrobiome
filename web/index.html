@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>PeekMicrobiome — upload-free, installation-free metagenomic profiling across biomes</title>
   <link rel="icon" type="image/svg+xml" href="./favicon.svg">
-  <link rel="stylesheet" href="./styles.css?v=43">
+  <link rel="stylesheet" href="./styles.css?v=44">
   <script>
     (function () {
       try {
@@ -420,6 +420,15 @@
         <p class="info settings-note">There is no separate network control, because there is nothing separate to control: each worker downloads the sample it is profiling, so <em>workers</em> is also the number of simultaneous streams. A page cannot cap a transfer rate, and a dial that pretended to would be worse than none.</p>
       </fieldset>
 
+      <fieldset>
+        <legend>This browser</legend>
+        <!-- Filled by multi.js. Exists because "Load database doesn't work on
+             Firefox" was reported with no way for either side to see WHICH of
+             the half-dozen APIs on that path was missing. -->
+        <div class="settings-diag" id="settingsDiag">…</div>
+        <button id="copyDiag" type="button">Copy for a bug report</button>
+      </fieldset>
+
       <div class="settings-actions">
         <button id="settingsPurge" type="button">Delete cached databases</button>
         <button value="close" class="primary">Done</button>
@@ -436,7 +445,7 @@
     <span class="credit">Created using Claude Opus 5, prompted by G. Gautreau — <a href="https://maiage.inrae.fr/">MaIAGE unit (UR 1404, Mathématiques et Informatique Appliquées du Génome à l'Environnement)</a>, INRAE.</span>
   </footer>
 
-  <script type="module" src="./theme.js?v=43"></script>
-  <script type="module" src="./multi.js?v=43"></script>
+  <script type="module" src="./theme.js?v=44"></script>
+  <script type="module" src="./multi.js?v=44"></script>
 </body>
 </html>
