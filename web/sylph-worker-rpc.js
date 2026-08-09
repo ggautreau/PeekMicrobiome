@@ -129,7 +129,9 @@
 // v42: a step in the strip is amber while its work is running and green only
 // once it is finished — green had been claimed the moment a step was merely
 // satisfied, including while a run was still chewing through it.
-export const WORKER_VERSION = "42";
+// v43: a Settings dialog — theme in four modes, and the three limits a browser
+// can actually enforce. theme.js became a module and gained schedule support.
+export const WORKER_VERSION = "43";
 
 // ---- memory64 capability probe ----------------------------------------------
 

@@ -1144,6 +1144,67 @@ details[open] > .ena-summary::before { transform: rotate(90deg); }
   .monitor { display: none; }
 }
 
+/* ---------- Settings dialog ----------
+   A <dialog>, so focus trapping, Escape and the backdrop come from the browser
+   rather than from three hand-written listeners that each get an edge case
+   wrong. */
+.settings {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--bg-card);
+  color: var(--ink);
+  padding: 0;
+  max-width: min(34rem, 94vw);
+  box-shadow: var(--shadow-md);
+}
+.settings::backdrop { background: rgba(15, 21, 24, 0.45); }
+.settings-form { padding: 1.2rem 1.4rem 1rem; display: grid; gap: 1.1rem; }
+.settings h2 { margin: 0; font-size: 1.1rem; }
+.settings fieldset {
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-md);
+  padding: 0.7rem 0.9rem 0.9rem;
+  margin: 0;
+  display: grid;
+  gap: 0.5rem;
+}
+.settings legend { padding: 0 0.35rem; color: var(--ink-muted); font-size: 0.82rem; }
+.settings fieldset > label {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.5rem;
+  align-items: start;
+  font-size: 0.9rem;
+  cursor: pointer;
+}
+.settings fieldset > label span b { font-weight: 600; }
+.settings input[type="radio"] { margin-top: 0.25rem; accent-color: var(--accent); }
+.settings-sub {
+  display: flex;
+  gap: 0.8rem;
+  align-items: center;
+  flex-wrap: wrap;
+  padding-left: 1.6rem;
+}
+.settings-sub input[type="time"] {
+  font: inherit;
+  background: var(--bg-card);
+  color: var(--ink);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 0.25rem 0.4rem;
+}
+/* Label, control, then the sentence that says what the number costs — the
+   explanation is the point, so it gets the full width under both. */
+.settings-row {
+  grid-template-columns: 1fr auto !important;
+  align-items: center !important;
+}
+.settings-row .info { grid-column: 1 / -1; font-size: 0.8rem; }
+.settings-row input[type="number"], .settings-row input[type="text"] { width: 7rem; }
+.settings-note { margin: 0; font-size: 0.8rem; }
+.settings-actions { display: flex; gap: 0.6rem; justify-content: flex-end; flex-wrap: wrap; }
+
 /* ---------- Step strip ----------
    Sticky, because the question it answers ("what is missing?") is asked from
    the bottom of the page, where the numbered cards are long gone. */

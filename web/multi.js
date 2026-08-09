@@ -12,19 +12,21 @@ import {
   sylphWorkerRpc, detectMemory64, chooseWasmBits, WORKER_VERSION,
   readsBudget, readsBudgetNote, readsOverBudgetNote, loadedBuildNote, fmtReads,
   progressFraction, basesForReads, BUDGET_READ_BP,
-} from "./sylph-worker-rpc.js?v=42";
+} from "./sylph-worker-rpc.js?v=43";
 import {
   dbCacheClient, fmtRate, fmtEta, cacheSummary, assertSameDatabase,
-} from "./db-cache.js?v=42";
-import { matePattern, stripFastqExt } from "./sample-naming.js?v=42";
+} from "./db-cache.js?v=43";
+import { matePattern, stripFastqExt } from "./sample-naming.js?v=43";
 import {
   resolveAccession, validateAccession, ASSUMED_BPS,
   downloadEstimate, readCountVerdict, expectedProfiledReads,
-} from "./ena.js?v=42";
-import { normaliseMarkers, screenVerdict, SCREENING_DB, SCREENING_MARKERS } from "./screening.js?v=42";
-import { clusterTable, MAX_ROWS as CLUSTER_MAX_ROWS } from "./cluster.js?v=42";
-import { compositionSvg, alphaSvg, pcoaSvg, alphaDiversity } from "./figures.js?v=42";
-import { toMetaphlan, toBiom, toSylphTsv, toSession, fromSession } from "./exports.js?v=42";
+} from "./ena.js?v=43";
+import { normaliseMarkers, screenVerdict, SCREENING_DB, SCREENING_MARKERS } from "./screening.js?v=43";
+import { clusterTable, MAX_ROWS as CLUSTER_MAX_ROWS } from "./cluster.js?v=43";
+import { compositionSvg, alphaSvg, pcoaSvg, alphaDiversity } from "./figures.js?v=43";
+import { toMetaphlan, toBiom, toSylphTsv, toSession, fromSession } from "./exports.js?v=43";
+import { currentMode as themeMode, setMode as setThemeMode, applyTheme,
+  loadSchedule, saveSchedule } from "./theme.js?v=43";
 import {
   fetchCatalog, fallbackCatalog, renderDbSelect, biomeForUrl, biomeNote,
   mgnifyGenomeUrl,
@@ -32,7 +34,7 @@ import {
   makeDbRef, sameDbRef, refLine, refShort, refCommentLines, refSlug, genomeCountMismatch,
   rememberBiome, recallBiome, catalogueName, LOCAL_VALUE,
   selectionMatchesLoaded, notLoadedNote, refMetaMismatch,
-} from "./biomes.js?v=42";
+} from "./biomes.js?v=43";
 
 const $ = (id) => document.getElementById(id);
 const els = {
@@ -1966,6 +1968,86 @@ document.getElementById("stepper")?.addEventListener("click", (e) => {
   const el = document.getElementById(b.dataset.goto);
   if (!el || el.classList.contains("hide")) return;
   el.scrollIntoView({ behavior: "smooth", block: "start" });
+});
+
+// ---- settings ----------------------------------------------------------------
+//
+// The theme, and the four things a browser can actually bound. Deliberately not
+// a "CPU limit" or a "bandwidth limit": neither exists in a page, and a control
+// that claims one and does nothing is worse than no control. Workers ARE the CPU
+// dial, the read cap IS the memory bound, and fewer streams IS the network one.
+const SETTINGS_KEY = "peek-settings";
+const DEFAULT_SETTINGS = { diskGb: 8 };
+let settings = { ...DEFAULT_SETTINGS };
+try { settings = { ...settings, ...JSON.parse(localStorage.getItem(SETTINGS_KEY) || "{}") }; }
+catch { /* private mode */ }
+const saveSettings = () => {
+  try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings)); } catch { /* ignore */ }
+};
+
+async function paintSettings() {
+  const dlg = document.getElementById("settings");
+  if (!dlg) return;
+  const mode = themeMode();
+  for (const r of dlg.querySelectorAll('input[name="thememode"]')) r.checked = r.value === mode;
+  const sched = loadSchedule();
+  dlg.querySelector("#darkFrom").value = sched.from;
+  dlg.querySelector("#darkTo").value = sched.to;
+  dlg.querySelector("#setWorkers").value = String(rpcs.length || Number(els.poolSize?.value) || 2);
+  dlg.querySelector("#setReads").value = fmtGrouped(currentReads());
+  dlg.querySelector("#setDisk").value = String(settings.diskGb);
+  // What is on disk right now, so the cap is set against a number rather than a
+  // guess. Live, because it changes every time a database is loaded.
+  const now = dlg.querySelector("#diskNow");
+  if (now) {
+    try {
+      const { entries } = await dbc.list();
+      const used = entries.reduce((a, e) => a + (e.bytes || 0), 0);
+      now.textContent = `Using ${fmtBytes(used)} across ${entries.length} database${entries.length === 1 ? "" : "s"}.`;
+    } catch { now.textContent = ""; }
+  }
+}
+
+document.getElementById("settingsBtn")?.addEventListener("click", async () => {
+  await paintSettings();
+  document.getElementById("settings")?.showModal();
+});
+
+document.getElementById("settings")?.addEventListener("change", (e) => {
+  const dlg = e.currentTarget;
+  const t = e.target;
+  if (t.name === "thememode") setThemeMode(t.value);
+  if (t.id === "darkFrom" || t.id === "darkTo") {
+    saveSchedule({ from: dlg.querySelector("#darkFrom").value, to: dlg.querySelector("#darkTo").value });
+    if (themeMode() === "schedule") applyTheme("schedule");
+  }
+  if (t.id === "setWorkers" && els.poolSize) {
+    els.poolSize.value = String(Math.max(1, Math.min(8, Number(t.value) || 1)));
+    els.poolSize.dispatchEvent(new Event("change"));
+  }
+  if (t.id === "setReads" && els.maxReads) {
+    els.maxReads.value = t.value;
+    els.maxReads.dispatchEvent(new Event("change", { bubbles: true }));
+  }
+  if (t.id === "setDisk") {
+    settings.diskGb = Math.max(0, Number(t.value) || 0);
+    saveSettings();
+  }
+});
+
+document.getElementById("settingsPurge")?.addEventListener("click", async () => {
+  const btn = document.getElementById("settingsPurge");
+  btn.disabled = true;
+  try {
+    const { entries } = await dbc.list();
+    for (const e of entries) await dbc.remove(e.key ?? e.url);
+    await paintSettings();
+    await renderCacheInfo();
+  } catch (err) {
+    showError(`Could not clear the cache: ${err?.message ?? err}`);
+  } finally {
+    btn.disabled = false;
+  }
 });
 
 // ---- resource monitor --------------------------------------------------------

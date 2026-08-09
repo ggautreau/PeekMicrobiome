@@ -5,13 +5,21 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>PeekMicrobiome — upload-free, installation-free metagenomic profiling across biomes</title>
   <link rel="icon" type="image/svg+xml" href="./favicon.svg">
-  <link rel="stylesheet" href="./styles.css?v=42">
+  <link rel="stylesheet" href="./styles.css?v=43">
   <script>
     (function () {
       try {
         var t = localStorage.getItem("sylph-theme") || "light";
         if (t === "auto") {
           t = matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+        } else if (t === "schedule") {
+          var s = JSON.parse(localStorage.getItem("sylph-theme-schedule") || "null")
+                  || { from: "20:00", to: "07:00" };
+          var mm = function (x) { var p = String(x).split(":"); return (+p[0] || 0) * 60 + (+p[1] || 0); };
+          var d = new Date(), now = d.getHours() * 60 + d.getMinutes();
+          var a = mm(s.from), b = mm(s.to);
+          // Windows that cross midnight are the normal case for this.
+          t = (a <= b ? (now >= a && now < b) : (now >= a || now < b)) ? "dark" : "light";
         }
         if (t !== "light" && t !== "dark") t = "light";
         document.documentElement.setAttribute("data-theme", t);
@@ -47,6 +55,9 @@
       </div>
     </a>
     <nav class="app-nav">
+      <button class="theme-toggle" id="settingsBtn" type="button" title="Settings — theme, and the limits this page works within" aria-label="Settings" style="margin-left:0">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9v0a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+      </button>
       <button class="theme-toggle" type="button" aria-label="Toggle theme">
         <svg class="icon-moon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
         <svg class="icon-sun" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg>
@@ -370,6 +381,52 @@
     </div>
   </aside>
 
+  <!-- Settings. A <dialog> so the browser handles focus trapping, Escape and the
+       backdrop — three things that are easy to get subtly wrong by hand and that
+       a keyboard user notices immediately. -->
+  <dialog id="settings" class="settings">
+    <form method="dialog" class="settings-form">
+      <h2>Settings</h2>
+
+      <fieldset>
+        <legend>Theme</legend>
+        <label><input type="radio" name="thememode" value="light"> <span><b>Light</b> — always the light palette.</span></label>
+        <label><input type="radio" name="thememode" value="dark"> <span><b>Dark</b> — always the dark palette.</span></label>
+        <label><input type="radio" name="thememode" value="auto"> <span><b>Auto (follow OS)</b> — match your system, and change with it while the page is open.</span></label>
+        <label><input type="radio" name="thememode" value="schedule"> <span><b>Auto (schedule)</b> — dark inside the window below.</span></label>
+        <div class="settings-sub">
+          <label>from <input type="time" id="darkFrom" value="20:00"></label>
+          <label>to <input type="time" id="darkTo" value="07:00"></label>
+          <span class="info">A window that crosses midnight is fine — that is the usual one.</span>
+        </div>
+      </fieldset>
+
+      <fieldset>
+        <legend>What this page is allowed to use</legend>
+        <!-- Only the things a browser can actually bound. Saying "limit CPU" and
+             then not doing it would be worse than not offering it. -->
+        <label class="settings-row">Workers
+          <input type="number" id="setWorkers" min="1" max="8" step="1">
+          <span class="info">One CPU core each while profiling. Fewer leaves the machine usable; more finishes sooner.</span>
+        </label>
+        <label class="settings-row">Reads per sample
+          <input type="text" id="setReads" inputmode="numeric">
+          <span class="info">The memory bound. The sketch grows with the reads it is given, and going past what the browser can hold ends the run outright.</span>
+        </label>
+        <label class="settings-row">Keep at most
+          <input type="number" id="setDisk" min="0" step="1">
+          <span class="info">GB of reference databases cached on this computer. <span id="diskNow"></span></span>
+        </label>
+        <p class="info settings-note">There is no separate network control, because there is nothing separate to control: each worker downloads the sample it is profiling, so <em>workers</em> is also the number of simultaneous streams. A page cannot cap a transfer rate, and a dial that pretended to would be worse than none.</p>
+      </fieldset>
+
+      <div class="settings-actions">
+        <button id="settingsPurge" type="button">Delete cached databases</button>
+        <button value="close" class="primary">Done</button>
+      </div>
+    </form>
+  </dialog>
+
   <footer class="app-footer">
     <span>Built on <a href="https://github.com/bluenote-1577/sylph">sylph</a> · 19 <a href="https://www.ebi.ac.uk/metagenomics/browse/genomes">MGnify</a> genome catalogues · WebAssembly</span>
     <span class="footer-links">
@@ -379,7 +436,7 @@
     <span class="credit">Created using Claude Opus 5, prompted by G. Gautreau — <a href="https://maiage.inrae.fr/">MaIAGE unit (UR 1404, Mathématiques et Informatique Appliquées du Génome à l'Environnement)</a>, INRAE.</span>
   </footer>
 
-  <script src="./theme.js"></script>
-  <script type="module" src="./multi.js?v=42"></script>
+  <script type="module" src="./theme.js?v=43"></script>
+  <script type="module" src="./multi.js?v=43"></script>
 </body>
 </html>
