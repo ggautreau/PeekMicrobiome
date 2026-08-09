@@ -108,7 +108,9 @@
 // v33: one ring for every wait — screening, the database download and the decode
 // all use the mark the sample rows already had, instead of a trailing "…". Also
 // drops the dead "Choose X above" button, which wrote into a hidden <select>.
-export const WORKER_VERSION = "33";
+// v34: a sticky step strip at the top of the page says which of the three steps
+// is done, which can be acted on, and what to do about the one that cannot.
+export const WORKER_VERSION = "34";
 
 // ---- memory64 capability probe ----------------------------------------------
 

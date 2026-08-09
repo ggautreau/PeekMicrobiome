@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>PeekMicrobiome — upload-free, installation-free metagenomic profiling across biomes</title>
   <link rel="icon" type="image/svg+xml" href="./favicon.svg">
-  <link rel="stylesheet" href="./styles.css?v=33">
+  <link rel="stylesheet" href="./styles.css?v=34">
   <script>
     (function () {
       try {
@@ -55,6 +55,26 @@
   </header>
 
   <main class="container wide">
+    <!-- Where you are, and what is missing, visible however far down the page you
+         have scrolled. The numbered pills on the cards already carried this, but
+         they scroll away — and "why is Profile all grey" is asked from the
+         bottom of the page, where none of them is on screen. Filled entirely by
+         refreshSteps(); the markup here is the empty shape. -->
+    <nav class="stepper" id="stepper" aria-label="Progress">
+      <button class="stepper-item" data-goto="cardDb" type="button">
+        <span class="stepper-mark">1</span>
+        <span class="stepper-text"><b>Reference database</b><span class="stepper-state" id="stState0">not loaded</span></span>
+      </button>
+      <button class="stepper-item" data-goto="cardSamples" type="button">
+        <span class="stepper-mark">2</span>
+        <span class="stepper-text"><b>Samples</b><span class="stepper-state" id="stState1">none yet</span></span>
+      </button>
+      <button class="stepper-item" data-goto="results" type="button">
+        <span class="stepper-mark">3</span>
+        <span class="stepper-text"><b>Results</b><span class="stepper-state" id="stState2">—</span></span>
+      </button>
+    </nav>
+
     <div class="page-head">
       <h1>Easy multi-sample metagenomic profiler</h1>
       <p class="sub">Drop FASTQs, or paste an ENA accession — each sample is profiled against one MGnify biome catalogue, locally in your browser, and the results are assembled into a relative-abundance matrix. If you do not know the biome, the page can work it out from one sample.</p>
@@ -262,6 +282,6 @@
   </footer>
 
   <script src="./theme.js"></script>
-  <script type="module" src="./multi.js?v=33"></script>
+  <script type="module" src="./multi.js?v=34"></script>
 </body>
 </html>

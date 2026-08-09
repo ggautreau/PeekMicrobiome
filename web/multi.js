@@ -12,16 +12,16 @@ import {
   sylphWorkerRpc, detectMemory64, chooseWasmBits, WORKER_VERSION,
   readsBudget, readsBudgetNote, readsOverBudgetNote, loadedBuildNote, fmtReads,
   progressFraction, basesForReads, BUDGET_READ_BP,
-} from "./sylph-worker-rpc.js?v=33";
+} from "./sylph-worker-rpc.js?v=34";
 import {
   dbCacheClient, fmtRate, fmtEta, cacheSummary, assertSameDatabase,
-} from "./db-cache.js?v=33";
-import { matePattern, stripFastqExt } from "./sample-naming.js?v=33";
+} from "./db-cache.js?v=34";
+import { matePattern, stripFastqExt } from "./sample-naming.js?v=34";
 import {
   resolveAccession, validateAccession, ASSUMED_BPS,
   downloadEstimate, readCountVerdict, expectedProfiledReads,
-} from "./ena.js?v=33";
-import { normaliseMarkers, screenVerdict, SCREENING_DB, SCREENING_MARKERS } from "./screening.js?v=33";
+} from "./ena.js?v=34";
+import { normaliseMarkers, screenVerdict, SCREENING_DB, SCREENING_MARKERS } from "./screening.js?v=34";
 import {
   fetchCatalog, fallbackCatalog, renderDbSelect, biomeForUrl, biomeNote,
   mgnifyGenomeUrl,
@@ -29,7 +29,7 @@ import {
   makeDbRef, sameDbRef, refLine, refShort, refCommentLines, refSlug, genomeCountMismatch,
   rememberBiome, recallBiome, catalogueName, LOCAL_VALUE,
   selectionMatchesLoaded, notLoadedNote, refMetaMismatch,
-} from "./biomes.js?v=33";
+} from "./biomes.js?v=34";
 
 const $ = (id) => document.getElementById(id);
 const els = {
@@ -1897,7 +1897,57 @@ function refreshSteps() {
     const now = !done[i] && (i < 2 ? true : done[0] && done[1]);
     card.classList.toggle("step-now", now && i < 2);
   });
+
+  // The same three states, said in words, in a strip that does not scroll away.
+  // Each line answers "what is there now", and where nothing is there yet, "what
+  // to do" — because a step that only says "none yet" tells the user they are
+  // stuck without telling them how to stop being stuck.
+  const running = files.some((f) => f.status === "running");
+  const okN = files.filter((f) => f.status === "done").length;
+  const badN = files.filter((f) => ["failed", "empty", "incomplete"].includes(f.status)).length;
+  const state = [
+    dbMeta
+      ? `${currentRef?.label ?? "loaded"} · ${fmtCountish(dbMeta.database_size)} genomes`
+      : (autoMode() ? "screen a sample to pick one" : "pick a biome and load it"),
+    files.length
+      ? `${files.length} sample${files.length === 1 ? "" : "s"}` +
+        (running ? ` · ${files.filter((f) => f.status === "running").length} running` : "")
+      : "drop FASTQs, or paste an ENA accession",
+    // A run in flight outranks both — "ready, press Profile all" while it is
+    // already running is the one line that could send someone to press it twice.
+    running
+      ? `profiling — ${okN} of ${files.length} done`
+      : lastMatrix
+        ? `${lastMatrix.rows.length} species × ${lastMatrix.samples.length} samples` +
+          (badN ? ` · ${badN} need a look` : "")
+        : (done[0] && done[1] ? "ready — press Profile all" : "waiting for the two steps above"),
+  ];
+  for (let i = 0; i < 3; i++) {
+    const el = document.getElementById(`stState${i}`);
+    if (el) el.textContent = state[i];
+    const item = document.querySelector(`.stepper-item[data-goto="${["cardDb", "cardSamples", "results"][i]}"]`);
+    if (!item) continue;
+    item.classList.toggle("is-done", done[i]);
+    // "now" is what the user can act on: both of the first two until each is
+    // met, and the third only once they are.
+    const now = i < 2 ? !done[i] : (done[0] && done[1] && !done[2]);
+    item.classList.toggle("is-now", now);
+    item.classList.toggle("is-running", i === 1 && running);
+  }
 }
+
+// Genome counts are the one figure here that is always a plain integer.
+const fmtCountish = (n) => (Number.isFinite(Number(n)) ? Number(n).toLocaleString("en-US") : "?");
+
+// The strip is a set of jump links: seeing that step 1 is unmet is only half the
+// answer if reaching it means hunting for the card.
+document.getElementById("stepper")?.addEventListener("click", (e) => {
+  const b = e.target.closest(".stepper-item");
+  if (!b) return;
+  const el = document.getElementById(b.dataset.goto);
+  if (!el || el.classList.contains("hide")) return;
+  el.scrollIntoView({ behavior: "smooth", block: "start" });
+});
 
 // ---- run all -----------------------------------------------------------------
 

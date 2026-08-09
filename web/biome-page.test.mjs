@@ -217,6 +217,34 @@ try {
     /Add a sample below first/.test(m1.hint), m1.hint.slice(0, 60));
   await cdp.eval(`document.getElementById("modeManual").click()`);
 
+  // ---- 0. the step strip says where you are ----------------------------------
+  // The numbered pills on the cards said this already, but they scroll away —
+  // and "why is Profile all grey" is asked from the bottom of the page, where
+  // none of them is on screen. This strip is sticky, so it must be right in
+  // EVERY state, not only the empty one.
+  const strip0 = await cdp.eval(`(() => {
+    const items = [...document.querySelectorAll(".stepper-item")];
+    return {
+      n: items.length,
+      sticky: getComputedStyle(document.getElementById("stepper")).position,
+      states: items.map(i => i.querySelector(".stepper-state").textContent),
+      now: items.map(i => i.classList.contains("is-now")),
+      done: items.map(i => i.classList.contains("is-done")),
+    };
+  })()`);
+  check("the step strip has one entry per step", strip0.n === 3, `${strip0.n}`);
+  check("...and stays on screen while the page scrolls", strip0.sticky === "sticky", strip0.sticky);
+  // On an empty page nothing is done, and the two steps that CAN be acted on say
+  // what to do rather than merely that they are empty.
+  check("...nothing is ticked before anything is loaded",
+    strip0.done.every((d) => !d), JSON.stringify(strip0.done));
+  check("...the first two steps are offered, the third is not",
+    strip0.now[0] && strip0.now[1] && !strip0.now[2], JSON.stringify(strip0.now));
+  check("...and an unmet step says what to do, not just that it is empty",
+    /pick a biome|screen a sample/.test(strip0.states[0])
+    && /drop FASTQs|ENA/.test(strip0.states[1]),
+    strip0.states.join(" | "));
+
   // ---- 0a. no disabled control refuses in silence ----------------------------
   // A greyed-out button under a not-allowed cursor states a refusal and offers
   // no way out of it. The property is not "these three buttons have a title" —

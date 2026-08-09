@@ -9,15 +9,15 @@
 import {
   sylphWorkerRpc, detectMemory64, chooseWasmBits, WORKER_VERSION,
   readsBudget, readsBudgetNote, readsOverBudgetNote, loadedBuildNote, fmtReads,
-} from "./sylph-worker-rpc.js?v=33";
-import { dbCacheClient, fmtRate, fmtEta, cacheSummary } from "./db-cache.js?v=33";
+} from "./sylph-worker-rpc.js?v=34";
+import { dbCacheClient, fmtRate, fmtEta, cacheSummary } from "./db-cache.js?v=34";
 import {
   fetchCatalog, fallbackCatalog, renderDbSelect, biomeForUrl, biomeNote,
   mgnifyGenomeUrl,
   makeDbRef, refLine, refShort, genomeCountMismatch, rememberBiome, recallBiome,
   catalogueName, LOCAL_VALUE,
   selectionMatchesLoaded, notLoadedNote, refMetaMismatch,
-} from "./biomes.js?v=33";
+} from "./biomes.js?v=34";
 
 const $ = (id) => document.getElementById(id);
 const els = {
