@@ -9,15 +9,15 @@
 import {
   sylphWorkerRpc, detectMemory64, chooseWasmBits, WORKER_VERSION,
   readsBudget, readsBudgetNote, readsOverBudgetNote, loadedBuildNote, fmtReads,
-} from "./sylph-worker-rpc.js?v=30";
-import { dbCacheClient, fmtRate, fmtEta, cacheSummary } from "./db-cache.js?v=30";
+} from "./sylph-worker-rpc.js?v=31";
+import { dbCacheClient, fmtRate, fmtEta, cacheSummary } from "./db-cache.js?v=31";
 import {
   fetchCatalog, fallbackCatalog, renderDbSelect, biomeForUrl, biomeNote,
   mgnifyGenomeUrl,
   makeDbRef, refLine, refShort, genomeCountMismatch, rememberBiome, recallBiome,
   catalogueName, LOCAL_VALUE,
   selectionMatchesLoaded, notLoadedNote, refMetaMismatch,
-} from "./biomes.js?v=30";
+} from "./biomes.js?v=31";
 
 const $ = (id) => document.getElementById(id);
 const els = {
@@ -86,6 +86,25 @@ let selectedFile = null;
 let rpc = null;
 let dbMeta = null;
 let lineage = {};
+// Species names carried by more than one genome of the loaded database — GTDB
+// reuses them, and the rank fallbacks add more. speciesLabel() appends the
+// accession to those, so no two rows of an export share a label.
+let ambiguousNames = new Set();
+
+function sharedNames(map) {
+  const seen = new Map();
+  for (const name of Object.values(map ?? {})) seen.set(name, (seen.get(name) ?? 0) + 1);
+  const out = new Set();
+  for (const [name, n] of seen) if (n > 1) out.add(name);
+  return out;
+}
+
+function speciesLabel(genome) {
+  const name = lineage[genome] ?? lineage[genome.replace(/\.gz$/i, "")];
+  if (!name) return `(${genome})`;
+  if (!ambiguousNames.has(name)) return name;
+  return `${name} [${String(genome).replace(/\.(fna|fa|fasta)(\.gz)?$/i, "")}]`;
+}
 let wasmReady = false;
 let wasmInfo = null;      // { bits, capped, memory64, reason, pkg } from the worker
 let workerBits = null;    // bits the live worker was booted with
@@ -395,11 +414,11 @@ async function loadDatabase() {
     // nothing about soil ones. Loaded only when the entry declares one, and
     // cleared otherwise, so the previous biome's names can never be pinned onto
     // this one's genomes. With no map the table shows genome accessions.
-    lineage = {};
+    lineage = {}; ambiguousNames = new Set();
     if (biome?.lineage) {
       try {
         const lineageResp = await fetch(`./${biome.lineage}`);
-        if (lineageResp.ok) lineage = await lineageResp.json();
+        if (lineageResp.ok) { lineage = await lineageResp.json(); ambiguousNames = sharedNames(lineage); }
       } catch { /* leave lineage empty: genome accessions instead of names */ }
     }
 
@@ -428,7 +447,7 @@ async function loadDatabase() {
       dbMeta = null;
       currentRef = null;
       lastDbLoad = null;
-      lineage = {};
+      lineage = {}; ambiguousNames = new Set(); ambiguousNames = new Set();
       els.run.disabled = true;
       els.results.classList.add("hide");
       els.dbInfo.textContent =
@@ -694,8 +713,9 @@ function renderResults(tsv) {
     const gname = (r[cols.genomeFile] || "").split("/").pop();
     // Same two conventions as multi.js: the eighteen biome databases report
     // "MGYG….fna.gz", the older human-gut one "MGYG….fna", and the maps hold
-    // the un-gzipped form.
-    const species = lineage[gname] ?? lineage[gname.replace(/\.gz$/i, "")] ?? `(${gname})`;
+    // the un-gzipped form. speciesLabel() also disambiguates the names GTDB
+    // gives to more than one genome, so no two rows share a label.
+    const species = speciesLabel(gname);
     const mgnify = mgnifyGenomeUrl(gname);
     return `
       <tr>

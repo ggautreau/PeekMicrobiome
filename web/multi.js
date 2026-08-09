@@ -12,16 +12,16 @@ import {
   sylphWorkerRpc, detectMemory64, chooseWasmBits, WORKER_VERSION,
   readsBudget, readsBudgetNote, readsOverBudgetNote, loadedBuildNote, fmtReads,
   progressFraction, basesForReads, BUDGET_READ_BP,
-} from "./sylph-worker-rpc.js?v=30";
+} from "./sylph-worker-rpc.js?v=31";
 import {
   dbCacheClient, fmtRate, fmtEta, cacheSummary, assertSameDatabase,
-} from "./db-cache.js?v=30";
-import { matePattern, stripFastqExt } from "./sample-naming.js?v=30";
+} from "./db-cache.js?v=31";
+import { matePattern, stripFastqExt } from "./sample-naming.js?v=31";
 import {
   resolveAccession, validateAccession, ASSUMED_BPS,
   downloadEstimate, readCountVerdict, expectedProfiledReads,
-} from "./ena.js?v=30";
-import { normaliseMarkers, screenVerdict, SCREENING_DB, SCREENING_MARKERS } from "./screening.js?v=30";
+} from "./ena.js?v=31";
+import { normaliseMarkers, screenVerdict, SCREENING_DB, SCREENING_MARKERS } from "./screening.js?v=31";
 import {
   fetchCatalog, fallbackCatalog, renderDbSelect, biomeForUrl, biomeNote,
   mgnifyGenomeUrl,
@@ -29,7 +29,7 @@ import {
   makeDbRef, sameDbRef, refLine, refShort, refCommentLines, refSlug, genomeCountMismatch,
   rememberBiome, recallBiome, catalogueName, LOCAL_VALUE,
   selectionMatchesLoaded, notLoadedNote, refMetaMismatch,
-} from "./biomes.js?v=30";
+} from "./biomes.js?v=31";
 
 const $ = (id) => document.getElementById(id);
 const els = {
@@ -90,6 +90,9 @@ let files = [];
 let rpcs = [];                // filled by ensurePool(); loadDatabase resizes & inits
 let dbMeta = null;            // { database_size, k, c, bytes } once loaded
 let lineage = {};             // {genome_file: "Species name"}
+// Species names that more than one genome in the loaded database carries. See
+// speciesLabel(): those rows get the accession appended so the label is unique.
+let ambiguousNames = new Set();
 let runManifest = {};         // {filename: {sample, layout, mate?}} — optional
 let wasmReady = false;        // at least the first worker's wasm is initialized
 // Set once, if the boot fails. Checked by loadDatabase() and by runAll(): both
@@ -935,11 +938,11 @@ async function loadDatabase() {
     // the entry declares one; otherwise cleared, so the previous biome's names
     // cannot be pinned onto this one's genomes. Without a map the matrix shows
     // the genome accession, which is right rather than merely blank.
-    lineage = {};
+    lineage = {}; ambiguousNames = new Set();
     if (biome?.lineage) {
       try {
         const lineageResp = await fetch(`./${biome.lineage}`);
-        if (lineageResp.ok) lineage = await lineageResp.json();
+        if (lineageResp.ok) { lineage = await lineageResp.json(); ambiguousNames = sharedNames(lineage); }
       } catch { /* leave lineage empty: genome accessions instead of names */ }
     }
 
@@ -968,7 +971,7 @@ async function loadDatabase() {
       dbMeta = null;
       currentRef = null;
       lastDbLoad = null;
-      lineage = {};
+      lineage = {}; ambiguousNames = new Set();
       els.dbInfo.textContent =
         "No database is loaded. The load failed part-way through, and a pool where some " +
         "workers hold the new database and some hold nothing would profile different samples " +
@@ -2161,7 +2164,7 @@ function parseTsv(tsv) {
     const genome = (f[cGenome] || "").split("/").pop();
     return {
       genome,
-      species: lineage[genome] ?? lineage[genome.replace(/\.gz$/i, "")] ?? `(${genome})`,
+      species: speciesLabel(genome),
       relAbund: Number(f[cAbund]) || 0,
       ani: Number(f[cAni]) || 0,
       cov: Number(f[cCov]) || 0,
@@ -2171,6 +2174,40 @@ function parseTsv(tsv) {
 
 // `refBySample` is what each column was ACTUALLY profiled against, which is
 // not necessarily `ref`: see the note where s.ref is set.
+// GTDB gives the same species name to more than one representative genome —
+// "Collinsella sp002232035" is 20 of them in human-gut — and the rank fallbacks
+// make it worse: 226 genomes with no species name at all are all "Collinsella
+// sp.". A matrix keyed on the name alone therefore has duplicate rows, which
+// downstream tools reject outright (CroCoDeEL: "Each species must appear exactly
+// once — aggregate the rows and reload").
+//
+// Aggregating would be WRONG here. Those 226 are distinct unnamed species of the
+// genus, not one species seen 226 times; summing them would invent an abundance
+// for an organism that does not exist. So the accession is appended instead —
+// the row stays one genome, and the label becomes unique.
+//
+// Decided from the LINEAGE MAP, not from the matrix: which names are ambiguous
+// is a property of the reference database, so the same genome gets the same
+// label in every export, whatever else the run contained.
+function sharedNames(map) {
+  const seen = new Map();
+  for (const name of Object.values(map ?? {})) seen.set(name, (seen.get(name) ?? 0) + 1);
+  const out = new Set();
+  for (const [name, n] of seen) if (n > 1) out.add(name);
+  return out;
+}
+
+// The eighteen biome databases report "MGYG….fna.gz", the older human-gut one
+// "MGYG….fna", and the maps hold the un-gzipped form.
+function speciesLabel(genome) {
+  const name = lineage[genome] ?? lineage[genome.replace(/\.gz$/i, "")];
+  if (!name) return `(${genome})`;
+  if (!ambiguousNames.has(name)) return name;
+  // Accession only — the extension is noise and differs between catalogues.
+  const acc = String(genome).replace(/\.(fna|fa|fasta)(\.gz)?$/i, "");
+  return `${name} [${acc}]`;
+}
+
 function matrixToTable(matrix, sampleOrder, ref, refBySample = new Map()) {
   const rows = Object.entries(matrix).map(([genome, m]) => {
     const values = sampleOrder.map(s => m[s] ?? 0);

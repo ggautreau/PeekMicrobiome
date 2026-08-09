@@ -1161,6 +1161,60 @@ const catalogEntries = biomes.allBiomes(catalog);
   }
 }
 
+console.log("== every row of an exported matrix is a distinct label ==");
+{
+  // CroCoDeEL, phyloseq and every other consumer key on the species column and
+  // reject a repeated one: "Each species must appear exactly once — aggregate
+  // the rows and reload." Two things make names repeat, and only one of them is
+  // GTDB's fault:
+  //   - GTDB gives one name to several representatives ("Collinsella
+  //     sp002232035" is 20 genomes in human-gut);
+  //   - the rank fallbacks give "Collinsella sp." to all 226 human-gut genomes
+  //     that have no species name at all.
+  // AGGREGATING would be wrong: those 226 are distinct unnamed species, not one
+  // species seen 226 times, and summing them invents an organism.
+  const shared = (m) => {
+    const c = new Map();
+    for (const v of Object.values(m)) c.set(v, (c.get(v) ?? 0) + 1);
+    return new Set([...c].filter(([, n]) => n > 1).map(([k]) => k));
+  };
+  const label = (lin, amb, g) => {
+    const n = lin[g] ?? lin[g.replace(/\.gz$/i, "")];
+    if (!n) return `(${g})`;
+    return amb.has(n) ? `${n} [${g.replace(/\.(fna|fa|fasta)(\.gz)?$/i, "")}]` : n;
+  };
+  let worstDup = 0, checked = 0;
+  for (const b of biomes.allBiomes(catalog)) {
+    if (!b.lineage) continue;
+    let lin;
+    try { lin = JSON.parse(readFileSync(here + b.lineage, "utf8")); } catch { continue; }
+    const amb = shared(lin);
+    const labels = Object.keys(lin).map((g) => label(lin, amb, g));
+    const dups = labels.length - new Set(labels).size;
+    if (dups > worstDup) worstDup = dups;
+    checked++;
+  }
+  check("no reference database can produce two rows with the same label",
+    checked > 0 && worstDup === 0, `${checked} databases, worst duplicate count ${worstDup}`);
+
+  // The suffix must appear ONLY where it is needed — otherwise every ordinary
+  // species name gets uglier for nothing.
+  const gut = JSON.parse(readFileSync(here + "db/lineage/human-gut.json", "utf8"));
+  const ambGut = shared(gut);
+  check("...an unambiguous name is left alone",
+    label(gut, ambGut, "MGYG000000002.fna") === "Blautia_A faecis",
+    label(gut, ambGut, "MGYG000000002.fna"));
+  check("...and the two Faecalibacterium prausnitzii_C rows become distinct",
+    label(gut, ambGut, "MGYG000000022.fna") !== label(gut, ambGut, "MGYG000004679.fna")
+    && label(gut, ambGut, "MGYG000000022.fna").startsWith("Faecalibacterium prausnitzii_C ["),
+    label(gut, ambGut, "MGYG000000022.fna"));
+  // Decided from the database, not from the matrix: the same genome must get the
+  // same label whatever else a particular run contained.
+  check("...and the label depends on the database alone, so exports agree",
+    label(gut, ambGut, "MGYG000001935.fna") === "Collinsella sp. [MGYG000001935]",
+    label(gut, ambGut, "MGYG000001935.fna"));
+}
+
 console.log("== species names and MGnify links ==");
 {
   // The bug this closes: profiling against any catalogue but human-gut returned
@@ -1469,7 +1523,13 @@ console.log("== the pages carry the reference through ==");
       /genomeCountMismatch\(currentRef\)/.test(src) && /if \(mismatch\)/.test(src)
       && /showError\(/.test(src));
     check(`${name} fetches the lineage map only for a catalogue that has one`,
-      /lineage = \{\};\s*\n\s*if \(biome\?\.lineage\)/.test(src));
+      /lineage = \{\};[^\n]*\n\s*if \(biome\?\.lineage\)/.test(src));
+    // The set of ambiguous names belongs to the loaded database. Clearing the
+    // map without clearing it would label a soil genome using the gut
+    // database's collisions — and only for the names that happened to overlap,
+    // which is the kind of wrongness nobody notices.
+    check(`${name} clears the ambiguous-name set with the map it came from`,
+      !/(?<!let )lineage = \{\};(?![^\n]*ambiguousNames)/.test(src));
     check(`${name} names cached databases by biome, not by file name`,
       /function cacheEntryName/.test(src) && /escapeHTML\(cacheEntryName\(e\)\)/.test(src));
     check(`${name} marks the cached entry the picker is on`,

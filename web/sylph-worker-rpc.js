@@ -99,7 +99,10 @@
 // v30: the read cap can be applied in BASES, which is the only bound that means
 // anything on long reads. The worker takes a maxBases argument; a page on v29
 // would send none and a nanopore run would keep reading past the budget.
-export const WORKER_VERSION = "30";
+// v31: no two rows of an exported matrix share a label. GTDB reuses species
+// names across representatives, and the rank fallbacks added more — downstream
+// tools reject the duplicates outright.
+export const WORKER_VERSION = "31";
 
 // ---- memory64 capability probe ----------------------------------------------
 
