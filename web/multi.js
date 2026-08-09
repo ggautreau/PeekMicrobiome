@@ -12,21 +12,21 @@ import {
   sylphWorkerRpc, detectMemory64, chooseWasmBits, WORKER_VERSION,
   readsBudget, readsBudgetNote, readsOverBudgetNote, loadedBuildNote, fmtReads,
   progressFraction, basesForReads, BUDGET_READ_BP,
-} from "./sylph-worker-rpc.js?v=44";
+} from "./sylph-worker-rpc.js?v=45";
 import {
   dbCacheClient, fmtRate, fmtEta, cacheSummary, assertSameDatabase,
-} from "./db-cache.js?v=44";
-import { matePattern, stripFastqExt } from "./sample-naming.js?v=44";
+} from "./db-cache.js?v=45";
+import { matePattern, stripFastqExt } from "./sample-naming.js?v=45";
 import {
   resolveAccession, validateAccession, ASSUMED_BPS,
   downloadEstimate, readCountVerdict, expectedProfiledReads,
-} from "./ena.js?v=44";
-import { normaliseMarkers, screenVerdict, SCREENING_DB, SCREENING_MARKERS } from "./screening.js?v=44";
-import { clusterTable, MAX_ROWS as CLUSTER_MAX_ROWS } from "./cluster.js?v=44";
-import { compositionSvg, alphaSvg, pcoaSvg, alphaDiversity } from "./figures.js?v=44";
-import { toMetaphlan, toBiom, toSylphTsv, toSession, fromSession } from "./exports.js?v=44";
+} from "./ena.js?v=45";
+import { normaliseMarkers, screenVerdict, SCREENING_DB, SCREENING_MARKERS } from "./screening.js?v=45";
+import { clusterTable, MAX_ROWS as CLUSTER_MAX_ROWS } from "./cluster.js?v=45";
+import { compositionSvg, alphaSvg, pcoaSvg, alphaDiversity } from "./figures.js?v=45";
+import { toMetaphlan, toBiom, toSylphTsv, toSession, fromSession } from "./exports.js?v=45";
 import { currentMode as themeMode, setMode as setThemeMode, applyTheme,
-  loadSchedule, saveSchedule } from "./theme.js?v=44";
+  loadSchedule, saveSchedule } from "./theme.js?v=45";
 import {
   fetchCatalog, fallbackCatalog, renderDbSelect, biomeForUrl, biomeNote,
   mgnifyGenomeUrl,
@@ -34,7 +34,7 @@ import {
   makeDbRef, sameDbRef, refLine, refShort, refCommentLines, refSlug, genomeCountMismatch,
   rememberBiome, recallBiome, catalogueName, LOCAL_VALUE,
   selectionMatchesLoaded, notLoadedNote, refMetaMismatch,
-} from "./biomes.js?v=44";
+} from "./biomes.js?v=45";
 
 const $ = (id) => document.getElementById(id);
 const els = {
@@ -2018,16 +2018,45 @@ async function paintSettings() {
 // What this browser actually offers on the path "Load database" takes. Every
 // line is a real feature test, not a user-agent guess: the point is to tell a
 // Firefox that works from one that does not, and the UA string says neither.
+// Ask a throwaway worker whether an OPFS write primitive is there. Classic
+// worker, not a module one: this needs no imports, and a module worker from a
+// blob URL is one more thing that can fail while answering "what can fail".
+function workerHas(method) {
+  return new Promise((resolve) => {
+    let w;
+    const done = (v) => { try { w?.terminate(); } catch { /* gone */ } resolve(v); };
+    const timer = setTimeout(() => done("no answer"), 4000);
+    try {
+      const src = `self.onmessage = async () => {
+        try {
+          const root = await navigator.storage.getDirectory();
+          const f = await root.getFileHandle("diagprobe", { create: true });
+          const ok = typeof f[${JSON.stringify(method)}] === "function";
+          await root.removeEntry("diagprobe").catch(() => {});
+          self.postMessage(ok ? "yes" : "NO");
+        } catch (e) { self.postMessage("NO — " + (e.name || e.message)); }
+      };`;
+      w = new Worker(URL.createObjectURL(new Blob([src], { type: "text/javascript" })));
+      w.onmessage = (e) => { clearTimeout(timer); done(e.data); };
+      w.onerror = () => { clearTimeout(timer); done("worker failed to start"); };
+      w.postMessage(1);
+    } catch (e) { clearTimeout(timer); done(`could not start a worker: ${e?.message ?? e}`); }
+  });
+}
+
 async function diagnostics() {
   const has = (v) => (v ? "yes" : "NO");
   const out = [
     ["userAgent", navigator.userAgent],
     ["secure context", has(window.isSecureContext)],
     ["OPFS (storage.getDirectory)", has(typeof navigator.storage?.getDirectory === "function")],
-    ["createSyncAccessHandle", has(typeof FileSystemFileHandle !== "undefined"
-      && typeof FileSystemFileHandle.prototype?.createSyncAccessHandle === "function")],
-    ["createWritable", has(typeof FileSystemFileHandle !== "undefined"
-      && typeof FileSystemFileHandle.prototype?.createWritable === "function")],
+    // Tested INSIDE a worker, which is the only place either exists and the only
+    // place db-cache runs. Probed from the page they read `undefined` on every
+    // browser — Chrome included — so the first version of this panel reported
+    // "NO" on a machine where the feature works, which is worse than reporting
+    // nothing: it points the next bug report at the wrong thing.
+    ["createSyncAccessHandle (in worker)", await workerHas("createSyncAccessHandle")],
+    ["createWritable (in worker)", await workerHas("createWritable")],
     ["Web Locks", has(typeof navigator.locks?.request === "function")],
     ["module workers", has(true)],   // this file is one; if it were not, nothing would run
     ["WebAssembly.validate", has(typeof WebAssembly?.validate === "function")],

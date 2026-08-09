@@ -131,7 +131,7 @@
 // satisfied, including while a run was still chewing through it.
 // v43: a Settings dialog — theme in four modes, and the three limits a browser
 // can actually enforce. theme.js became a module and gained schedule support.
-export const WORKER_VERSION = "44";
+export const WORKER_VERSION = "45";
 
 // ---- memory64 capability probe ----------------------------------------------
 
