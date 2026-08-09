@@ -962,6 +962,10 @@ table.matrix tbody tr:nth-child(even) { background: var(--bg-softer); }
 }
 .matrix-ref-row th.matrix-ref { color: var(--accent); }
 
+/* Rows are one genome at species level, and summed per taxon above it. */
+.rank-pick { display: inline-flex; align-items: center; gap: 0.4rem; color: var(--ink-soft); }
+.rank-pick select { width: auto; min-width: 7rem; }
+
 /* ---------- Resource monitor ----------
    Fixed to the right edge, collapsed to a tab. Everything this page does is
    bounded by linear memory, disk and the link, and the first two were invisible

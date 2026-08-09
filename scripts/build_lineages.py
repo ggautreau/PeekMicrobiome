@@ -47,6 +47,10 @@ FTP = "https://ftp.ebi.ac.uk/pub/databases/metagenomics/mgnify_genomes"
 # has two whose lineage is "d__Bacteria;p__;c__;o__;f__;g__;s__", and marine and
 # marine-sediment have more. Leaving the domain out dropped them from the map,
 # which the count check then caught as a map that did not cover its database.
+# Ranks kept for aggregation, coarsest last. Species is not here: it is already
+# the map's value, and duplicating it would double the file for nothing.
+RANK_KEYS = ["d", "p", "c", "o", "f", "g"]
+
 RANKS = [("s__", ""), ("g__", " sp."), ("f__", " (family)"),
          ("o__", " (order)"), ("c__", " (class)"), ("p__", " (phylum)"),
          ("d__", " (domain only)")]
@@ -99,14 +103,35 @@ def build_one(entry: dict, expect: dict[str, int]) -> dict | None:
         return None
 
     mapping, named = {}, 0
+    # Higher ranks, interned. A catalogue of 4,744 genomes has 3,444 species but
+    # only 1,031 genera, 214 families and 24 phyla, so storing the strings once
+    # and referring to them by index is most of the difference between 638 KB of
+    # repeated lineages and something worth shipping.
+    ranks = {k: [] for k in RANK_KEYS}
+    rank_idx = {k: {} for k in RANK_KEYS}
+    taxa = {}
+
+    def intern(rank, value):
+        if not value:
+            return -1        # unclassified at this rank; -1 rather than a fake name
+        seen = rank_idx[rank]
+        if value not in seen:
+            seen[value] = len(ranks[rank])
+            ranks[rank].append(value)
+        return seen[value]
+
     for r in rows:
         genome = (r.get("Genome") or "").strip()
         # The database holds one sketch per species representative. Keeping the
         # members too would triple the file for names nothing will ever look up.
         if not genome or genome != (r.get("Species_rep") or "").strip():
             continue
-        name, is_species = species_name(r.get("Lineage") or "")
-        mapping[f"{genome}.fna"] = name
+        lineage = r.get("Lineage") or ""
+        name, is_species = species_name(lineage)
+        gk = f"{genome}.fna"
+        mapping[gk] = name
+        parts = {p[:3]: p[3:].strip() for p in lineage.split(";") if len(p) > 3}
+        taxa[gk] = [intern(k, parts.get(f"{k}__", "")) for k in RANK_KEYS]
         named += is_species
 
     want = expect.get(key)
@@ -120,7 +145,15 @@ def build_one(entry: dict, expect: dict[str, int]) -> dict | None:
 
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     out = OUT_DIR / f"{key}.json"
-    out.write_text(json.dumps(mapping, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n")
+    # schema 2: species names as before, plus the higher ranks by index. Readers
+    # that only want a name can still take `species[genome]` and ignore the rest.
+    out.write_text(json.dumps({
+        "schema": 2,
+        "ranks": ranks,
+        "rankKeys": RANK_KEYS,
+        "species": mapping,
+        "taxa": taxa,
+    }, ensure_ascii=False, sort_keys=False, separators=(",", ":")) + "\n")
     pct = 100 * named / len(mapping) if mapping else 0
     print(f"  ok {key:<20} {len(mapping):>6} genomes  {named:>6} with a species name "
           f"({pct:.0f}%)  {out.stat().st_size / 1024:.0f} KB")

@@ -12,16 +12,16 @@ import {
   sylphWorkerRpc, detectMemory64, chooseWasmBits, WORKER_VERSION,
   readsBudget, readsBudgetNote, readsOverBudgetNote, loadedBuildNote, fmtReads,
   progressFraction, basesForReads, BUDGET_READ_BP,
-} from "./sylph-worker-rpc.js?v=36";
+} from "./sylph-worker-rpc.js?v=37";
 import {
   dbCacheClient, fmtRate, fmtEta, cacheSummary, assertSameDatabase,
-} from "./db-cache.js?v=36";
-import { matePattern, stripFastqExt } from "./sample-naming.js?v=36";
+} from "./db-cache.js?v=37";
+import { matePattern, stripFastqExt } from "./sample-naming.js?v=37";
 import {
   resolveAccession, validateAccession, ASSUMED_BPS,
   downloadEstimate, readCountVerdict, expectedProfiledReads,
-} from "./ena.js?v=36";
-import { normaliseMarkers, screenVerdict, SCREENING_DB, SCREENING_MARKERS } from "./screening.js?v=36";
+} from "./ena.js?v=37";
+import { normaliseMarkers, screenVerdict, SCREENING_DB, SCREENING_MARKERS } from "./screening.js?v=37";
 import {
   fetchCatalog, fallbackCatalog, renderDbSelect, biomeForUrl, biomeNote,
   mgnifyGenomeUrl,
@@ -29,7 +29,7 @@ import {
   makeDbRef, sameDbRef, refLine, refShort, refCommentLines, refSlug, genomeCountMismatch,
   rememberBiome, recallBiome, catalogueName, LOCAL_VALUE,
   selectionMatchesLoaded, notLoadedNote, refMetaMismatch,
-} from "./biomes.js?v=36";
+} from "./biomes.js?v=37";
 
 const $ = (id) => document.getElementById(id);
 const els = {
@@ -952,11 +952,15 @@ async function loadDatabase() {
     // the entry declares one; otherwise cleared, so the previous biome's names
     // cannot be pinned onto this one's genomes. Without a map the matrix shows
     // the genome accession, which is right rather than merely blank.
-    lineage = {}; ambiguousNames = new Set();
+    lineage = {}; ambiguousNames = new Set(); taxonomy = normaliseLineage(null);
     if (biome?.lineage) {
       try {
         const lineageResp = await fetch(`./${biome.lineage}`);
-        if (lineageResp.ok) { lineage = await lineageResp.json(); ambiguousNames = sharedNames(lineage); }
+        if (lineageResp.ok) {
+          taxonomy = normaliseLineage(await lineageResp.json());
+          lineage = taxonomy.species;
+          ambiguousNames = sharedNames(lineage);
+        }
       } catch { /* leave lineage empty: genome accessions instead of names */ }
     }
 
@@ -985,7 +989,7 @@ async function loadDatabase() {
       dbMeta = null;
       currentRef = null;
       lastDbLoad = null;
-      lineage = {}; ambiguousNames = new Set();
+      lineage = {}; ambiguousNames = new Set(); taxonomy = normaliseLineage(null);
       els.dbInfo.textContent =
         "No database is loaded. The load failed part-way through, and a pool where some " +
         "workers hold the new database and some hold nothing would profile different samples " +
@@ -2261,8 +2265,9 @@ async function runAll() {
         // 85 runs the end is hours away, and the first few samples are usually
         // enough to tell whether the run is worth waiting for. The download
         // buttons work on what is there — the summary says how much that is.
-        lastMatrix = matrixToTable(matrix, sampleOrder, runRef,
-          new Map(files.filter((f) => f.ref).map((f) => [f.sampleName, f.ref])));
+        lastRaw = { matrix, sampleOrder, ref: runRef,
+          refBySample: new Map(files.filter((f) => f.ref).map((f) => [f.sampleName, f.ref])) };
+        lastMatrix = matrixToTable(lastRaw.matrix, lastRaw.sampleOrder, lastRaw.ref, lastRaw.refBySample);
         renderMatrix(lastMatrix, { done: completed + 1, total: totalTodo });
         if (!verdict.ok) shortCount++;
         else if (rows.length === 0) emptyCount++;
@@ -2292,8 +2297,9 @@ async function runAll() {
   setRunControls(false);
   refreshRunButton();
   if (okCount > 0) {
-    lastMatrix = matrixToTable(matrix, sampleOrder, runRef,
-      new Map(files.filter((f) => f.ref).map((f) => [f.sampleName, f.ref])));
+    lastRaw = { matrix, sampleOrder, ref: runRef,
+      refBySample: new Map(files.filter((f) => f.ref).map((f) => [f.sampleName, f.ref])) };
+    lastMatrix = matrixToTable(lastRaw.matrix, lastRaw.sampleOrder, lastRaw.ref, lastRaw.refBySample);
     renderMatrix(lastMatrix);
   }
   // Cancelled samples are counted apart from failures: twelve red "failed:
@@ -2360,6 +2366,57 @@ function parseTsv(tsv) {
 // Decided from the LINEAGE MAP, not from the matrix: which names are ambiguous
 // is a property of the reference database, so the same genome gets the same
 // label in every export, whatever else the run contained.
+// The lineage file, in either shape. Schema 2 carries the higher ranks as
+// indices into interned lists; schema 1 (and the bundled db/lineage.json) is a
+// flat {genome: "Species name"}. Everything below goes through this, so the two
+// are one thing from here on.
+const RANK_LABELS = { s: "Species", g: "Genus", f: "Family", o: "Order", c: "Class", p: "Phylum" };
+let taxonomy = { species: {}, ranks: {}, taxa: {}, rankKeys: [] };
+
+function normaliseLineage(json) {
+  if (json && json.schema === 2) {
+    return {
+      species: json.species ?? {},
+      ranks: json.ranks ?? {},
+      taxa: json.taxa ?? {},
+      rankKeys: json.rankKeys ?? [],
+    };
+  }
+  // Schema 1: names only, so no rank above species is available and the picker
+  // says so rather than offering an aggregation it cannot compute.
+  return { species: json ?? {}, ranks: {}, taxa: {}, rankKeys: [] };
+}
+
+// The taxon a genome belongs to at `rank`, or "" when the catalogue does not
+// place it there. "" is not an error — GTDB genuinely leaves ranks empty.
+function taxonAt(genome, rank) {
+  if (rank === "s") return taxonomy.species[genome] ?? taxonomy.species[genome.replace(/\.gz$/i, "")] ?? "";
+  const i = taxonomy.rankKeys.indexOf(rank);
+  if (i < 0) return "";
+  const row = taxonomy.taxa[genome] ?? taxonomy.taxa[genome.replace(/\.gz$/i, "")];
+  const idx = row?.[i];
+  return Number.isInteger(idx) && idx >= 0 ? (taxonomy.ranks[rank]?.[idx] ?? "") : "";
+}
+
+const currentRank = () => document.getElementById("rankPick")?.value || "s";
+
+// Re-aggregate what is already on screen. No profiling is redone: the matrix
+// holds per-genome abundances and every rank is a different sum of the same
+// numbers.
+// The PER-GENOME matrix, kept so a rank change can re-sum it. matrixToTable()
+// output is already aggregated and cannot be un-aggregated.
+let lastRaw = null;
+
+function rerankMatrix() {
+  const wrap = document.getElementById("rankPickWrap");
+  if (wrap) wrap.classList.toggle("hide", !canAggregate() || !lastRaw);
+  if (!lastRaw) return;
+  lastMatrix = matrixToTable(lastRaw.matrix, lastRaw.sampleOrder, lastRaw.ref, lastRaw.refBySample);
+  renderMatrix(lastMatrix);
+}
+document.getElementById("rankPick")?.addEventListener("change", rerankMatrix);
+const canAggregate = () => taxonomy.rankKeys.length > 0;
+
 function sharedNames(map) {
   const seen = new Map();
   for (const name of Object.values(map ?? {})) seen.set(name, (seen.get(name) ?? 0) + 1);
@@ -2380,15 +2437,36 @@ function speciesLabel(genome) {
 }
 
 function matrixToTable(matrix, sampleOrder, ref, refBySample = new Map()) {
-  const rows = Object.entries(matrix).map(([genome, m]) => {
-    const values = sampleOrder.map(s => m[s] ?? 0);
-    return {
-      genome,
-      species: m.species,
-      values,
-      maxAbund: Math.max(...values),
-    };
-  });
+  const rank = currentRank();
+  // At species level a row is one genome, as it always was. Above it, rows are
+  // SUMMED per taxon — which is the arithmetic a rank actually means, and the
+  // reason it is done here rather than in the renderer: the exports must carry
+  // the same numbers the screen shows.
+  let rows;
+  if (rank === "s" || !canAggregate()) {
+    rows = Object.entries(matrix).map(([genome, m]) => {
+      const values = sampleOrder.map(s => m[s] ?? 0);
+      return { genome, species: m.species, values, maxAbund: Math.max(...values) };
+    });
+  } else {
+    const byTaxon = new Map();
+    for (const [genome, m] of Object.entries(matrix)) {
+      // Unplaced at this rank is its own bucket, named. Dropping those rows
+      // would silently lose abundance and make the columns stop summing to what
+      // the species-level view showed.
+      const name = taxonAt(genome, rank) || `unclassified at ${RANK_LABELS[rank].toLowerCase()} level`;
+      let e = byTaxon.get(name);
+      if (!e) { e = { name, values: sampleOrder.map(() => 0), n: 0 }; byTaxon.set(name, e); }
+      sampleOrder.forEach((s, i) => { e.values[i] += m[s] ?? 0; });
+      e.n++;
+    }
+    rows = [...byTaxon.values()].map((e) => ({
+      genome: `${e.n} genome${e.n === 1 ? "" : "s"}`,
+      species: e.name,
+      values: e.values,
+      maxAbund: Math.max(...e.values),
+    }));
+  }
   rows.sort((a, b) => b.maxAbund - a.maxAbund);
   // `ref` travels WITH the numbers, all the way to the exported file.
   const refs = sampleOrder.map((n) => refBySample.get(n) ?? ref);
@@ -2403,6 +2481,8 @@ function matrixToTable(matrix, sampleOrder, ref, refBySample = new Map()) {
 // 3 of 85 samples is worse than no matrix at all, because it will be exported
 // and read as the whole thing.
 function renderMatrix({ samples, rows, ref, refs, mixed }, progress = null) {
+  const rankWrap = document.getElementById("rankPickWrap");
+  if (rankWrap) rankWrap.classList.toggle("hide", !canAggregate());
   // The reference, above the numbers, every time they are drawn. A matrix on
   // screen with no reference beside it is the same trap as an export with none:
   // nothing in the species names says which catalogue they were drawn from.

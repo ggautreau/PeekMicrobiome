@@ -116,7 +116,9 @@
 // v36: the monitor tab is findable and its title reads horizontally once open,
 // and a satisfied step in the strip carries the green background rather than
 // only green text — on a dark theme it was a black tile beside a black tile.
-export const WORKER_VERSION = "36";
+// v37: the lineage maps carry the full GTDB ranks (schema 2), and the matrix can
+// be shown at genus, family, order, class or phylum instead of species.
+export const WORKER_VERSION = "37";
 
 // ---- memory64 capability probe ----------------------------------------------
 

@@ -1043,6 +1043,10 @@ console.log("== pairing dropped files into samples ==");
 const { existsSync } = await import("node:fs");
 const indexSrcForBiome = readFileSync(here + "index.html", "utf8");
   const biomesSrc = readFileSync(here + "biomes.js", "utf8");
+// Lineage files are schema 2 now: {schema, ranks, rankKeys, species, taxa}.
+// The species map is what every check below is about, so unwrap once here
+// rather than teaching each of them about the envelope.
+const speciesMap = (json) => (json && json.schema === 2 ? json.species : json);
 const profileSrcForBiome = readFileSync(here + "profile.html", "utf8");
 
 // ---- the biome picker, and naming the reference on every result --------------
@@ -1187,7 +1191,7 @@ console.log("== every row of an exported matrix is a distinct label ==");
   for (const b of biomes.allBiomes(catalog)) {
     if (!b.lineage) continue;
     let lin;
-    try { lin = JSON.parse(readFileSync(here + b.lineage, "utf8")); } catch { continue; }
+    try { lin = speciesMap(JSON.parse(readFileSync(here + b.lineage, "utf8"))); } catch { continue; }
     const amb = shared(lin);
     const labels = Object.keys(lin).map((g) => label(lin, amb, g));
     const dups = labels.length - new Set(labels).size;
@@ -1199,7 +1203,7 @@ console.log("== every row of an exported matrix is a distinct label ==");
 
   // The suffix must appear ONLY where it is needed — otherwise every ordinary
   // species name gets uglier for nothing.
-  const gut = JSON.parse(readFileSync(here + "db/lineage/human-gut.json", "utf8"));
+  const gut = speciesMap(JSON.parse(readFileSync(here + "db/lineage/human-gut.json", "utf8")));
   const ambGut = shared(gut);
   check("...an unambiguous name is left alone",
     label(gut, ambGut, "MGYG000000002.fna") === "Blautia_A faecis",
@@ -1226,7 +1230,7 @@ console.log("== species names and MGnify links ==");
     if (!b.lineage) { check(`${b.key} declares a name map`, false, "no lineage"); continue; }
     const f = here + b.lineage;
     let lin;
-    try { lin = JSON.parse(readFileSync(f, "utf8")); }
+    try { lin = speciesMap(JSON.parse(readFileSync(f, "utf8"))); }
     catch (e) { check(`${b.key}: ${b.lineage} is readable`, false, String(e.message).slice(0, 70)); continue; }
     entries += Object.keys(lin).length;
     // A map that does not cover its database shows names for some rows and
@@ -1245,7 +1249,7 @@ console.log("== species names and MGnify links ==");
 
   // The keys are stored un-gzipped; the eighteen new databases report .fna.gz.
   // Without the fallback every row of every catalogue but human-gut misses.
-  const vag = JSON.parse(readFileSync(here + "db/lineage/human-vaginal.json", "utf8"));
+  const vag = speciesMap(JSON.parse(readFileSync(here + "db/lineage/human-vaginal.json", "utf8")));
   check("a .fna.gz genome finds its name through the un-gzipped key",
     lookup(vag, "MGYG000304057.fna.gz") === "Lactobacillus iners",
     lookup(vag, "MGYG000304057.fna.gz"));
@@ -1584,7 +1588,10 @@ console.log("== the pages carry the reference through ==");
   // happens to be selected when it is exported.
   check("the matrix is built with the reference of the run that filled it",
     /const runRef = currentRef;/.test(multiSrc)
-    && /matrixToTable\(matrix, sampleOrder, runRef,/.test(multiSrc)
+    // The call now goes through lastRaw, which is what a rank change re-sums —
+    // but its `ref` is still the run's, which is the property being pinned.
+    && /lastRaw = \{ matrix, sampleOrder, ref: runRef,/.test(multiSrc)
+    && /matrixToTable\(lastRaw\.matrix, lastRaw\.sampleOrder, lastRaw\.ref/.test(multiSrc)
     && /return \{ samples: sampleOrder, rows, ref, refs, mixed \}/.test(multiSrc));
   // Stronger than the above, and the reason it changed shape: the reference is
   // recorded on each SAMPLE as it is profiled, so a column can name the
