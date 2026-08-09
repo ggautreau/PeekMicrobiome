@@ -311,7 +311,7 @@ h2 {
   font-size: 0.92rem;
 }
 
-input[type="number"], select {
+input[type="number"], select, #maxReads {
   font: inherit;
   background: var(--bg-card);
   color: var(--ink);
@@ -321,7 +321,7 @@ input[type="number"], select {
   width: 9rem;
   transition: border-color 0.15s, box-shadow 0.15s;
 }
-input[type="number"]:focus, select:focus {
+input[type="number"]:focus, select:focus, #maxReads:focus {
   outline: none;
   border-color: var(--accent);
   box-shadow: 0 0 0 3px var(--accent-soft);
@@ -691,6 +691,25 @@ table.matrix tbody tr:nth-child(even) { background: var(--bg-softer); }
   align-items: center;
   margin-top: 1rem;
   flex-wrap: wrap;
+}
+
+/* The ENA result actions. The summary above them can run to two lines ("85 runs
+   · at most 27.86 GB to download — about 1 h 34 min at 5.1 MB/s…"), so it gets a
+   line of its own rather than competing with the buttons for one. */
+.ena-toolbar { margin-top: 0.6rem; }
+.ena-toolbar > .info { display: block; margin-bottom: 0.55rem; }
+.ena-actions {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  flex-wrap: wrap;
+}
+/* The one that commits sits apart from the two that only change a selection —
+   and stays at the right edge until the row is too narrow to hold it, at which
+   point margin-left:auto simply stops applying. */
+.ena-actions #enaAdd { margin-left: auto; }
+@media (max-width: 640px) {
+  .ena-actions #enaAdd { margin-left: 0; flex: 1 1 100%; }
 }
 
 /* ---------- Footer ---------- */

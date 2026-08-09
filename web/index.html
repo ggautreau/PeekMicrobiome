@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>PeekMicrobiome — upload-free, installation-free metagenomic profiling across biomes</title>
   <link rel="icon" type="image/svg+xml" href="./favicon.svg">
-  <link rel="stylesheet" href="./styles.css?v=31">
+  <link rel="stylesheet" href="./styles.css?v=32">
   <script>
     (function () {
       try {
@@ -168,11 +168,18 @@
         <div class="info" id="enaStatus" aria-live="polite" aria-atomic="true"></div>
         <div class="err" id="enaError" role="alert"></div>
         <div id="enaResult" class="hide">
-          <div class="toolbar" style="margin-top:.6rem">
-            <span class="info" id="enaSummary"></span>
-            <button id="enaAll" type="button">Select all</button>
-            <button id="enaNone" type="button">Select none</button>
-            <button id="enaAdd" type="button">Add to samples</button>
+          <!-- The summary is a sentence, not a toolbar item: sharing a flex row
+               with the buttons let the first of them ride up beside it and the
+               other two wrap underneath, which reads as a mistake. Its own line,
+               then the actions — selection on the left, the one that commits on
+               the right. -->
+          <div class="ena-toolbar">
+            <div class="info" id="enaSummary"></div>
+            <div class="ena-actions">
+              <button id="enaAll" type="button">Select all</button>
+              <button id="enaNone" type="button">Select none</button>
+              <button id="enaAdd" class="primary" type="button">Add to samples</button>
+            </div>
           </div>
           <ul class="files ena-runs" id="enaRuns"></ul>
         </div>
@@ -255,6 +262,6 @@
   </footer>
 
   <script src="./theme.js"></script>
-  <script type="module" src="./multi.js?v=31"></script>
+  <script type="module" src="./multi.js?v=32"></script>
 </body>
 </html>
