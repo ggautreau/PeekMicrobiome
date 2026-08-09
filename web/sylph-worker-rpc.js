@@ -124,7 +124,9 @@
 // matrix on screen, plus a CSV of sample groups to colour the ordination.
 // v40: the ENA panel is a collapsed <details>, and the matrix header follows the
 // rank picker instead of always saying "Species".
-export const WORKER_VERSION = "40";
+// v41: exports in the formats other tools read — sylph's own TSV, MetaPhlAn,
+// BIOM 1.0 — plus saving and restoring a session.
+export const WORKER_VERSION = "41";
 
 // ---- memory64 capability probe ----------------------------------------------
 

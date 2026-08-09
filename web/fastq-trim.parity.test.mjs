@@ -1165,6 +1165,82 @@ const catalogEntries = biomes.allBiomes(catalog);
   }
 }
 
+console.log("== the export formats other tools read ==");
+{
+  const { toMetaphlan, toBiom, toSylphTsv, toSession, fromSession } =
+    await import("./exports.js");
+  const lin = {
+    g1: { d: "Bacteria", p: "Bacillota", c: "Bacilli", o: "Lactobacillales", f: "Lactobacillaceae", g: "Lactobacillus" },
+    g2: { d: "Bacteria", p: "Bacillota", c: "Bacilli", o: "Lactobacillales", f: "Lactobacillaceae", g: "Limosilactobacillus" },
+    g3: { d: "Bacteria", p: "Bacteroidota" },
+  };
+  const sp = { g1: "Lactobacillus iners", g2: "Limosilactobacillus vaginalis", g3: "" };
+  const table = { samples: ["S1", "S2"], ref: null, rows: [
+    { genome: "g1", species: sp.g1, values: [60, 10] },
+    { genome: "g2", species: sp.g2, values: [30, 20] },
+    { genome: "g3", species: "", values: [10, 70] }] };
+
+  const mpa = toMetaphlan(table, { lineageOf: (g) => lin[g], speciesOf: (g) => sp[g] });
+  const row = (name) => mpa.split("\n").find((l) => l.startsWith(`${name}\t`))?.split("\t").slice(1).map(Number);
+  // THE property of a MetaPhlAn profile: each clade holds the total of what is
+  // under it. A file whose top row is 0 because nothing was assigned exactly
+  // there is not one, and every tool that reads these relies on it.
+  check("MetaPhlAn abundances are cumulative up the lineage",
+    JSON.stringify(row("k__Bacteria")) === JSON.stringify([100, 100]),
+    JSON.stringify(row("k__Bacteria")));
+  check("...and the phyla under it sum back to the same total",
+    Math.abs(row("k__Bacteria|p__Bacillota")[0] + row("k__Bacteria|p__Bacteroidota")[0] - 100) < 1e-6);
+  // GTDB says d__, MetaPhlAn says k__; emitting d__ drops the top level in
+  // every reader that only knows the latter.
+  check("...and the domain is written k__, the way MetaPhlAn writes it",
+    /^k__Bacteria\t/m.test(mpa) && !/^d__/m.test(mpa));
+  check("...and spaces in a name become underscores, as the format requires",
+    mpa.includes("s__Lactobacillus_iners"));
+  // g3 has a phylum but no species: it must still contribute at the levels it
+  // does have, or the phylum totals stop adding up.
+  check("...and a genome with no species still counts at the ranks it has",
+    JSON.stringify(row("k__Bacteria|p__Bacteroidota")) === JSON.stringify([10, 70]));
+
+  const biom = JSON.parse(toBiom(table, { lineageOf: (g) => lin[g], speciesOf: (g) => sp[g] }));
+  check("BIOM is 1.0 with the right shape", biom.format === "1.0.0"
+    && JSON.stringify(biom.shape) === JSON.stringify([3, 2])
+    && biom.data.length === 3 && biom.data[0].length === 2);
+  // Seven ranks, always, empty where GTDB places nothing — readers index into
+  // this array by position.
+  check("...and every row carries all seven rank slots",
+    biom.rows.every((r) => r.metadata.taxonomy.length === 7),
+    JSON.stringify(biom.rows[2].metadata.taxonomy));
+
+  // The sylph export must be sylph's own columns, not a reconstruction.
+  const raw = "Sample_file\tGenome_file\tTaxonomic_abundance\tEff_lambda\n" +
+    "/tmp/blob\tMGYG1.fna\t12.5\tHIGH";
+  const st = toSylphTsv([{ sampleName: "ERR1", tsv: raw }, { sampleName: "empty" }]);
+  check("the sylph export keeps every column sylph wrote",
+    st.split("\n")[0].split("\t").includes("Eff_lambda"));
+  check("...and names the sample rather than a path that points nowhere",
+    st.split("\n")[1].startsWith("ERR1\t"), st.split("\n")[1]);
+
+  // A session must come back exactly, or it is worse than not offering one.
+  const state = {
+    ref: { label: "Human gut", key: "human-gut" }, sampleOrder: ["S1", "S2"],
+    matrix: { "MGYG1.fna": { species: "A", S1: 12.5, S2: 0 } },
+    refBySample: new Map([["S1", { label: "Human gut" }]]), rank: "g",
+  };
+  const back = fromSession(toSession(state));
+  check("a session round-trips the matrix, the order and the rank",
+    JSON.stringify(back.matrix) === JSON.stringify(state.matrix)
+    && JSON.stringify(back.sampleOrder) === JSON.stringify(state.sampleOrder)
+    && back.rank === "g" && back.refBySample.get("S1").label === "Human gut");
+  // Every shape here is a plain object, so a wrong file does not fail on its
+  // own — it would restore an empty matrix and look like an empty session.
+  let refusals = 0;
+  for (const bad of ['not json', '{"app":"other"}', '{"app":"PeekMicrobiome","format":1,"samples":[]}',
+                     '{"app":"PeekMicrobiome","format":99,"samples":[],"matrix":{}}']) {
+    try { fromSession(bad); } catch { refusals++; }
+  }
+  check("...and a file that is not one is refused, not silently restored", refusals === 4, `${refusals}/4`);
+}
+
 console.log("== the figures compute what they claim to ==");
 {
   const { alphaDiversity, distanceMatrix, pcoa, compositionSvg, alphaSvg, pcoaSvg } =

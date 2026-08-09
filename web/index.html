@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>PeekMicrobiome — upload-free, installation-free metagenomic profiling across biomes</title>
   <link rel="icon" type="image/svg+xml" href="./favicon.svg">
-  <link rel="stylesheet" href="./styles.css?v=40">
+  <link rel="stylesheet" href="./styles.css?v=41">
   <script>
     (function () {
       try {
@@ -284,6 +284,21 @@
         <span class="info" id="clusterNote"></span>
         <button id="downloadTsv">Download TSV</button>
         <button id="downloadCsv">Download CSV</button>
+        <!-- The formats other tools read. The native TSV above is the honest one
+             — it names its reference — but nothing downstream parses it. -->
+        <label class="rank-pick">Also as:
+          <select id="exportAs">
+            <option value="">…</option>
+            <option value="sylph">sylph TSV (every column)</option>
+            <option value="mpa">MetaPhlAn profile</option>
+            <option value="biom">BIOM 1.0 (JSON)</option>
+          </select>
+        </label>
+        <button id="saveSession" title="Save the computed results — not the FASTQs, not the database — so they can be put back on screen later.">Save session</button>
+        <label class="fig-meta" title="Restore a saved session. The reference database is not in the file: load it yourself and the numbers come back.">
+          <input type="file" id="loadSession" accept=".json" hidden>
+          <span>Load session</span>
+        </label>
       </div>
       <!-- The three figures a microbiome result is normally shown as, computed
            from the matrix already on screen. Drawn on demand rather than with
@@ -365,6 +380,6 @@
   </footer>
 
   <script src="./theme.js"></script>
-  <script type="module" src="./multi.js?v=40"></script>
+  <script type="module" src="./multi.js?v=41"></script>
 </body>
 </html>

@@ -12,18 +12,19 @@ import {
   sylphWorkerRpc, detectMemory64, chooseWasmBits, WORKER_VERSION,
   readsBudget, readsBudgetNote, readsOverBudgetNote, loadedBuildNote, fmtReads,
   progressFraction, basesForReads, BUDGET_READ_BP,
-} from "./sylph-worker-rpc.js?v=40";
+} from "./sylph-worker-rpc.js?v=41";
 import {
   dbCacheClient, fmtRate, fmtEta, cacheSummary, assertSameDatabase,
-} from "./db-cache.js?v=40";
-import { matePattern, stripFastqExt } from "./sample-naming.js?v=40";
+} from "./db-cache.js?v=41";
+import { matePattern, stripFastqExt } from "./sample-naming.js?v=41";
 import {
   resolveAccession, validateAccession, ASSUMED_BPS,
   downloadEstimate, readCountVerdict, expectedProfiledReads,
-} from "./ena.js?v=40";
-import { normaliseMarkers, screenVerdict, SCREENING_DB, SCREENING_MARKERS } from "./screening.js?v=40";
-import { clusterTable, MAX_ROWS as CLUSTER_MAX_ROWS } from "./cluster.js?v=40";
-import { compositionSvg, alphaSvg, pcoaSvg, alphaDiversity } from "./figures.js?v=40";
+} from "./ena.js?v=41";
+import { normaliseMarkers, screenVerdict, SCREENING_DB, SCREENING_MARKERS } from "./screening.js?v=41";
+import { clusterTable, MAX_ROWS as CLUSTER_MAX_ROWS } from "./cluster.js?v=41";
+import { compositionSvg, alphaSvg, pcoaSvg, alphaDiversity } from "./figures.js?v=41";
+import { toMetaphlan, toBiom, toSylphTsv, toSession, fromSession } from "./exports.js?v=41";
 import {
   fetchCatalog, fallbackCatalog, renderDbSelect, biomeForUrl, biomeNote,
   mgnifyGenomeUrl,
@@ -31,7 +32,7 @@ import {
   makeDbRef, sameDbRef, refLine, refShort, refCommentLines, refSlug, genomeCountMismatch,
   rememberBiome, recallBiome, catalogueName, LOCAL_VALUE,
   selectionMatchesLoaded, notLoadedNote, refMetaMismatch,
-} from "./biomes.js?v=40";
+} from "./biomes.js?v=41";
 
 const $ = (id) => document.getElementById(id);
 const els = {
@@ -2261,6 +2262,10 @@ async function runAll() {
         s.progress = undefined;
         s.frac = undefined;
         s.rows = rows;
+        // sylph's own TSV, kept verbatim for the sylph export: it carries
+        // columns this page never parses, and reconstructing them from the
+        // matrix would be inventing them.
+        s.tsv = tsv;
         sampleOrder.push(s.sampleName);
         mergeRowsIntoMatrix(matrix, s.sampleName, rows);
         // Show the matrix as it fills, rather than at the end. On a project of
@@ -2534,6 +2539,85 @@ function drawFigure(kind) {
 for (const b of document.querySelectorAll(".fig-tab")) {
   b.addEventListener("click", () => drawFigure(b.dataset.fig));
 }
+// The full GTDB lineage of a genome, in the shape exports.js wants.
+function lineageOf(genome) {
+  const out = {};
+  for (const k of taxonomy.rankKeys) {
+    const v = taxonAt(genome, k);
+    if (v) out[k] = v;
+  }
+  return out;
+}
+
+function saveBlob(text, type, name) {
+  const url = URL.createObjectURL(new Blob([text], { type }));
+  const a = document.createElement("a");
+  a.href = url; a.download = name;
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(url), 60_000);
+}
+
+document.getElementById("exportAs")?.addEventListener("change", (e) => {
+  const kind = e.target.value;
+  e.target.value = "";
+  if (!kind || !lastMatrix) return;
+  const slug = refSlug(lastMatrix.ref);
+  const view = viewOf(lastMatrix);
+  if (kind === "sylph") {
+    // Straight from what sylph wrote, so every column survives — including the
+    // ones this page never reads.
+    const tsv = toSylphTsv(files.filter((f) => f.tsv));
+    if (!tsv) { showError("No sylph output to export — no sample has finished yet."); return; }
+    saveBlob(tsv, "text/tab-separated-values", `sylph_profile_${slug}.tsv`);
+  } else if (kind === "mpa") {
+    saveBlob(toMetaphlan(view, {
+      lineageOf, speciesOf: (g) => taxonAt(g, "s"),
+      header: refCommentLines(view.ref, { samples: view.samples.length, rows: view.rows.length })
+        .map((l) => l.replace(/^#\s?/, "")),
+    }), "text/tab-separated-values", `metaphlan_${slug}.tsv`);
+  } else if (kind === "biom") {
+    saveBlob(toBiom(view, { lineageOf, speciesOf: (g) => taxonAt(g, "s"),
+      date: new Date().toISOString() }), "application/json", `table_${slug}.biom`);
+  }
+});
+
+document.getElementById("saveSession")?.addEventListener("click", () => {
+  if (!lastRaw) { showError("Nothing to save yet — no sample has been profiled."); return; }
+  saveBlob(toSession({
+    ref: lastRaw.ref, sampleOrder: lastRaw.sampleOrder, matrix: lastRaw.matrix,
+    refBySample: lastRaw.refBySample, rank: currentRank(),
+    savedAt: new Date().toISOString(),
+  }), "application/json", `session_${refSlug(lastRaw.ref)}.json`);
+});
+
+document.getElementById("loadSession")?.addEventListener("change", async (e) => {
+  const f = e.target.files?.[0];
+  e.target.value = "";
+  if (!f) return;
+  try {
+    const st = fromSession(await f.text());
+    lastRaw = { matrix: st.matrix, sampleOrder: st.sampleOrder, ref: st.ref,
+      refBySample: st.refBySample };
+    const pick = document.getElementById("rankPick");
+    if (pick && st.rank) pick.value = st.rank;
+    lastMatrix = matrixToTable(lastRaw.matrix, lastRaw.sampleOrder, lastRaw.ref, lastRaw.refBySample);
+    renderMatrix(viewOf(lastMatrix));
+    els.results.classList.remove("hide");
+    refreshSteps();
+    // The saved rank may not be reachable: a session taken at genus level and
+    // reopened before its database is loaded has no lineage map to aggregate
+    // with, and silently showing species instead would be a different table
+    // under the same heading.
+    if (st.rank !== "s" && !canAggregate()) {
+      showError(`This session was saved at ${RANK_LABELS[st.rank] ?? st.rank} level. ` +
+        `Load ${st.ref?.label ?? "its reference database"} to get that view back — ` +
+        `the numbers below are per genome until you do.`);
+    }
+  } catch (err) {
+    showError(`Could not read that session: ${err?.message ?? err}`);
+  }
+});
+
 document.getElementById("figDownload")?.addEventListener("click", () => {
   const svg = document.getElementById("figCanvas")?.innerHTML;
   if (!svg || !openFig) return;
