@@ -24,7 +24,7 @@
 import {
   ensureDb, downloadToMemory, listCache, removeCached, removeCachedKey, clearCache,
   canWriteCache,
-} from "./db-cache.js?v=39";
+} from "./db-cache.js?v=40";
 
 const aborters = new Map();
 

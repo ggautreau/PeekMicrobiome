@@ -12,18 +12,18 @@ import {
   sylphWorkerRpc, detectMemory64, chooseWasmBits, WORKER_VERSION,
   readsBudget, readsBudgetNote, readsOverBudgetNote, loadedBuildNote, fmtReads,
   progressFraction, basesForReads, BUDGET_READ_BP,
-} from "./sylph-worker-rpc.js?v=39";
+} from "./sylph-worker-rpc.js?v=40";
 import {
   dbCacheClient, fmtRate, fmtEta, cacheSummary, assertSameDatabase,
-} from "./db-cache.js?v=39";
-import { matePattern, stripFastqExt } from "./sample-naming.js?v=39";
+} from "./db-cache.js?v=40";
+import { matePattern, stripFastqExt } from "./sample-naming.js?v=40";
 import {
   resolveAccession, validateAccession, ASSUMED_BPS,
   downloadEstimate, readCountVerdict, expectedProfiledReads,
-} from "./ena.js?v=39";
-import { normaliseMarkers, screenVerdict, SCREENING_DB, SCREENING_MARKERS } from "./screening.js?v=39";
-import { clusterTable, MAX_ROWS as CLUSTER_MAX_ROWS } from "./cluster.js?v=39";
-import { compositionSvg, alphaSvg, pcoaSvg, alphaDiversity } from "./figures.js?v=39";
+} from "./ena.js?v=40";
+import { normaliseMarkers, screenVerdict, SCREENING_DB, SCREENING_MARKERS } from "./screening.js?v=40";
+import { clusterTable, MAX_ROWS as CLUSTER_MAX_ROWS } from "./cluster.js?v=40";
+import { compositionSvg, alphaSvg, pcoaSvg, alphaDiversity } from "./figures.js?v=40";
 import {
   fetchCatalog, fallbackCatalog, renderDbSelect, biomeForUrl, biomeNote,
   mgnifyGenomeUrl,
@@ -31,7 +31,7 @@ import {
   makeDbRef, sameDbRef, refLine, refShort, refCommentLines, refSlug, genomeCountMismatch,
   rememberBiome, recallBiome, catalogueName, LOCAL_VALUE,
   selectionMatchesLoaded, notLoadedNote, refMetaMismatch,
-} from "./biomes.js?v=39";
+} from "./biomes.js?v=40";
 
 const $ = (id) => document.getElementById(id);
 const els = {
@@ -2636,8 +2636,8 @@ function renderMatrix({ samples, rows, ref, refs, mixed }, progress = null) {
   }).join("");
   els.matrixHead.innerHTML = `
     <tr>
-      <th>Species</th>
-      <th>Genome</th>
+      <th>${escapeHTML(RANK_LABELS[currentRank()] ?? "Species")}</th>
+      <th>${currentRank() === "s" || !canAggregate() ? "Genome" : "Genomes"}</th>
       ${samples.map(s => `<th title="${escapeHTML(s)}">${escapeHTML(s)}</th>`).join("")}
     </tr>
     <tr class="matrix-ref-row">
@@ -2695,7 +2695,10 @@ els.downloadCsv.addEventListener("click", () => downloadMatrix(",", "csv"));
 function downloadMatrix(sep, ext) {
   if (!lastMatrix) return;
   const { samples, rows, ref, refs, mixed } = lastMatrix;
-  const header = ["species", "genome", ...samples];
+  // The export header follows the rank too: a file whose first column says
+  // "species" but holds phyla is worse than one that says nothing.
+  const rankKey = (RANK_LABELS[currentRank()] ?? "Species").toLowerCase();
+  const header = [rankKey, currentRank() === "s" || !canAggregate() ? "genome" : "genomes", ...samples];
   // Per-column reference, as a comment line, in the same order as the header.
   // The block above already names the reference once; this names it per sample,
   // so a file read months later cannot be misattributed column by column — and

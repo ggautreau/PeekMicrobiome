@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>PeekMicrobiome — upload-free, installation-free metagenomic profiling across biomes</title>
   <link rel="icon" type="image/svg+xml" href="./favicon.svg">
-  <link rel="stylesheet" href="./styles.css?v=39">
+  <link rel="stylesheet" href="./styles.css?v=40">
   <script>
     (function () {
       try {
@@ -173,9 +173,14 @@
 
       <div class="ena-or">or</div>
 
-      <div class="ena" id="enaPanel">
+      <!-- Collapsed by default: most people drop their own files, and the panel
+           is four controls and two paragraphs standing between the drop zone and
+           the read cap. <details> rather than a class toggle, so it opens with
+           the keyboard and is found by in-page search without any JS. -->
+      <details class="ena" id="enaPanel">
+        <summary class="ena-summary"><strong>…or profile public data from the ENA</strong>
+          <span class="info">run, sample, experiment or project accession</span></summary>
         <div class="ena-head">
-          <strong>…or profile public data from the ENA</strong>
           <span class="info">Paste a run, sample, experiment or project accession — nothing is permanently saved to your disk, the reads are streamed straight into the profiler.</span>
           <span class="info" style="display:block;margin-top:.35rem"><strong>This mode downloads public FASTQs from the EBI.</strong> This page asks the <a href="https://www.ebi.ac.uk/ena/browser/home">EBI's public ENA API</a> which files an accession covers, then streams those public FASTQs from the EBI's servers (any host under <code>ebi.ac.uk</code> — usually <code>ftp.sra.ebi.ac.uk</code>) straight into the profiler, without ever writing them to your disk. The EBI therefore sees your IP address and which accessions you looked up, exactly as it would if you downloaded them yourself.</span>
         </div>
@@ -203,7 +208,7 @@
           </div>
           <ul class="files ena-runs" id="enaRuns"></ul>
         </div>
-      </div>
+      </details>
 
       <ul class="files hide" id="filesList"></ul>
       <div class="info hide" id="enaPending"></div>
@@ -360,6 +365,6 @@
   </footer>
 
   <script src="./theme.js"></script>
-  <script type="module" src="./multi.js?v=39"></script>
+  <script type="module" src="./multi.js?v=40"></script>
 </body>
 </html>

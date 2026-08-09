@@ -122,7 +122,9 @@
 // sample lands. multi.js imports cluster.js, which a page on v37 does not have.
 // v39: composition, alpha diversity and PCoA, drawn as inline SVG from the
 // matrix on screen, plus a CSV of sample groups to colour the ordination.
-export const WORKER_VERSION = "39";
+// v40: the ENA panel is a collapsed <details>, and the matrix header follows the
+// rank picker instead of always saying "Species".
+export const WORKER_VERSION = "40";
 
 // ---- memory64 capability probe ----------------------------------------------
 

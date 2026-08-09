@@ -966,6 +966,33 @@ table.matrix tbody tr:nth-child(even) { background: var(--bg-softer); }
 .rank-pick { display: inline-flex; align-items: center; gap: 0.4rem; color: var(--ink-soft); }
 .rank-pick select { width: auto; min-width: 7rem; }
 
+/* The ENA panel is a <details>: closed by default, so the drop zone and the read
+   cap are not separated by four controls most people never use. */
+.ena-summary {
+  cursor: pointer;
+  padding: 0.15rem 0;
+  display: flex;
+  align-items: baseline;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+  list-style: none;
+}
+.ena-summary::-webkit-details-marker { display: none; }
+/* Own marker, so it points the way a disclosure triangle should in both states
+   without depending on the browser's default glyph. */
+.ena-summary::before {
+  content: "";
+  flex: 0 0 auto;
+  width: 0;
+  height: 0;
+  border-left: 5px solid var(--ink-muted);
+  border-top: 4px solid transparent;
+  border-bottom: 4px solid transparent;
+  transition: transform 0.15s;
+}
+details[open] > .ena-summary::before { transform: rotate(90deg); }
+.ena-summary:hover strong { color: var(--accent-ink); }
+
 /* ---------- Figures ----------
    An aside to the matrix, not a mode: opening one is a click, closing it is the
    same click again. */
