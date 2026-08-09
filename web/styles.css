@@ -21,6 +21,11 @@
   --accent-hover: #008f92;
   --accent-soft: rgba(0, 163, 166, 0.12);
   --success: #2a8a55;
+  /* In progress. Not the accent, which means "you can act on this", and not the
+     success green, which means "this is finished" — a step that is still being
+     computed is neither. */
+  --working: #b45309;
+  --bg-working-soft: #fdf3e3;
   --danger: #c0392b;
   --shadow-sm: 0 1px 2px rgba(39, 86, 98, 0.05);
   --shadow-md: 0 4px 14px rgba(39, 86, 98, 0.07);
@@ -40,6 +45,8 @@ html[data-theme="dark"] {
   --bg-alert: #321614;
   --bg-alert-soft: #261411;
   --bg-success-soft: #112a1d;
+  --working: #e0a44a;
+  --bg-working-soft: #2b2010;
   --border: #2a3438;
   --border-soft: #1f262a;
   --border-strong: #3a4347;
@@ -1215,14 +1222,20 @@ details[open] > .ena-summary::before { transform: rotate(90deg); }
 .stepper-item.is-now .stepper-text b,
 .stepper-item.is-now .stepper-state { color: var(--accent-ink); }
 
-/* Work in flight — the same spin as every other wait on the page. Overrides the
-   done styling above, which would otherwise paint a solid green disc and hide
-   the fact that it is turning at all. */
+/* Work in flight. Overrides the done styling above in full: green says
+   "finished", and a step whose numbers are still being computed is not. */
+.stepper-item.is-running {
+  background: var(--bg-working-soft);
+  border-color: var(--working);
+}
+.stepper-item.is-running:hover { background: var(--bg-working-soft); }
+.stepper-item.is-running .stepper-text b,
+.stepper-item.is-running .stepper-state { color: var(--working); }
 .stepper-item.is-running .stepper-mark,
 .stepper-item.is-done.is-running .stepper-mark {
   background: transparent;
   border: 2.5px solid var(--border);
-  border-top-color: var(--accent);
+  border-top-color: var(--working);
   color: transparent;
   animation: ring-spin 0.9s linear infinite;
 }

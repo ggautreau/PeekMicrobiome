@@ -12,19 +12,19 @@ import {
   sylphWorkerRpc, detectMemory64, chooseWasmBits, WORKER_VERSION,
   readsBudget, readsBudgetNote, readsOverBudgetNote, loadedBuildNote, fmtReads,
   progressFraction, basesForReads, BUDGET_READ_BP,
-} from "./sylph-worker-rpc.js?v=41";
+} from "./sylph-worker-rpc.js?v=42";
 import {
   dbCacheClient, fmtRate, fmtEta, cacheSummary, assertSameDatabase,
-} from "./db-cache.js?v=41";
-import { matePattern, stripFastqExt } from "./sample-naming.js?v=41";
+} from "./db-cache.js?v=42";
+import { matePattern, stripFastqExt } from "./sample-naming.js?v=42";
 import {
   resolveAccession, validateAccession, ASSUMED_BPS,
   downloadEstimate, readCountVerdict, expectedProfiledReads,
-} from "./ena.js?v=41";
-import { normaliseMarkers, screenVerdict, SCREENING_DB, SCREENING_MARKERS } from "./screening.js?v=41";
-import { clusterTable, MAX_ROWS as CLUSTER_MAX_ROWS } from "./cluster.js?v=41";
-import { compositionSvg, alphaSvg, pcoaSvg, alphaDiversity } from "./figures.js?v=41";
-import { toMetaphlan, toBiom, toSylphTsv, toSession, fromSession } from "./exports.js?v=41";
+} from "./ena.js?v=42";
+import { normaliseMarkers, screenVerdict, SCREENING_DB, SCREENING_MARKERS } from "./screening.js?v=42";
+import { clusterTable, MAX_ROWS as CLUSTER_MAX_ROWS } from "./cluster.js?v=42";
+import { compositionSvg, alphaSvg, pcoaSvg, alphaDiversity } from "./figures.js?v=42";
+import { toMetaphlan, toBiom, toSylphTsv, toSession, fromSession } from "./exports.js?v=42";
 import {
   fetchCatalog, fallbackCatalog, renderDbSelect, biomeForUrl, biomeNote,
   mgnifyGenomeUrl,
@@ -32,7 +32,7 @@ import {
   makeDbRef, sameDbRef, refLine, refShort, refCommentLines, refSlug, genomeCountMismatch,
   rememberBiome, recallBiome, catalogueName, LOCAL_VALUE,
   selectionMatchesLoaded, notLoadedNote, refMetaMismatch,
-} from "./biomes.js?v=41";
+} from "./biomes.js?v=42";
 
 const $ = (id) => document.getElementById(id);
 const els = {
@@ -809,6 +809,7 @@ function paintDbProgress(label, p) {
 async function prepareUrlDb(url, label, expectedSize = null) {
   const abs = new URL(url, location.href).href;
   dbAbort = new AbortController();
+  refreshSteps();      // the strip turns amber for the length of the download
   els.cancelDb.classList.remove("hide");
   els.cancelDb.disabled = false;
   try {
@@ -845,6 +846,7 @@ async function prepareUrlDb(url, label, expectedSize = null) {
   } finally {
     els.cancelDb.classList.add("hide");
     dbAbort = null;
+    refreshSteps();
   }
 }
 
@@ -1910,12 +1912,17 @@ function refreshSteps() {
   // to do" — because a step that only says "none yet" tells the user they are
   // stuck without telling them how to stop being stuck.
   const running = files.some((f) => f.status === "running");
+  // The database step is busy while its bytes are still being fetched or
+  // decoded — dbAbort is live for exactly that window.
+  const dbBusy = () => !!dbAbort;
   const okN = files.filter((f) => f.status === "done").length;
   const badN = files.filter((f) => ["failed", "empty", "incomplete"].includes(f.status)).length;
   const state = [
-    dbMeta
-      ? `${currentRef?.label ?? "loaded"} · ${fmtCountish(dbMeta.database_size)} genomes`
-      : (autoMode() ? "screen a sample to pick one" : "pick a biome and load it"),
+    dbBusy()
+      ? "downloading and decoding — see the line in the card"
+      : dbMeta
+        ? `${currentRef?.label ?? "loaded"} · ${fmtCountish(dbMeta.database_size)} genomes`
+        : (autoMode() ? "screen a sample to pick one" : "pick a biome and load it"),
     files.length
       ? `${files.length} sample${files.length === 1 ? "" : "s"}` +
         (running ? ` · ${files.filter((f) => f.status === "running").length} running` : "")
@@ -1934,12 +1941,17 @@ function refreshSteps() {
     if (el) el.textContent = state[i];
     const item = document.querySelector(`.stepper-item[data-goto="${["cardDb", "cardSamples", "results"][i]}"]`);
     if (!item) continue;
-    item.classList.toggle("is-done", done[i]);
+    // Green means FINISHED. A step whose work is still going is amber, whatever
+    // else is true of it — the database is "loaded" the moment its bytes are in
+    // memory, but calling that step done while a run is chewing through it was
+    // the thing that read wrong.
+    const working = [dbBusy(), running, running][i];
+    item.classList.toggle("is-done", done[i] && !working);
     // "now" is what the user can act on: both of the first two until each is
-    // met, and the third only once they are.
-    const now = i < 2 ? !done[i] : (done[0] && done[1] && !done[2]);
+    // met, and the third only once they are. Never while it is working.
+    const now = !working && (i < 2 ? !done[i] : (done[0] && done[1] && !done[2]));
     item.classList.toggle("is-now", now);
-    item.classList.toggle("is-running", i === 1 && running);
+    item.classList.toggle("is-running", working);
   }
 }
 
