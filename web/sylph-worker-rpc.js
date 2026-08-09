@@ -120,7 +120,9 @@
 // be shown at genus, family, order, class or phylum instead of species.
 // v38: the matrix can be ordered by similarity on both axes, recomputed as each
 // sample lands. multi.js imports cluster.js, which a page on v37 does not have.
-export const WORKER_VERSION = "38";
+// v39: composition, alpha diversity and PCoA, drawn as inline SVG from the
+// matrix on screen, plus a CSV of sample groups to colour the ordination.
+export const WORKER_VERSION = "39";
 
 // ---- memory64 capability probe ----------------------------------------------
 

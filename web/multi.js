@@ -12,17 +12,18 @@ import {
   sylphWorkerRpc, detectMemory64, chooseWasmBits, WORKER_VERSION,
   readsBudget, readsBudgetNote, readsOverBudgetNote, loadedBuildNote, fmtReads,
   progressFraction, basesForReads, BUDGET_READ_BP,
-} from "./sylph-worker-rpc.js?v=38";
+} from "./sylph-worker-rpc.js?v=39";
 import {
   dbCacheClient, fmtRate, fmtEta, cacheSummary, assertSameDatabase,
-} from "./db-cache.js?v=38";
-import { matePattern, stripFastqExt } from "./sample-naming.js?v=38";
+} from "./db-cache.js?v=39";
+import { matePattern, stripFastqExt } from "./sample-naming.js?v=39";
 import {
   resolveAccession, validateAccession, ASSUMED_BPS,
   downloadEstimate, readCountVerdict, expectedProfiledReads,
-} from "./ena.js?v=38";
-import { normaliseMarkers, screenVerdict, SCREENING_DB, SCREENING_MARKERS } from "./screening.js?v=38";
-import { clusterTable, MAX_ROWS as CLUSTER_MAX_ROWS } from "./cluster.js?v=38";
+} from "./ena.js?v=39";
+import { normaliseMarkers, screenVerdict, SCREENING_DB, SCREENING_MARKERS } from "./screening.js?v=39";
+import { clusterTable, MAX_ROWS as CLUSTER_MAX_ROWS } from "./cluster.js?v=39";
+import { compositionSvg, alphaSvg, pcoaSvg, alphaDiversity } from "./figures.js?v=39";
 import {
   fetchCatalog, fallbackCatalog, renderDbSelect, biomeForUrl, biomeNote,
   mgnifyGenomeUrl,
@@ -30,7 +31,7 @@ import {
   makeDbRef, sameDbRef, refLine, refShort, refCommentLines, refSlug, genomeCountMismatch,
   rememberBiome, recallBiome, catalogueName, LOCAL_VALUE,
   selectionMatchesLoaded, notLoadedNote, refMetaMismatch,
-} from "./biomes.js?v=38";
+} from "./biomes.js?v=39";
 
 const $ = (id) => document.getElementById(id);
 const els = {
@@ -2440,6 +2441,110 @@ function rerankMatrix() {
   renderMatrix(viewOf(lastMatrix));
 }
 document.getElementById("clusterPick")?.addEventListener("change", rerankMatrix);
+
+// ---- figures -----------------------------------------------------------------
+//
+// Drawn on demand from whatever is on screen, so they follow the rank and the
+// clustering without knowing about either. Not redrawn on every finished sample:
+// a PCoA after each of 85 would be work nobody asked for, and the matrix
+// underneath already shows the run filling in.
+let openFig = null;
+// sample name -> group label, from a CSV the user picks. Never uploaded: it is
+// read with FileReader in this tab, like every FASTQ on this page.
+let metaGroups = new Map();
+const metaGroupOf = (sample) => metaGroups.get(sample) ?? null;
+
+// Two columns, any separator, header optional. Deliberately forgiving: the point
+// is to colour a plot, and refusing a file over a stray quote would be a worse
+// outcome than ignoring a row.
+function parseMetadata(text) {
+  const out = new Map();
+  for (const line of String(text).split(/\r?\n/)) {
+    if (!line.trim() || line.startsWith("#")) continue;
+    const cells = line.split(/[\t,;]/).map((c) => c.trim().replace(/^"|"$/g, ""));
+    if (cells.length < 2 || !cells[0] || !cells[1]) continue;
+    out.set(cells[0], cells[1]);
+  }
+  // A header row names columns, not a sample — recognised by the first cell
+  // matching no sample rather than by guessing at its wording.
+  return out;
+}
+
+document.getElementById("metaFile")?.addEventListener("change", async (e) => {
+  const f = e.target.files?.[0];
+  if (!f) return;
+  try {
+    metaGroups = parseMetadata(await f.text());
+    const known = lastMatrix?.samples?.filter((s) => metaGroups.has(s)).length ?? 0;
+    const note = document.getElementById("figNote");
+    if (note) {
+      note.textContent = known
+        ? `${known} of ${lastMatrix.samples.length} samples matched a group`
+        // Names that match nothing are the usual failure — an accession in the
+        // file, a file name on screen — and silence would leave the plot
+        // stubbornly one colour with no reason given.
+        : `no sample name in that file matches this run — the first column must ` +
+          `be the sample name as shown here (e.g. ${lastMatrix?.samples?.[0] ?? "ERR…"})`;
+    }
+    if (openFig === "pcoa") drawFigure("pcoa");
+  } catch (err) {
+    const note = document.getElementById("figNote");
+    if (note) note.textContent = `could not read that file: ${err?.message ?? err}`;
+  }
+  e.target.value = "";
+});
+
+function drawFigure(kind) {
+  const canvas = document.getElementById("figCanvas");
+  const note = document.getElementById("figNote");
+  const dl = document.getElementById("figDownload");
+  if (!canvas) return;
+  // Clicking the open tab closes it — the figures are an aside, not a mode.
+  if (!kind || kind === openFig || !lastMatrix?.rows?.length) {
+    openFig = null;
+    canvas.classList.add("hide");
+    canvas.innerHTML = "";
+    dl?.classList.add("hide");
+    if (note) note.textContent = "";
+    for (const b of document.querySelectorAll(".fig-tab")) b.classList.remove("is-on");
+    return;
+  }
+  const view = viewOf(lastMatrix);
+  const svg = kind === "composition" ? compositionSvg(view)
+    : kind === "alpha" ? alphaSvg(view)
+    : pcoaSvg(view, { groupOf: metaGroupOf });
+  canvas.innerHTML = svg;
+  canvas.classList.remove("hide");
+  dl?.classList.remove("hide");
+  openFig = kind;
+  for (const b of document.querySelectorAll(".fig-tab")) {
+    b.classList.toggle("is-on", b.dataset.fig === kind);
+  }
+  // Every figure is relative to one catalogue and to nothing else. Said here
+  // too, because a figure is the thing that gets pasted into a slide with no
+  // page around it.
+  if (note) {
+    note.textContent = `${view.rows.length} ${RANK_LABELS[currentRank()].toLowerCase()}` +
+      `${view.rows.length === 1 ? "" : currentRank() === "s" ? "" : ""} × ${view.samples.length} samples, ` +
+      `against ${refShort(view.ref) || "the loaded catalogue"}` +
+      (kind === "pcoa" && !metaGroups.size ? " · load metadata to colour by group" : "");
+  }
+}
+
+for (const b of document.querySelectorAll(".fig-tab")) {
+  b.addEventListener("click", () => drawFigure(b.dataset.fig));
+}
+document.getElementById("figDownload")?.addEventListener("click", () => {
+  const svg = document.getElementById("figCanvas")?.innerHTML;
+  if (!svg || !openFig) return;
+  const blob = new Blob([svg], { type: "image/svg+xml" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `${openFig}_${refSlug(lastMatrix?.ref)}.svg`;
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(url), 60_000);
+});
 document.getElementById("rankPick")?.addEventListener("change", rerankMatrix);
 const canAggregate = () => taxonomy.rankKeys.length > 0;
 

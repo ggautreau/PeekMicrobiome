@@ -966,6 +966,40 @@ table.matrix tbody tr:nth-child(even) { background: var(--bg-softer); }
 .rank-pick { display: inline-flex; align-items: center; gap: 0.4rem; color: var(--ink-soft); }
 .rank-pick select { width: auto; min-width: 7rem; }
 
+/* ---------- Figures ----------
+   An aside to the matrix, not a mode: opening one is a click, closing it is the
+   same click again. */
+.figures { margin-top: 1rem; }
+.fig-tabs { display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; }
+.fig-tab {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 0.4rem 0.9rem;
+  color: var(--ink-soft);
+  font: inherit;
+  cursor: pointer;
+}
+.fig-tab:hover { border-color: var(--accent); color: var(--accent-ink); }
+.fig-tab.is-on {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: var(--accent-ink);
+  font-weight: 600;
+}
+.fig-meta { cursor: pointer; color: var(--ink-soft); font-size: 0.88rem; }
+.fig-meta:hover { color: var(--accent-ink); text-decoration: underline; }
+.fig-canvas {
+  margin-top: 0.7rem;
+  padding: 0.6rem;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  /* A 900px figure must not widen the page on a narrow screen. */
+  overflow-x: auto;
+}
+.fig-canvas svg { display: block; max-width: 100%; height: auto; }
+
 /* ---------- Resource monitor ----------
    Fixed to the right edge, collapsed to a tab. Everything this page does is
    bounded by linear memory, disk and the link, and the first two were invisible

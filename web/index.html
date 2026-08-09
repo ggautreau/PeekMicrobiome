@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>PeekMicrobiome — upload-free, installation-free metagenomic profiling across biomes</title>
   <link rel="icon" type="image/svg+xml" href="./favicon.svg">
-  <link rel="stylesheet" href="./styles.css?v=38">
+  <link rel="stylesheet" href="./styles.css?v=39">
   <script>
     (function () {
       try {
@@ -280,6 +280,27 @@
         <button id="downloadTsv">Download TSV</button>
         <button id="downloadCsv">Download CSV</button>
       </div>
+      <!-- The three figures a microbiome result is normally shown as, computed
+           from the matrix already on screen. Drawn on demand rather than with
+           every redraw: a PCoA after each of 85 samples would be work nobody
+           asked for. -->
+      <div class="figures">
+        <div class="fig-tabs" role="tablist">
+          <button class="fig-tab" data-fig="composition" role="tab" type="button">Composition</button>
+          <button class="fig-tab" data-fig="alpha" role="tab" type="button">Diversity</button>
+          <button class="fig-tab" data-fig="pcoa" role="tab" type="button">PCoA</button>
+          <button id="figDownload" class="hide" type="button">Download SVG</button>
+          <!-- Metadata is read here and goes no further than this tab, like
+               everything else dropped on this page. -->
+          <label class="fig-meta" title="A CSV or TSV whose first column is the sample name and second is the group. Read in this tab only — it is never uploaded, like every other file here.">
+            <input type="file" id="metaFile" accept=".csv,.tsv,.txt" hidden>
+            <span>Load groups (CSV)</span>
+          </label>
+          <span class="info" id="figNote"></span>
+        </div>
+        <div class="fig-canvas hide" id="figCanvas"></div>
+      </div>
+
       <div class="matrixWrap">
         <table class="matrix">
           <thead id="matrixHead"></thead>
@@ -339,6 +360,6 @@
   </footer>
 
   <script src="./theme.js"></script>
-  <script type="module" src="./multi.js?v=38"></script>
+  <script type="module" src="./multi.js?v=39"></script>
 </body>
 </html>

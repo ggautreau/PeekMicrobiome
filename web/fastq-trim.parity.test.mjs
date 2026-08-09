@@ -1165,6 +1165,73 @@ const catalogEntries = biomes.allBiomes(catalog);
   }
 }
 
+console.log("== the figures compute what they claim to ==");
+{
+  const { alphaDiversity, distanceMatrix, pcoa, compositionSvg, alphaSvg, pcoaSvg } =
+    await import("./figures.js");
+
+  // Shannon has known values: n equally-abundant taxa give exactly ln(n), and
+  // e^H gives n back. Anything else and the index is not the index.
+  let shannonOk = true;
+  for (const n of [1, 2, 4, 10, 50]) {
+    const t = { samples: ["S"], rows: Array.from({ length: n }, (_, i) => ({ species: `t${i}`, values: [100 / n] })) };
+    const a = alphaDiversity(t)[0];
+    if (Math.abs(a.shannon - Math.log(n)) > 1e-9) shannonOk = false;
+    if (Math.abs(a.effective - n) > 1e-6) shannonOk = false;
+    if (a.richness !== n) shannonOk = false;
+  }
+  check("Shannon on n equal taxa is exactly ln(n), and e^H gives n back", shannonOk);
+  // Absent is not present-at-zero: a taxon with 0 must not count towards
+  // richness, or every sample would report the whole catalogue.
+  check("...and a zero-abundance taxon counts towards neither index",
+    alphaDiversity({ samples: ["S"], rows: [{ species: "a", values: [100] }, { species: "b", values: [0] }] })[0]
+      .richness === 1);
+
+  // PCoA must separate groups that ARE separate, and give the same plot twice —
+  // a random start would flip signs between redraws and read as points moving.
+  const g = (k) => [k === 0 ? 90 : 1, k === 1 ? 90 : 1, k === 2 ? 90 : 1];
+  const labels = [0, 0, 1, 1, 2, 2];
+  const t3 = {
+    samples: labels.map((k, i) => `S${i}`),
+    rows: [0, 1, 2].map((k) => ({ species: `t${k}`, values: labels.map((l) => g(l)[k]) })),
+  };
+  const D = distanceMatrix(t3);
+  check("Bray-Curtis is 0 on the diagonal and symmetric",
+    D.every((row, i) => row[i] === 0 && row.every((v, j) => Math.abs(v - D[j][i]) < 1e-12)));
+  const p1 = pcoa(D), p2 = pcoa(D);
+  const dist = (p, a, b) => Math.hypot(p.points[a].x - p.points[b].x, p.points[a].y - p.points[b].y);
+  check("PCoA puts identical samples together and different ones apart",
+    dist(p1, 0, 1) < 1e-6 && dist(p1, 0, 2) > 0.5,
+    `within ${dist(p1, 0, 1).toFixed(4)}, between ${dist(p1, 0, 2).toFixed(3)}`);
+  check("...and is deterministic, so a redraw does not move the points",
+    JSON.stringify(p1.points) === JSON.stringify(p2.points));
+  // Bray-Curtis is not Euclidean, so negative eigenvalues are normal — the axis
+  // label must not present a fraction of a total that includes them.
+  check("...and the explained fractions are in [0,1]",
+    p1.explained.every((f) => f >= 0 && f <= 1), JSON.stringify(p1.explained));
+
+  // The SVGs must be well-formed and must escape what comes from the data: a
+  // species name with an ampersand in it would otherwise break the figure.
+  const nasty = {
+    samples: ["S<1>", "S&2", "S3"],
+    rows: [{ species: 'Bacteroides "sp" & <co>', genome: "g", values: [10, 20, 30] },
+           { species: "t2", genome: "g2", values: [5, 5, 5] },
+           { species: "t3", genome: "g3", values: [1, 2, 3] }],
+    ref: null,
+  };
+  for (const [name, fn] of [["composition", compositionSvg], ["alpha", alphaSvg], ["pcoa", pcoaSvg]]) {
+    const svg = fn(nasty);
+    check(`${name} produces a complete SVG`, svg.startsWith("<svg") && svg.endsWith("</svg>"));
+    // Species names and sample names go straight into the markup, so a name with
+    // an ampersand or an angle bracket in it would produce a broken figure. Take
+    // the text content of every <text> and <title> and look for a raw one.
+    const contents = svg.match(/<(?:text|title)[^>]*>[^<]*/g) ?? [];
+    check(`...and escapes the data it puts in there`,
+      contents.length > 0 && !contents.some((c) => /&(?!amp;|lt;|gt;|quot;|#)/.test(c)),
+      contents.find((c) => /&(?!amp;|lt;|gt;|quot;|#)/.test(c)) ?? `${contents.length} text nodes`);
+  }
+}
+
 console.log("== clustering orders the matrix without changing it ==");
 {
   const { clusterOrder, clusterTable, brayCurtis, correlationDistance } =
