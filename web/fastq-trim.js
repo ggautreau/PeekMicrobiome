@@ -48,11 +48,14 @@ export async function detectGzip(file) {
 //              back-pressure hook (see streamTrimPair).
 //
 // Returns { reads, bytesIn }.
-async function streamCore(filesList, maxReads, onChunk, onProgress, signal, shouldStop, waitTurn) {
+async function streamCore(filesList, maxReads, onChunk, onProgress, signal, shouldStop, waitTurn, maxBases = Infinity) {
   const targetNewlines = maxReads * 4;
   const totalBytes = filesList.reduce((a, f) => a + f.size, 0);
 
   let newlines = 0;
+  let bases = 0;
+  let lineStart = 0;
+  const countBases = Number.isFinite(maxBases) && maxBases > 0;
   let bytesIn = 0;
   let lastReport = 0;
   let capped = false;
@@ -60,14 +63,42 @@ async function streamCore(filesList, maxReads, onChunk, onProgress, signal, shou
   // Scan for the cap while forwarding. Identical newline accounting to the
   // pre-streaming version: the cutoff is inclusive of the capping newline, so
   // the output always ends on a complete 4-line record.
+  //
+  // TWO caps, and the first one reached wins.
+  //
+  // A read cap alone is meaningless across platforms: the memory this costs is
+  // the sketch state, which grows with BASES, and the measured budget
+  // (48,750,000 reads on wasm32) was calibrated on 150 bp reads — 7.3 Gbases.
+  // The same 3,000,000 reads is 0.45 Gbase of Illumina and 30 Gbases of 10 kb
+  // nanopore, which is four times the whole 32-bit budget and dies in an
+  // unrecoverable allocator abort.
+  //
+  // Bases are counted on the SEQUENCE line only — line 1 of each 4-line record,
+  // 0-indexed — because that is what is hashed. Quality is the same length but
+  // is never sketched, and headers vary.
   function consumeChunk(value) {
     if (capped || value.length === 0) return;
     let cutoff = -1;
     for (let i = 0; i < value.length; i++) {
       if (value[i] === 0x0A) {
+        // The line that just ended was the sequence when newlines % 4 === 1.
+        if (countBases && newlines % 4 === 1) bases += i - lineStart;
         newlines++;
+        lineStart = i + 1;
         if (newlines === targetNewlines) { cutoff = i + 1; break; }
+        // Only ever cut on a record boundary: newlines % 4 === 0 means a whole
+        // record has just closed. Checking mid-record would truncate one.
+        if (countBases && newlines % 4 === 0 && bases >= maxBases) { cutoff = i + 1; break; }
       }
+    }
+    // Bases seen on the sequence line still open at the end of this chunk. Held
+    // in `lineStart` rather than added, because the line continues in the next
+    // chunk and would otherwise be counted from zero there.
+    if (cutoff < 0 && countBases && newlines % 4 === 1) {
+      bases += value.length - lineStart;
+      lineStart = 0;
+    } else if (cutoff < 0) {
+      lineStart = Math.max(0, lineStart - value.length);
     }
     if (cutoff >= 0) {
       capped = true;
@@ -134,7 +165,7 @@ async function streamCore(filesList, maxReads, onChunk, onProgress, signal, shou
     }
   }
 
-  return { reads: Math.floor(newlines / 4), bytesIn };
+  return { reads: Math.floor(newlines / 4), bytesIn, bases };
 }
 
 // ---- streaming API (no full materialisation) -------------------------------
@@ -152,8 +183,8 @@ export async function streamTrim(file, maxReads, onChunk, onProgress, signal, sh
 
 // Several files treated as one concatenated stream (one sample split over
 // several runs). onProgress gets the extra fileIndex argument.
-export async function streamTrimMulti(filesList, maxReads, onChunk, onProgress, signal, shouldStop, waitTurn) {
-  return streamCore(filesList, maxReads, onChunk, onProgress, signal, shouldStop, waitTurn);
+export async function streamTrimMulti(filesList, maxReads, onChunk, onProgress, signal, shouldStop, waitTurn, maxBases = Infinity) {
+  return streamCore(filesList, maxReads, onChunk, onProgress, signal, shouldStop, waitTurn, maxBases);
 }
 
 // How many decoded reads the leading mate may get ahead of the other before it

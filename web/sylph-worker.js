@@ -45,16 +45,16 @@
 // fails the named import and kills the worker module outright.
 import {
   readAndTrim, readAndTrimMulti, streamTrim, streamTrimMulti, streamTrimPair,
-} from "./fastq-trim.js?v=29";
+} from "./fastq-trim.js?v=30";
 import {
   WORKER_VERSION, detectMemory64, chooseWasmBits, WASM32_SAFE_READS,
-} from "./sylph-worker-rpc.js?v=29";
+} from "./sylph-worker-rpc.js?v=30";
 // The database is never downloaded here: one download happens in
 // db-cache-worker.js, then every worker in the pool reads the same OPFS file.
-import { readCachedBytes } from "./db-cache.js?v=29";
+import { readCachedBytes } from "./db-cache.js?v=30";
 // FASTQs, on the other hand, ARE fetched here in ENA mode — streamed, never
 // stored. urlSource is the resumable read source; see web/ena.js.
-import { urlSource, rateMeter, fastqUrl } from "./ena.js?v=29";
+import { urlSource, rateMeter, fastqUrl } from "./ena.js?v=30";
 
 let profiler = null;
 
@@ -407,7 +407,7 @@ self.addEventListener("message", async (e) => {
       // the incremental sketcher, the fallback, cancellation — is the code that
       // was already here, unchanged and not copied.
       if (!profiler) throw new Error("database not loaded");
-      const { maxReads } = e.data;
+      const { maxReads, maxBases = Infinity } = e.data;
       const net = type === "profileUrls";
       const files = net ? urlSources(e.data.urls, ac.signal, id) : e.data.files;
       const bps = bpsTracker(net);
@@ -426,6 +426,11 @@ self.addEventListener("message", async (e) => {
             self.postMessage({ id, progress: { bytesIn, reads: r, total, fi, net, bps: bps(bytesIn) } }),
           ac.signal,
           sampleStop,
+          undefined,
+          // Whichever cap is reached first. On long reads the read count stops
+          // meaning anything about memory: the sketch grows with BASES, and
+          // 3 M nanopore reads at 10 kb is 30 Gbases against a 7.3 Gbase budget.
+          maxBases,
         );
         reads = sampleReads(res.reads);
         const trimMs = performance.now() - trimT0;
@@ -461,7 +466,7 @@ self.addEventListener("message", async (e) => {
       // read from. The pairing, the drift budget and the fail-together rule are
       // untouched — and they have to be, because they are the part that is hard.
       if (!profiler) throw new Error("database not loaded");
-      const { maxReads } = e.data;
+      const { maxReads, maxBases = Infinity } = e.data;
       const net = type === "profileUrlsPe";
       const r1Files = net ? urlSources(e.data.r1, ac.signal, id, 1) : e.data.r1Files;
       const r2Files = net ? urlSources(e.data.r2, ac.signal, id, 2) : e.data.r2Files;

@@ -96,7 +96,10 @@
 // v29: a finished run says so through the tab title and, if asked, a system
 // notification; the header carries a real mark instead of the letter P, and the
 // favicon no longer shows an "S" left over from sylph.
-export const WORKER_VERSION = "29";
+// v30: the read cap can be applied in BASES, which is the only bound that means
+// anything on long reads. The worker takes a maxBases argument; a page on v29
+// would send none and a nanopore run would keep reading past the budget.
+export const WORKER_VERSION = "30";
 
 // ---- memory64 capability probe ----------------------------------------------
 
@@ -193,6 +196,13 @@ export const WASM64_SAFE_READS = 96_000_000;
 // mixing `toLocaleString()` (which follows the browser's locale) with the
 // en-US grouping used here put "24 000 000" and "24,000,000" side by side in
 // the same sentence.
+// The read length the memory budget above was measured at. "The equivalent of
+// N reads in bases" means N x this — any other figure would describe a budget
+// nobody measured.
+export const BUDGET_READ_BP = 150;
+export const basesForReads = (reads) =>
+  Number.isFinite(reads) && reads > 0 ? reads * BUDGET_READ_BP : Infinity;
+
 export const fmtReads = (n) => (Number.isFinite(n) ? Math.floor(n).toLocaleString("en-US") : "?");
 
 /**
@@ -407,8 +417,8 @@ export function sylphWorkerRpc() {
     async profileFile(file, maxReads, onProgress, signal) {
       return call("profileFile", { file, maxReads }, { onProgress, signal });
     },
-    async profileFilesMulti(files, maxReads, onProgress, signal) {
-      return call("profileFilesMulti", { files, maxReads }, { onProgress, signal });
+    async profileFilesMulti(files, maxReads, onProgress, signal, maxBases) {
+      return call("profileFilesMulti", { files, maxReads, maxBases }, { onProgress, signal });
     },
     async profileFilesPe(r1Files, r2Files, maxReads, onProgress, signal) {
       return call("profileFilesPe", { r1Files, r2Files, maxReads }, { onProgress, signal });
@@ -418,8 +428,8 @@ export function sylphWorkerRpc() {
     // methods does not survive postMessage. Same progress callback, same signal,
     // same results; the progress events additionally carry `net: true`, a `bps`
     // rate, and `phase: "net_retry"` events when a download is cut and resumed.
-    async profileUrls(urls, maxReads, onProgress, signal) {
-      return call("profileUrls", { urls, maxReads }, { onProgress, signal });
+    async profileUrls(urls, maxReads, onProgress, signal, maxBases) {
+      return call("profileUrls", { urls, maxReads, maxBases }, { onProgress, signal });
     },
     async profileUrlsPe(r1, r2, maxReads, onProgress, signal) {
       return call("profileUrlsPe", { r1, r2, maxReads }, { onProgress, signal });

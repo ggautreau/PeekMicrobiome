@@ -48,7 +48,7 @@ export const ENA_PORTAL_API = "https://www.ebi.ac.uk/ena/portal/api/filereport";
 // vaginal metagenome, zero detections and no explanation.
 export const ENA_FIELDS =
   "run_accession,library_layout,fastq_ftp,fastq_bytes,read_count," +
-  "library_strategy,library_source,instrument_platform";
+  "library_strategy,library_source,instrument_platform,base_count";
 
 // An INSDC accession: three to six letters then digits. PRJEB83730, SAMEA…,
 // ERR14098592, SRR…, ERS…, ERX…, ERP… all fit; nothing else is sent to the API.
@@ -241,11 +241,17 @@ export function parseRunRow(row, { allowHosts = ENA_FASTQ_HOSTS } = {}) {
     });
   }
 
+  // base_count / read_count is the mean read length, known before a byte is
+  // downloaded. It settled the spots-vs-reads question, and it is also how a
+  // long-read run is recognised: what costs memory is bases, not reads.
+  const basesRaw = String(row?.base_count ?? "").trim();
+  const basesNum = basesRaw === "" ? NaN : Number(basesRaw);
+  const bases = Number.isFinite(basesNum) && basesNum >= 0 ? basesNum : NaN;
   const strategy = String(row?.library_strategy ?? "").trim();
   const source = String(row?.library_source ?? "").trim();
   const platform = String(row?.instrument_platform ?? "").trim();
   const base = {
-    run, declaredLayout, reads, strategy, source, platform,
+    run, declaredLayout, reads, bases, strategy, source, platform,
     // Carried on the run rather than computed at render time: whether a run can
     // be profiled at all is a property of the run, and both the picker and the
     // per-sample row need the same answer.

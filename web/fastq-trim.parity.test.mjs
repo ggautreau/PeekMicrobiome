@@ -23,7 +23,7 @@ import {
 } from "./fastq-trim.js";
 import {
   detectMemory64, chooseWasmBits, readsBudget, readsOverBudgetNote, loadedBuildNote,
-  progressFraction,
+  progressFraction, basesForReads, BUDGET_READ_BP,
   WASM32_SAFE_READS, WASM32_CEILING_READS, WASM64_SAFE_READS, WASM64_CEILING_READS,
 } from "./sylph-worker-rpc.js";
 
@@ -814,6 +814,53 @@ console.log("== memory64 probe ==");
 }
 
 // ---- the 32/64 choice -------------------------------------------------------
+console.log("== the cap in bases, for long reads ==");
+{
+  // A read cap is not a memory bound across platforms. The measured budget
+  // (48,750,000 reads on wasm32) was taken on 150 bp reads — 7.3 Gbases — and
+  // the sketch grows with BASES. The same 3 M reads is 0.45 Gbase of Illumina
+  // and 30 Gbases of 10 kb nanopore: four times the whole 32-bit budget, and it
+  // dies in an unrecoverable allocator abort rather than slowly.
+  const mk = (n, len) => {
+    let out = "";
+    for (let i = 0; i < n; i++) out += `@r${i}\n${"ACGT".repeat(len / 4)}\n+\n${"I".repeat(len)}\n`;
+    return new TextEncoder().encode(out);
+  };
+  const blobOf = (u) => ({
+    size: u.length,
+    slice: (a, b) => ({ arrayBuffer: async () => u.slice(a, b).buffer }),
+    stream() {
+      let done = false;
+      return new ReadableStream({ pull(c) { if (done) { c.close(); return; } c.enqueue(u); done = true; } });
+    },
+  });
+  const b = blobOf(mk(10, 100));           // 10 reads, 1000 sequence bases
+  const run = (maxReads, maxBases) =>
+    streamTrimMulti([b], maxReads, () => {}, undefined, undefined, undefined, undefined, maxBases);
+
+  check("no base cap leaves the read cap exactly as it was",
+    (await run(3, Infinity)).reads === 3);
+  check("a base cap stops on the record that reaches it",
+    (await run(10, 500)).reads === 5, `${(await run(10, 500)).reads} reads`);
+  // Never mid-record: 250 bases falls inside read 3, so read 3 is completed.
+  check("...and never mid-record — a partial read would be a corrupt sketch",
+    (await run(10, 250)).bases === 300);
+  check("...so a cap below one read still yields one whole read",
+    (await run(10, 99)).reads === 1);
+  // Whichever comes first, which is the whole point: Illumina keeps hitting the
+  // read cap, nanopore starts hitting the base cap.
+  check("the READ cap still wins when it is the tighter of the two",
+    (await run(2, 900)).reads === 2);
+  check("the BASE cap wins when it is the tighter of the two",
+    (await run(10, 400)).reads === 4);
+
+  // The equivalence the checkbox offers, and the number the budget was measured
+  // at — if these drift apart the cap stops meaning what the label says.
+  check("'equivalent of N reads' is N x the measured read length",
+    basesForReads(3e6) === 3e6 * BUDGET_READ_BP && BUDGET_READ_BP === 150,
+    `${BUDGET_READ_BP} bp`);
+}
+
 console.log("== per-sample progress fraction ==");
 {
   const pf = progressFraction;

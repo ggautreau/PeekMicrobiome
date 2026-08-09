@@ -11,17 +11,17 @@
 import {
   sylphWorkerRpc, detectMemory64, chooseWasmBits, WORKER_VERSION,
   readsBudget, readsBudgetNote, readsOverBudgetNote, loadedBuildNote, fmtReads,
-  progressFraction,
-} from "./sylph-worker-rpc.js?v=29";
+  progressFraction, basesForReads, BUDGET_READ_BP,
+} from "./sylph-worker-rpc.js?v=30";
 import {
   dbCacheClient, fmtRate, fmtEta, cacheSummary, assertSameDatabase,
-} from "./db-cache.js?v=29";
-import { matePattern, stripFastqExt } from "./sample-naming.js?v=29";
+} from "./db-cache.js?v=30";
+import { matePattern, stripFastqExt } from "./sample-naming.js?v=30";
 import {
   resolveAccession, validateAccession, ASSUMED_BPS,
   downloadEstimate, readCountVerdict, expectedProfiledReads,
-} from "./ena.js?v=29";
-import { normaliseMarkers, screenVerdict, SCREENING_DB, SCREENING_MARKERS } from "./screening.js?v=29";
+} from "./ena.js?v=30";
+import { normaliseMarkers, screenVerdict, SCREENING_DB, SCREENING_MARKERS } from "./screening.js?v=30";
 import {
   fetchCatalog, fallbackCatalog, renderDbSelect, biomeForUrl, biomeNote,
   mgnifyGenomeUrl,
@@ -29,7 +29,7 @@ import {
   makeDbRef, sameDbRef, refLine, refShort, refCommentLines, refSlug, genomeCountMismatch,
   rememberBiome, recallBiome, catalogueName, LOCAL_VALUE,
   selectionMatchesLoaded, notLoadedNote, refMetaMismatch,
-} from "./biomes.js?v=29";
+} from "./biomes.js?v=30";
 
 const $ = (id) => document.getElementById(id);
 const els = {
@@ -53,6 +53,7 @@ const els = {
   enaNone: $("enaNone"), enaAdd: $("enaAdd"), enaPending: $("enaPending"),
   runHint: $("runHint"), pairsAsTwo: $("pairsAsTwo"),
   runControlsNote: $("runControlsNote"),
+  basesUnit: $("basesUnit"), capInBases: $("capInBases"),
   cardDb: $("cardDb"), cardSamples: $("cardSamples"),
 };
 
@@ -217,6 +218,44 @@ async function wantNotify() {
   catch { return false; }
 }
 
+// Long reads make the read cap meaningless as a memory bound: the sketch grows
+// with bases, and the measured budget assumed 150 bp. 3 M nanopore reads at
+// 10 kb is 30 Gbases against a 7.3 Gbase 32-bit budget — an unrecoverable
+// allocator abort, not a slow run.
+//
+// For an ENA run the mean length is known BEFORE anything is downloaded:
+// base_count / read_count, the same pair of fields that settled the spots-vs-
+// reads question. For a dropped file it is not, so the cap simply applies.
+const LONG_READ_BP = 400;   // comfortably above any Illumina run, below any ONT/PacBio one
+
+function sampleMeanReadBp(s) {
+  if (!Number.isFinite(s?.enaBases) || !Number.isFinite(s?.enaReadCount) || !s.enaReadCount) return NaN;
+  return s.enaBases / s.enaReadCount;
+}
+const anyLongReads = () => files.some((s) => sampleMeanReadBp(s) >= LONG_READ_BP);
+const capInBases = () => !!els.capInBases?.checked;
+
+// The cap actually handed to the worker, in bases. Infinity means "count reads
+// only", which is what every Illumina run wants.
+function basesCapFor(maxReads) {
+  return capInBases() ? basesForReads(maxReads) : Infinity;
+}
+
+function refreshLongReadUnit() {
+  if (!els.basesUnit) return;
+  const long = anyLongReads();
+  els.basesUnit.classList.toggle("hide", !long);
+  if (!long) return;
+  const worst = Math.max(...files.map(sampleMeanReadBp).filter(Number.isFinite));
+  const v = currentReads();
+  els.basesUnit.title =
+    `These reads average ${Math.round(worst).toLocaleString("en-US")} bp — ` +
+    `${(worst / BUDGET_READ_BP).toFixed(0)}x an Illumina read. Ticked, reading stops at ` +
+    `${fmtReads(basesForReads(v))} bases (the equivalent of ${fmtReads(v)} reads at ` +
+    `${BUDGET_READ_BP} bp). Unticked, it stops at ${fmtReads(v)} reads — about ` +
+    `${fmtReads(v * worst)} bases, which is what the memory budget is measured against.`;
+}
+
 const autoMode = () => !!document.getElementById("modeAuto")?.checked;
 
 // Manual and automatic are two situations, not two skins: one needs the picker,
@@ -326,8 +365,10 @@ async function runScreen() {
     // R1 alone: screening needs presence, and one mate carries the same species.
     const inputs = s.kind === "pe" ? s.peRuns.map((p) => p.r1) : s.seRuns;
     const { tsv } = s.origin === "ena"
-      ? await rpc.profileUrls(inputs.map(toUrlDesc), SCREEN_READS, onProgress, screenAbort.signal)
-      : await rpc.profileFilesMulti(inputs, SCREEN_READS, onProgress, screenAbort.signal);
+      ? await rpc.profileUrls(inputs.map(toUrlDesc), SCREEN_READS, onProgress, screenAbort.signal,
+          basesCapFor(SCREEN_READS))
+      : await rpc.profileFilesMulti(inputs, SCREEN_READS, onProgress, screenAbort.signal,
+          basesCapFor(SCREEN_READS));
     const v = screenVerdict(tsv, markers);
     paintScreenVerdict(s, v);
     // Terminate before loading: the screening worker has served its purpose and
@@ -1163,6 +1204,7 @@ els.file.addEventListener("change", () => {
 // re-downloaded.
 // Changing the unit re-reads every ENA expectation: they were stored in the old
 // one, and a stale expectation is exactly how a good sample gets flagged short.
+els.capInBases?.addEventListener("change", () => { refreshLongReadUnit(); enaCostChanged(); });
 els.pairsAsTwo?.addEventListener("change", () => {
   refreshPairUnit();
   for (const s of files) {
@@ -1489,6 +1531,7 @@ els.enaAdd?.addEventListener("click", () => {
       // Both the raw catalogue figure and its converted form: the unit can change
       // after the sample is in the list.
       enaReadCount: r.reads,
+      enaBases: r.bases,
       enaLayout: r.layout,
       enaReads: expectedProfiledReads({
         readCount: r.reads, layout: r.layout, pairsAsTwo: pairsCountAsTwo(),
@@ -1690,6 +1733,7 @@ function progressRing(s) {
 
 function renderFilesList() {
   refreshDbMode();
+  refreshLongReadUnit();
   renderEnaPending();
   if (files.length === 0) {
     els.filesList.classList.add("hide");
@@ -2009,8 +2053,10 @@ async function runAll() {
             renderFilesList();
           };
           ({ tsv, reads } = s.origin === "ena"
-            ? await rpc.profileUrls(seFiles.map(toUrlDesc), cap, onProgress, abortCtrl.signal)
-            : await rpc.profileFilesMulti(seFiles, cap, onProgress, abortCtrl.signal));
+            ? await rpc.profileUrls(seFiles.map(toUrlDesc), cap, onProgress, abortCtrl.signal,
+                basesCapFor(cap))
+            : await rpc.profileFilesMulti(seFiles, cap, onProgress, abortCtrl.signal,
+                basesCapFor(cap)));
         }
 
         const rows = parseTsv(tsv);
