@@ -978,31 +978,59 @@ table.matrix tbody tr:nth-child(even) { background: var(--bg-softer); }
   max-width: min(24rem, 92vw);
   font-size: 0.82rem;
 }
+/* Open, it is a panel with a heading — so it stacks, and the heading reads the
+   way headings read. */
+.monitor:not(.collapsed) { flex-direction: column; align-items: stretch; }
+
 .monitor-toggle {
   flex: 0 0 auto;
-  writing-mode: vertical-rl;
-  transform: rotate(180deg);
   display: flex;
   align-items: center;
   gap: 0.4rem;
-  padding: 0.85rem 0.35rem;
-  background: var(--bg-card);
-  color: var(--ink-soft);
-  border: 1px solid var(--border);
-  border-right: none;
-  border-radius: var(--radius-md) 0 0 var(--radius-md);
   cursor: pointer;
   font: inherit;
-  font-size: 0.78rem;
-  box-shadow: var(--shadow-sm);
+  font-size: 0.8rem;
+  font-weight: 600;
 }
-.monitor-toggle:hover { color: var(--accent-ink); border-color: var(--accent); }
-.monitor-toggle svg { transform: rotate(90deg); }
+/* COLLAPSED: a tab on the edge, and it has to be findable — this was too quiet
+   to notice at all. Accent fill rather than card grey, so it reads as a control
+   rather than as a seam in the page. */
+.monitor.collapsed .monitor-toggle {
+  writing-mode: vertical-rl;
+  transform: rotate(180deg);
+  padding: 1rem 0.45rem;
+  background: var(--accent-ink);
+  color: #fff;
+  border: none;
+  border-radius: var(--radius-md) 0 0 var(--radius-md);
+  box-shadow: var(--shadow-md);
+  letter-spacing: 0.02em;
+}
+.monitor.collapsed .monitor-toggle:hover { background: var(--accent-ink-hover); }
+.monitor.collapsed .monitor-toggle svg { transform: rotate(90deg); }
+/* OPEN: the same button becomes the panel's title bar, horizontal. */
+.monitor:not(.collapsed) .monitor-toggle {
+  justify-content: space-between;
+  padding: 0.55rem 0.9rem;
+  background: var(--bg-soft);
+  color: var(--ink);
+  border: 1px solid var(--border);
+  border-right: none;
+  border-bottom: none;
+  border-radius: var(--radius-md) 0 0 0;
+}
+.monitor:not(.collapsed) .monitor-toggle::after {
+  content: "\00d7";
+  font-size: 1.1rem;
+  line-height: 1;
+  color: var(--ink-muted);
+}
+.monitor:not(.collapsed) .monitor-toggle:hover::after { color: var(--danger); }
 .monitor-body {
   background: var(--bg-card);
   border: 1px solid var(--border);
   border-right: none;
-  border-radius: var(--radius-md) 0 0 var(--radius-md);
+  border-radius: 0 0 0 var(--radius-md);
   box-shadow: var(--shadow-md);
   padding: 0.75rem 0.9rem;
   display: grid;
@@ -1098,12 +1126,18 @@ table.matrix tbody tr:nth-child(even) { background: var(--bg-softer); }
 }
 
 /* Satisfied: a tick, in the same green the cards use. */
+.stepper-item.is-done {
+  background: var(--bg-success-soft);
+  border-color: var(--success);
+}
+.stepper-item.is-done:hover { background: var(--bg-success-soft); }
 .stepper-item.is-done .stepper-mark {
   border-color: var(--success);
   background: var(--success);
   color: #fff;
   font-size: 0;
 }
+.stepper-item.is-done .stepper-state { color: var(--success); }
 .stepper-item.is-done .stepper-mark::after { content: "\2713"; font-size: 0.95rem; }
 .stepper-item.is-done .stepper-text b { color: var(--success); }
 

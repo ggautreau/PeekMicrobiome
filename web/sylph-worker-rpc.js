@@ -113,7 +113,10 @@
 // v35: a resource monitor reads the workers' real linear memory through a new
 // "stats" message, alongside disk and link. A page on v34 talks to a worker that
 // has never heard of it.
-export const WORKER_VERSION = "35";
+// v36: the monitor tab is findable and its title reads horizontally once open,
+// and a satisfied step in the strip carries the green background rather than
+// only green text — on a dark theme it was a black tile beside a black tile.
+export const WORKER_VERSION = "36";
 
 // ---- memory64 capability probe ----------------------------------------------
 

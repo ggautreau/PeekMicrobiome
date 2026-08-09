@@ -12,16 +12,16 @@ import {
   sylphWorkerRpc, detectMemory64, chooseWasmBits, WORKER_VERSION,
   readsBudget, readsBudgetNote, readsOverBudgetNote, loadedBuildNote, fmtReads,
   progressFraction, basesForReads, BUDGET_READ_BP,
-} from "./sylph-worker-rpc.js?v=35";
+} from "./sylph-worker-rpc.js?v=36";
 import {
   dbCacheClient, fmtRate, fmtEta, cacheSummary, assertSameDatabase,
-} from "./db-cache.js?v=35";
-import { matePattern, stripFastqExt } from "./sample-naming.js?v=35";
+} from "./db-cache.js?v=36";
+import { matePattern, stripFastqExt } from "./sample-naming.js?v=36";
 import {
   resolveAccession, validateAccession, ASSUMED_BPS,
   downloadEstimate, readCountVerdict, expectedProfiledReads,
-} from "./ena.js?v=35";
-import { normaliseMarkers, screenVerdict, SCREENING_DB, SCREENING_MARKERS } from "./screening.js?v=35";
+} from "./ena.js?v=36";
+import { normaliseMarkers, screenVerdict, SCREENING_DB, SCREENING_MARKERS } from "./screening.js?v=36";
 import {
   fetchCatalog, fallbackCatalog, renderDbSelect, biomeForUrl, biomeNote,
   mgnifyGenomeUrl,
@@ -29,7 +29,7 @@ import {
   makeDbRef, sameDbRef, refLine, refShort, refCommentLines, refSlug, genomeCountMismatch,
   rememberBiome, recallBiome, catalogueName, LOCAL_VALUE,
   selectionMatchesLoaded, notLoadedNote, refMetaMismatch,
-} from "./biomes.js?v=35";
+} from "./biomes.js?v=36";
 
 const $ = (id) => document.getElementById(id);
 const els = {
