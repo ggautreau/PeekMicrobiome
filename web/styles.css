@@ -578,14 +578,18 @@ code {
    enaLookup(): the spinner says "still working", the seconds say how long, and
    only the second one distinguishes a slow answer from a looping animation on a
    request that already died. */
+/* The same arc as .ring-spin, drawn with borders because there is no element to
+   hang an SVG on: three sides in the track colour, one in the accent, is a
+   quarter arc — exactly what the SVG spinner shows. Sized to match the 20px
+   rings so the two do not read as two different kinds of waiting. */
 .info.busy::after {
   content: "";
   display: inline-block;
-  width: 0.75em;
-  height: 0.75em;
+  width: 16px;
+  height: 16px;
   margin-left: 0.5em;
-  vertical-align: -0.05em;
-  border: 2px solid var(--border);
+  vertical-align: -0.2em;
+  border: 2.5px solid var(--border);
   border-top-color: var(--accent);
   border-radius: 50%;
   animation: ring-spin 0.8s linear infinite;
@@ -982,6 +986,16 @@ table.matrix tbody tr:nth-child(even) { background: var(--bg-softer); }
   padding-left: 0.55rem;
   margin-top: 0.4rem;
 }
+
+/* Any line that is a wait: the ring in front, the sentence after it. Same shape
+   whether it is a download, a screening pass or a decode, so the reader learns
+   one thing rather than three. */
+.wait-line, .screen-next {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.screen-next { margin-top: 0.5rem; }
 
 /* ---------- Biome screening ----------
    A verdict, not a profile — styled as an aside inside the database card, not

@@ -12,16 +12,16 @@ import {
   sylphWorkerRpc, detectMemory64, chooseWasmBits, WORKER_VERSION,
   readsBudget, readsBudgetNote, readsOverBudgetNote, loadedBuildNote, fmtReads,
   progressFraction, basesForReads, BUDGET_READ_BP,
-} from "./sylph-worker-rpc.js?v=32";
+} from "./sylph-worker-rpc.js?v=33";
 import {
   dbCacheClient, fmtRate, fmtEta, cacheSummary, assertSameDatabase,
-} from "./db-cache.js?v=32";
-import { matePattern, stripFastqExt } from "./sample-naming.js?v=32";
+} from "./db-cache.js?v=33";
+import { matePattern, stripFastqExt } from "./sample-naming.js?v=33";
 import {
   resolveAccession, validateAccession, ASSUMED_BPS,
   downloadEstimate, readCountVerdict, expectedProfiledReads,
-} from "./ena.js?v=32";
-import { normaliseMarkers, screenVerdict, SCREENING_DB, SCREENING_MARKERS } from "./screening.js?v=32";
+} from "./ena.js?v=33";
+import { normaliseMarkers, screenVerdict, SCREENING_DB, SCREENING_MARKERS } from "./screening.js?v=33";
 import {
   fetchCatalog, fallbackCatalog, renderDbSelect, biomeForUrl, biomeNote,
   mgnifyGenomeUrl,
@@ -29,7 +29,7 @@ import {
   makeDbRef, sameDbRef, refLine, refShort, refCommentLines, refSlug, genomeCountMismatch,
   rememberBiome, recallBiome, catalogueName, LOCAL_VALUE,
   selectionMatchesLoaded, notLoadedNote, refMetaMismatch,
-} from "./biomes.js?v=32";
+} from "./biomes.js?v=33";
 
 const $ = (id) => document.getElementById(id);
 const els = {
@@ -310,7 +310,12 @@ function paintScreenVerdict(sample, v) {
   }).join("");
   const winner = v.confident ? biomeByKey(catalog, v.best.biome) : null;
   const pick = winner?.url
-    ? `<button id="screenPick" class="primary" data-key="${escapeHTML(v.best.biome)}">Choose ${escapeHTML(winner.label)} above</button>`
+    // No button: the caller loads this database next, so an action the user has
+    // to take would be an action that has already been taken for them.
+    ? `<div class="screen-next">${ring(NaN, `loading ${winner.label}`, { pct: false })}` +
+      `<span>Loading <strong>${escapeHTML(winner.label)}</strong> — it is the catalogue this ` +
+      `sample points at.</span></div>`
+    // Inconclusive is a dead end in automatic mode unless it offers the way out.
     : `<button id="screenManual">Choose the catalogue myself</button>`;
   paintScreen(
     `<div><strong>${escapeHTML(sample.sampleName)}</strong> — ${v.detected} marker species detected` +
@@ -338,7 +343,10 @@ async function runScreen() {
   cancel?.classList.remove("hide");
   let rpc = null;
   try {
-    paintScreen(`Screening <strong>${escapeHTML(s.sampleName)}</strong> — fetching the marker set…`);
+    const screenWait = (frac, what) =>
+      paintScreen(`<div class="screen-next">${ring(frac, what, { pct: Number.isFinite(frac) })}` +
+        `<span>Screening <strong>${escapeHTML(s.sampleName)}</strong> — ${escapeHTML(what)}</span></div>`);
+    screenWait(NaN, "fetching the marker set");
     const r = await fetch(`./${SCREENING_MARKERS}?v=${WORKER_VERSION}`, { signal: screenAbort.signal });
     if (!r.ok) throw new Error(`marker map: HTTP ${r.status}`);
     const markersJson = await r.json();
@@ -350,8 +358,8 @@ async function runScreen() {
     await rpc.init(SCREEN_READS, chooseWasmBits({ maxReads: SCREEN_READS, memory64: has64 }).bits);
     const abs = new URL(SCREENING_DB, location.href).href;
     const res = await dbc.ensure(abs, {
-      onProgress: (p) => paintScreen(`Screening <strong>${escapeHTML(s.sampleName)}</strong> — ` +
-        `marker set ${p.total ? Math.round(100 * (p.received ?? 0) / p.total) : 0}%…`),
+      onProgress: (p) => screenWait(
+        p.total ? (p.received ?? 0) / p.total : NaN, "downloading the 13 MB marker set"),
       signal: screenAbort.signal,
       // Declared in the marker map rather than read from a header: GitHub Pages
       // serves this file gzipped, so Content-Length (and Content-Range) report
@@ -362,8 +370,9 @@ async function runScreen() {
 
     const onProgress = (p) => {
       if (p.phase || !Number.isFinite(p.reads)) return;
-      paintScreen(`Screening <strong>${escapeHTML(s.sampleName)}</strong> — ` +
-        `${p.reads.toLocaleString("en-US")} reads read…`);
+      // Against the screening cap, so the ring means the same thing here as it
+      // does on a sample row: how far through THIS pass we are.
+      screenWait(p.reads / SCREEN_READS, `${p.reads.toLocaleString("en-US")} reads read`);
     };
     // R1 alone: screening needs presence, and one mate carries the same species.
     const inputs = s.kind === "pe" ? s.peRuns.map((p) => p.r1) : s.seRuns;
@@ -411,13 +420,6 @@ document.getElementById("screenResult")?.addEventListener("click", (e) => {
     els.dbSelect?.scrollIntoView({ behavior: "smooth", block: "center" });
     return;
   }
-  const b = e.target.closest("#screenPick");
-  if (!b) return;
-  const biome = biomeByKey(catalog, b.dataset.key);
-  if (!biome?.url) return;
-  els.dbSelect.value = biome.url;
-  els.dbSelect.dispatchEvent(new Event("change"));
-  els.dbSelect.scrollIntoView({ behavior: "smooth", block: "center" });
 });
 let dbAbort = null;          // AbortController for the download in flight
 let dbSource = null;         // "cache" | "network" | "memory" | "file"
@@ -751,38 +753,50 @@ function pickLocalDb() {
 // The download line. This is where a user stares for five minutes, so it says
 // how much, how fast, and how long is left — a bare "Loading…" for that long is
 // indistinguishable from a hang, which is exactly what was being reported.
+// The same ring as everywhere else, in front of the line. `frac` NaN while there
+// is nothing to measure — probing, waiting on another tab — so the arc spins
+// instead of showing a 0% that never moves.
+function paintDbWait(frac, text) {
+  els.dbInfo.innerHTML =
+    `<span class="wait-line">${ring(frac, text, { pct: false })}<span>${escapeHTML(text)}</span></span>`;
+}
+
 function paintDbProgress(label, p) {
-  const pct = p.total > 0 ? ((p.received ?? 0) / p.total * 100).toFixed(1) : null;
+  const frac = p.total > 0 ? (p.received ?? 0) / p.total : NaN;
+  const pct = p.total > 0 ? (frac * 100).toFixed(1) : null;
   switch (p.phase) {
     case "probe":
-      els.dbInfo.textContent = `Checking ${label} on the server…`;
+      paintDbWait(NaN, `Checking ${label} on the server`);
       break;
     case "start":
-      els.dbInfo.textContent = `${p.resumed ? "Resuming" : "Downloading"} ${label} — ${p.note}`;
+      paintDbWait(frac, `${p.resumed ? "Resuming" : "Downloading"} ${label} — ${p.note}`);
       break;
     case "download": {
       const speed = Number.isFinite(p.bps) ? ` · ${fmtRate(p.bps)}` : "";
       const eta = Number.isFinite(p.etaSec) ? ` · ${fmtEta(p.etaSec)} left` : "";
-      els.dbInfo.textContent =
+      paintDbWait(frac,
         `Downloading ${label} — ${fmtBytes(p.received)} / ${fmtBytes(p.total)}` +
-        (pct ? ` (${pct}%)` : "") + speed + eta;
+        (pct ? ` (${pct}%)` : "") + speed + eta);
       break;
     }
     case "retry":
-      els.dbInfo.textContent =
-        `Downloading ${label} — ${fmtBytes(p.received)} / ${fmtBytes(p.total)} — ${p.note}`;
+      paintDbWait(frac,
+        `Downloading ${label} — ${fmtBytes(p.received)} / ${fmtBytes(p.total)} — ${p.note}`);
       break;
     // Queued behind another tab of this site. Without a line of its own this
     // looks exactly like a freeze, which is what it used to be: the second tab
     // waited 16 s and then gave up.
     case "wait":
-      els.dbInfo.textContent = `${label} — ${p.note}`;
+      paintDbWait(NaN, `${label} — ${p.note}`);
       break;
     case "done":
-      els.dbInfo.textContent = p.source === "cache"
+      // Decoding is the one wait with no measurable progress: the whole file is
+      // handed to wasm and comes back parsed. A full ring would lie, a spinner
+      // does not.
+      paintDbWait(NaN, p.source === "cache"
         ? `${label} found in the local cache (${fmtBytes(p.total)}` +
-          `${p.revalidated === false ? ", not revalidated — server unreachable" : ""}) — decoding…`
-        : `${label} downloaded (${fmtBytes(p.total)}) — decoding…`;
+          `${p.revalidated === false ? ", not revalidated — server unreachable" : ""}) — decoding`
+        : `${label} downloaded (${fmtBytes(p.total)}) — decoding`);
       break;
   }
 }
@@ -1712,26 +1726,36 @@ function fileSummary(s) {
 // two workers and 100 ms events, that is 20 repaints a second.
 const RING_R = 8;
 const RING_C = 2 * Math.PI * RING_R;
-function progressRing(s) {
-  if (s.status !== "running") return "";
-  const frac = s.frac;
-  // NaN is "running, nothing measured yet" — an ENA run with no fastq_bytes and
-  // no cap, or the moment before the first progress event. It gets a spinning
-  // arc rather than a 0% ring: an empty ring that never fills reads as broken,
-  // while a spinner is honest about not knowing.
+// ONE ring for every wait on this page — per-sample profiling, the database
+// download, the screening pass. Three different waits drawn three different ways
+// (a ring here, a trailing "…" there) make the reader learn three things instead
+// of one, and the "…" cannot say how far along it is even when that is known.
+//
+// `frac` NaN means "working, nothing to measure against yet": a spinning arc
+// rather than a 0% ring, because an empty ring that never fills reads as broken
+// while a spinner is honest about not knowing.
+function ring(frac, title, { pct = true } = {}) {
   const known = Number.isFinite(frac);
-  const pct = known ? Math.round(frac * 100) : null;
-  const dash = known ? `${(frac * RING_C).toFixed(2)} ${RING_C.toFixed(2)}` : `${(RING_C * 0.25).toFixed(2)} ${RING_C.toFixed(2)}`;
-  const title = known
-    ? `${pct}% of this sample — whichever comes first, the end of the input or the read cap`
-    : "running — no size or read cap to measure against yet";
+  const v = known ? Math.max(0, Math.min(1, frac)) : 0;
+  const shown = known ? Math.round(v * 100) : null;
+  const dash = known
+    ? `${(v * RING_C).toFixed(2)} ${RING_C.toFixed(2)}`
+    : `${(RING_C * 0.25).toFixed(2)} ${RING_C.toFixed(2)}`;
+  const label = title || (known ? `${shown}%` : "working");
   return `<span class="ring${known ? "" : " ring-spin"}" role="img"
-      aria-label="${escapeHTML(title)}" title="${escapeHTML(title)}">
+      aria-label="${escapeHTML(label)}" title="${escapeHTML(label)}">
       <svg viewBox="0 0 20 20" width="20" height="20" aria-hidden="true">
         <circle class="ring-track" cx="10" cy="10" r="${RING_R}"></circle>
         <circle class="ring-fill" cx="10" cy="10" r="${RING_R}"
           stroke-dasharray="${dash}" stroke-dashoffset="0"></circle>
-      </svg>${known ? `<b>${pct}%</b>` : ""}</span>`;
+      </svg>${known && pct ? `<b>${shown}%</b>` : ""}</span>`;
+}
+
+function progressRing(s) {
+  if (s.status !== "running") return "";
+  return ring(s.frac, Number.isFinite(s.frac)
+    ? `${Math.round(s.frac * 100)}% of this sample — whichever comes first, the end of the input or the read cap`
+    : "running — no size or read cap to measure against yet");
 }
 
 function renderFilesList() {
@@ -1955,7 +1979,9 @@ async function runAll() {
       s.status = "running";
       s.frac = NaN;   // running, nothing measured yet: indeterminate, not 0%
       const verb = s.origin === "ena" ? "downloading + decompressing" : "decompressing";
-      s.progress = s.kind === "pe" ? `${verb} both mates…` : `${verb}…`;
+      // No trailing "…": the row carries a ring of its own, and two marks for
+      // one idea is one too many.
+      s.progress = s.kind === "pe" ? `${verb} both mates` : verb;
       renderFilesList();
       // "trimming" was the word here, and it was wrong in a way that mattered:
       // nothing is trimmed. No quality filter, no adapter clipping, not a base

@@ -105,7 +105,10 @@
 // v32: the ENA result actions get their own row under the summary instead of
 // sharing a wrapping flex line with it, and #maxReads is sized again — it fell
 // out of the width rule when it became a text field in v27.
-export const WORKER_VERSION = "32";
+// v33: one ring for every wait — screening, the database download and the decode
+// all use the mark the sample rows already had, instead of a trailing "…". Also
+// drops the dead "Choose X above" button, which wrote into a hidden <select>.
+export const WORKER_VERSION = "33";
 
 // ---- memory64 capability probe ----------------------------------------------
 
