@@ -12,21 +12,22 @@ import {
   sylphWorkerRpc, detectMemory64, chooseWasmBits, WORKER_VERSION,
   readsBudget, readsBudgetNote, readsOverBudgetNote, loadedBuildNote, fmtReads,
   progressFraction, basesForReads, BUDGET_READ_BP,
-} from "./sylph-worker-rpc.js?v=47";
+} from "./sylph-worker-rpc.js?v=48";
 import {
   dbCacheClient, fmtRate, fmtEta, cacheSummary, assertSameDatabase,
-} from "./db-cache.js?v=47";
-import { matePattern, stripFastqExt } from "./sample-naming.js?v=47";
+} from "./db-cache.js?v=48";
+import { matePattern, stripFastqExt } from "./sample-naming.js?v=48";
 import {
   resolveAccession, validateAccession, ASSUMED_BPS,
   downloadEstimate, readCountVerdict, expectedProfiledReads,
-} from "./ena.js?v=47";
-import { normaliseMarkers, screenVerdict, SCREENING_DB, SCREENING_MARKERS } from "./screening.js?v=47";
-import { clusterTable, MAX_ROWS as CLUSTER_MAX_ROWS } from "./cluster.js?v=47";
-import { compositionSvg, alphaSvg, pcoaSvg, pieSvg, alphaDiversity } from "./figures.js?v=47";
-import { toMetaphlan, toBiom, toSylphTsv, toSession, fromSession } from "./exports.js?v=47";
+} from "./ena.js?v=48";
+import { normaliseMarkers, screenVerdict, SCREENING_DB, SCREENING_MARKERS } from "./screening.js?v=48";
+import { clusterTable, MAX_ROWS as CLUSTER_MAX_ROWS } from "./cluster.js?v=48";
+import { compositionSvg, alphaSvg, pcoaSvg, pieSvg, sampleFacts, alphaDiversity }
+  from "./figures.js?v=48";
+import { toMetaphlan, toBiom, toSylphTsv, toSession, fromSession } from "./exports.js?v=48";
 import { currentMode as themeMode, setMode as setThemeMode, applyTheme,
-  loadSchedule, saveSchedule } from "./theme.js?v=47";
+  loadSchedule, saveSchedule } from "./theme.js?v=48";
 import {
   fetchCatalog, fallbackCatalog, renderDbSelect, biomeForUrl, biomeNote,
   mgnifyGenomeUrl,
@@ -34,7 +35,7 @@ import {
   makeDbRef, sameDbRef, refLine, refShort, refCommentLines, refSlug, genomeCountMismatch,
   rememberBiome, recallBiome, catalogueName, LOCAL_VALUE,
   selectionMatchesLoaded, notLoadedNote, refMetaMismatch,
-} from "./biomes.js?v=47";
+} from "./biomes.js?v=48";
 
 const $ = (id) => document.getElementById(id);
 const els = {
@@ -2733,13 +2734,19 @@ function drawFigure(kind, { toggle = true } = {}) {
     : kind === "alpha" ? alphaSvg(view)
     : pcoaSvg(view, { groupOf: metaGroupOf });
   canvas.innerHTML = svg;
+  // The row wraps or does not according to the figure's own width: the 620 px
+  // ordination sits beside the sample panel, the 900 px composition pushes it
+  // underneath instead of being squeezed to 57% and taking its sample names
+  // down with it. Flexbox decides, from the number the figure itself declares.
+  const natural = Number(canvas.querySelector("svg")?.getAttribute("width"));
+  canvas.style.flexBasis = Number.isFinite(natural) && natural > 0 ? `${natural}px` : "";
   canvas.classList.remove("hide");
   dl?.classList.remove("hide");
   openFig = kind;
   for (const b of document.querySelectorAll(".fig-tab")) {
     b.classList.toggle("is-on", b.dataset.fig === kind);
   }
-  if (kind === "pcoa") wirePcoa(canvas, view); else closePie();
+  wireFigure(canvas, view);
   // Every figure is relative to one catalogue and to nothing else. Said here
   // too, because a figure is the thing that gets pasted into a slide with no
   // page around it.
@@ -2747,7 +2754,8 @@ function drawFigure(kind, { toggle = true } = {}) {
     note.textContent = `${view.rows.length} ${RANK_LABELS[currentRank()].toLowerCase()}` +
       `${view.rows.length === 1 ? "" : currentRank() === "s" ? "" : ""} × ${view.samples.length} samples, ` +
       `against ${refShort(view.ref) || "the loaded catalogue"}` +
-      (kind === "pcoa" ? " · hover a point to name it, click it for that sample" : "") +
+      (kind === "pcoa" ? " · hover a point to name it, click it for that sample"
+        : " · click a sample for what it is made of") +
       (kind === "pcoa" && !metaGroups.size ? " · load metadata to colour by group" : "");
   }
 }
@@ -2756,13 +2764,16 @@ for (const b of document.querySelectorAll(".fig-tab")) {
   b.addEventListener("click", () => drawFigure(b.dataset.fig));
 }
 
-// ---- the ordination, made answerable ----------------------------------------
+// ---- the figures, made answerable -------------------------------------------
 //
-// A point on a PCoA is a sample, and nothing on screen says which one. The SVG
+// A point on a PCoA is a sample, and nothing on screen said which one. The SVG
 // carries a <title>, but that is a native tooltip: half a second of stillness,
-// no highlight, nothing at all under a finger. Hover names the point where the
-// pointer is; a click opens what that sample is made of, which is the question
-// an ordination raises every time and answers never.
+// no highlight, nothing at all under a finger. Hover names the mark under the
+// pointer; a click opens what that sample is made of, its diversity, and the
+// samples it is really nearest — the questions all three figures raise and none
+// of them answers. The same two gestures on all three: a bar of the composition
+// and a row of the diversity chart are samples too, and a plot you can ask
+// nothing of is a picture.
 let pickedSample = null;
 let hoverSample = null;
 
@@ -2772,12 +2783,19 @@ const sampleSlug = (s) => String(s).replace(/[^A-Za-z0-9._-]+/g, "_").slice(0, 6
 function paintPoint(el) {
   const name = el.getAttribute("data-sample");
   const picked = name === pickedSample, hot = name === hoverSample;
+  if (el.classList.contains("sample-row")) {
+    // A bar or a diversity row: the strip behind it takes the tint, since the
+    // bar itself is the data and must not change colour.
+    const hit = el.querySelector(".row-hit");
+    if (hit) hit.setAttribute("fill-opacity", picked ? "0.13" : hot ? "0.06" : "0");
+    return;
+  }
   el.setAttribute("r", picked || hot ? "8" : "5.5");
   el.setAttribute("stroke", picked ? FIG_INK : "#ffffff");
   el.setAttribute("stroke-width", picked ? "2.5" : hot ? "2" : "1");
 }
 const repaintPoints = (root) => {
-  for (const el of root.querySelectorAll(".pcoa-pt")) paintPoint(el);
+  for (const el of root.querySelectorAll(".pcoa-pt, .sample-row")) paintPoint(el);
 };
 
 // The point a keyboard-painted tooltip belongs to. A pointer tooltip is hidden
@@ -2818,7 +2836,7 @@ function topTaxonOf(view, name) {
   return best ? { ...best, share: best.v / total } : null;
 }
 
-function wirePcoa(canvas, view) {
+function wireFigure(canvas, view) {
   const svg = canvas.querySelector("svg");
   if (!svg) return;
   // A sample can vanish between two draws — a session reloaded, a rank change
@@ -2860,7 +2878,7 @@ function wirePcoa(canvas, view) {
   svg.addEventListener("pointerdown", (e) => { touch = fromFinger(e); });
   svg.addEventListener("pointermove", (e) => {
     touch = fromFinger(e);
-    const name = e.target.closest?.(".pcoa-pt")?.getAttribute("data-sample") ?? null;
+    const name = e.target.closest?.(".pcoa-pt, .sample-row")?.getAttribute("data-sample") ?? null;
     if (name !== hoverSample) {
       hoverSample = name;
       repaintPoints(svg);
@@ -2873,7 +2891,7 @@ function wirePcoa(canvas, view) {
     hideTip();
   });
   svg.addEventListener("click", (e) => {
-    const name = e.target.closest?.(".pcoa-pt")?.getAttribute("data-sample");
+    const name = e.target.closest?.(".pcoa-pt, .sample-row")?.getAttribute("data-sample");
     if (!name) return;
     if (name === pickedSample) closePie(); else showPie(view, name);
     repaintPoints(svg);
@@ -2886,7 +2904,7 @@ function wirePcoa(canvas, view) {
   // Space for the click — the points carry tabindex only while the plot is
   // small enough for that to be a reasonable number of stops (see pcoaSvg).
   svg.addEventListener("focusin", (e) => {
-    const pt = e.target.closest?.(".pcoa-pt");
+    const pt = e.target.closest?.(".pcoa-pt, .sample-row");
     if (!pt) return;
     hoverSample = pt.getAttribute("data-sample");
     repaintPoints(svg);
@@ -2899,7 +2917,7 @@ function wirePcoa(canvas, view) {
   });
   svg.addEventListener("keydown", (e) => {
     if (e.key !== "Enter" && e.key !== " ") return;
-    const name = e.target.closest?.(".pcoa-pt")?.getAttribute("data-sample");
+    const name = e.target.closest?.(".pcoa-pt, .sample-row")?.getAttribute("data-sample");
     if (!name) return;
     e.preventDefault();   // Space would scroll the page out from under the plot
     if (name === pickedSample) closePie(); else showPie(view, name);
@@ -2934,7 +2952,8 @@ function showPie(view, name) {
     `<button type="button" id="pieDownload">Download SVG</button>` +
     `<button type="button" id="pieClose" aria-label="Close this sample">✕</button>` +
     `</span></div>` +
-    `<div class="fig-detail-body">${pieSvg(view, name)}</div>`;
+    `<div class="fig-detail-body">${pieSvg(view, name)}</div>` +
+    factsHtml(view, name);
   panel.classList.remove("hide");
   document.getElementById("pieClose")?.addEventListener("click", () => {
     closePie();
@@ -2944,6 +2963,53 @@ function showPie(view, name) {
     const svg = panel.querySelector(".fig-detail-body")?.innerHTML;
     if (svg) saveBlob(svg, "image/svg+xml", `composition_${sampleSlug(name)}.svg`);
   });
+  // A neighbour is a sample: opening it is the same thing as clicking its point.
+  for (const b of panel.querySelectorAll("[data-jump]")) {
+    b.addEventListener("click", () => {
+      showPie(view, b.dataset.jump);
+      const canvas = document.getElementById("figCanvas");
+      if (canvas) repaintPoints(canvas);
+    });
+  }
+}
+
+// The rest of the panel, and the reason the panel is as tall as the plot beside
+// it: composition alone leaves the two questions a point raises unanswered — how
+// much is in there, and what is it actually near.
+function factsHtml(view, name) {
+  const f = sampleFacts(view, name);
+  if (!f) return "";
+  const stat = (v, label, title) =>
+    `<div class="pie-stat" title="${escapeHTML(title)}"><b>${v}</b><span>${label}</span></div>`;
+  let out = `<div class="pie-facts"><div class="pie-stats">` +
+    stat(f.richness.toLocaleString(), "taxa detected",
+      `Rows with an abundance above zero in this sample, out of ${view.rows.length} in the matrix.`) +
+    stat(f.effective.toFixed(1), "effective taxa",
+      `e^Shannon (H = ${f.shannon.toFixed(2)}): how many equally-abundant taxa would give ` +
+      `this diversity. Fewer than the count above, because the abundances are uneven.`) +
+    stat(`${f.rank}<span class="of"> / ${f.of}</span>`, "by diversity",
+      `1 is the most diverse sample of the ${f.of} on screen, by effective taxa.`) +
+    `</div>`;
+
+  if (f.nearest.length) {
+    // The distances are the FULL ones. The ordination is a projection of them
+    // onto two axes and says so in its own labels; these are what it projects.
+    out += `<div class="pie-near"><div class="pie-near-head">Closest samples` +
+      `<span class="info" title="Bray-Curtis distance over all ${view.rows.length} rows — ` +
+      `the real distance, not the two-dimensional shadow of it the ordination draws. ` +
+      `0 is an identical profile, 1 shares nothing.">Bray-Curtis, all rows</span></div>`;
+    for (const n of f.nearest) {
+      const g = metaGroupOf(n.sample);
+      out += `<button type="button" class="pie-near-row" data-jump="${escapeHTML(n.sample)}" ` +
+        `title="Open ${escapeHTML(n.sample)}">` +
+        `<span class="pie-near-name">${escapeHTML(n.sample)}` +
+        (g ? `<span class="pie-near-group">${escapeHTML(g)}</span>` : "") + `</span>` +
+        `<span class="pie-near-bar"><i style="width:${(n.distance * 100).toFixed(1)}%"></i></span>` +
+        `<span class="pie-near-d">${n.distance.toFixed(3)}</span></button>`;
+    }
+    out += `</div>`;
+  }
+  return out + `</div>`;
 }
 
 // The tooltip is positioned in the viewport, so a scroll slides the plot out

@@ -71,6 +71,53 @@ export function alphaDiversity(table) {
   });
 }
 
+/**
+ * What one sample is, beyond its composition: how diverse, where it stands among
+ * the others, and which samples it is actually nearest.
+ *
+ * The last one is the point. An ordination shows distance in two dimensions when
+ * the real distances live in as many dimensions as there are taxa, so two points
+ * that look adjacent may not be — the axis labels give the fraction that survives
+ * the projection, and the rest is lost. These distances are the full ones,
+ * computed on every row, and they are what the plot is an approximation OF.
+ *
+ * Pure arithmetic over the table already in memory: O(samples x rows), one
+ * column against the rest, rather than the whole matrix for one answer.
+ */
+export function sampleFacts(table, sample, { neighbours = 4 } = {}) {
+  const c = typeof sample === "number" ? sample : table.samples.indexOf(sample);
+  if (c < 0 || table.samples[c] === undefined) return null;
+
+  const alpha = alphaDiversity(table);
+  const mine = alpha[c];
+  // 1 = the most diverse of the run. Ties take the same rank, as they must:
+  // two identical samples cannot be 6th and 7th.
+  const rank = alpha.filter((a) => a.effective > mine.effective).length + 1;
+
+  const col = (j) => table.rows.map((r) => r.values[j] || 0);
+  const self = col(c);
+  const near = table.samples.map((name, j) => {
+    if (j === c) return null;
+    const other = col(j);
+    let sumMin = 0, sumAll = 0;
+    for (let k = 0; k < self.length; k++) {
+      sumMin += Math.min(self[k], other[k]);
+      sumAll += self[k] + other[k];
+    }
+    return { sample: name, distance: sumAll === 0 ? 0 : 1 - (2 * sumMin) / sumAll };
+  }).filter(Boolean).sort((a, b) => a.distance - b.distance).slice(0, neighbours);
+
+  return {
+    sample: table.samples[c],
+    richness: mine.richness,
+    shannon: mine.shannon,
+    effective: mine.effective,
+    rank,
+    of: table.samples.length,
+    nearest: near,
+  };
+}
+
 /** Bray-Curtis distance matrix over samples, as a square array. */
 export function distanceMatrix(table) {
   const n = table.samples.length;
@@ -197,7 +244,14 @@ export function compositionSvg(table, { topN = 10, width = 900, barH = 26 } = {}
     const y = padT + c * (barH + gap);
     const total = rows.reduce((a, r) => a + (r.values[c] || 0), 0) || 1;
     let x = padL;
-    out += `<text x="${padL - 8}" y="${y + barH / 2 + 4}" text-anchor="end" fill="#275662">${esc(name)}</text>`;
+    // A row is a sample you can open, and the whole strip — name included — is
+    // the target, not the fifteen segments it is cut into. The rect behind it
+    // is what makes the gaps between segments part of the row rather than holes
+    // in it, and what the page tints on hover.
+    out += `<g class="sample-row" data-sample="${esc(name)}">` +
+      `<rect class="row-hit" x="0" y="${y - 2}" width="${width}" height="${barH + 4}" ` +
+      `fill="#275662" fill-opacity="0"/>` +
+      `<text x="${padL - 8}" y="${y + barH / 2 + 4}" text-anchor="end" fill="#275662">${esc(name)}</text>`;
     keep.forEach((ri, k) => {
       const frac = (rows[ri].values[c] || 0) / total;
       const w = frac * plotW;
@@ -213,6 +267,7 @@ export function compositionSvg(table, { topN = 10, width = 900, barH = 26 } = {}
       out += `<rect x="${x.toFixed(1)}" y="${y}" width="${rest.toFixed(1)}" height="${barH}" ` +
         `fill="${GREY}"><title>other taxa — ${(restFrac * 100).toFixed(1)}%</title></rect>`;
     }
+    out += "</g>";
   });
 
   let ly = padT + samples.length * (barH + gap) + 12;
@@ -238,12 +293,15 @@ export function alphaSvg(table, { width = 760, rowH = 22 } = {}) {
   a.forEach((d, i) => {
     const y = padT + i * rowH;
     const w = (d.effective / maxEff) * plotW;
-    out += `<text x="${padL - 8}" y="${y + 12}" text-anchor="end" fill="#275662">${esc(d.sample)}</text>` +
+    out += `<g class="sample-row" data-sample="${esc(d.sample)}">` +
+      `<rect class="row-hit" x="0" y="${y}" width="${width}" height="${rowH - 2}" ` +
+      `fill="#275662" fill-opacity="0"/>` +
+      `<text x="${padL - 8}" y="${y + 12}" text-anchor="end" fill="#275662">${esc(d.sample)}</text>` +
       `<rect x="${padL}" y="${y + 3}" width="${w.toFixed(1)}" height="13" fill="#00a3a6">` +
       `<title>${esc(d.sample)}: ${d.effective.toFixed(1)} effective taxa, ` +
       `Shannon ${d.shannon.toFixed(2)}, ${d.richness} observed</title></rect>` +
       `<text x="${padL + w + 6}" y="${y + 14}" fill="#5a5550">${d.effective.toFixed(1)} ` +
-      `<tspan fill="#969c9d">(${d.richness} obs.)</tspan></text>`;
+      `<tspan fill="#6b7172">(${d.richness} obs.)</tspan></text></g>`;
   });
   return out + "</svg>";
 }

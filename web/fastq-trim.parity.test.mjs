@@ -1243,7 +1243,8 @@ console.log("== the export formats other tools read ==");
 
 console.log("== the figures compute what they claim to ==");
 {
-  const { alphaDiversity, distanceMatrix, pcoa, compositionSvg, alphaSvg, pcoaSvg, pieSvg } =
+  const { alphaDiversity, distanceMatrix, pcoa, compositionSvg, alphaSvg, pcoaSvg, pieSvg,
+    sampleFacts } =
     await import("./figures.js");
 
   // Shannon has known values: n equally-abundant taxa give exactly ln(n), and
@@ -1317,6 +1318,45 @@ console.log("== the figures compute what they claim to ==");
     marked.length === nasty.samples.length &&
     marked.some((m) => m.includes("S&amp;2")),
     `${marked.length} of ${nasty.samples.length}: ${marked.join(" ")}`);
+
+  // Every figure has to be askable, not only the ordination: a bar of the
+  // composition and a row of the diversity chart are samples too, and the panel
+  // is opened by whatever carries data-sample.
+  for (const [name, fn] of [["composition", compositionSvg], ["alpha", alphaSvg]]) {
+    const svg = fn(nasty);
+    const marks = svg.match(/class="sample-row" data-sample="([^"]*)"/g) ?? [];
+    check(`${name} makes every sample a mark that can be opened`,
+      marks.length === nasty.samples.length && (svg.match(/<\/g>/g) ?? []).length === marks.length,
+      `${marks.length} marks for ${nasty.samples.length} samples`);
+  }
+
+  // What fills the panel beside the pie. The distances are the ones the
+  // ordination is a projection OF, so they must be the real Bray-Curtis over
+  // every row — and they must not include the sample itself, which would always
+  // be its own nearest neighbour at 0.
+  const facts = {
+    samples: ["A", "B", "C", "D"],
+    rows: [
+      { species: "p", values: [90, 90, 10, 50] },
+      { species: "q", values: [10, 10, 90, 50] },
+    ],
+  };
+  const fA = sampleFacts(facts, "A");
+  check("sampleFacts finds the nearest samples, itself excluded and sorted",
+    fA.nearest.length === 3 && fA.nearest[0].sample === "B" && fA.nearest[0].distance === 0 &&
+    fA.nearest.every((n, i, a) => i === 0 || a[i - 1].distance <= n.distance) &&
+    !fA.nearest.some((n) => n.sample === "A"),
+    JSON.stringify(fA.nearest));
+  check("...and agrees with the distance matrix the ordination is drawn from",
+    fA.nearest.every((n) => Math.abs(n.distance -
+      distanceMatrix(facts)[0][facts.samples.indexOf(n.sample)]) < 1e-12));
+  // A and B are identical, so they cannot be ranked 1st and 2nd.
+  check("...and ranks by diversity with ties sharing a rank",
+    sampleFacts(facts, "A").rank === sampleFacts(facts, "B").rank &&
+    sampleFacts(facts, "D").rank === 1 && fA.of === 4,
+    `A=${sampleFacts(facts, "A").rank} B=${sampleFacts(facts, "B").rank} D=${sampleFacts(facts, "D").rank}`);
+  check("...and an unknown sample gives null rather than a table of zeros",
+    sampleFacts(facts, "nobody") === null);
 
   // The pie is one sample out of the table, so the wrong column is the failure
   // that would look right — every number plausible, none of them this sample's.

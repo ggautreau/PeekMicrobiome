@@ -146,7 +146,12 @@
 // v46 has no button and would not fetch it, but the pairing that matters is the
 // stylesheet: the banner saying "this is the example, not your data" is styled
 // there, and unstyled it reads as an ordinary paragraph under the heading.
-export const WORKER_VERSION = "47";
+// v48: the composition bars and the diversity rows are askable too — every
+// figure carries one mark per sample now, and the panel beside it holds the
+// pie, the sample's diversity and the samples it is really nearest. A page on
+// v47 pairs the new markup with a stylesheet that does not tint a hovered row
+// and does not lay out the panel's stat tiles.
+export const WORKER_VERSION = "48";
 
 // ---- memory64 capability probe ----------------------------------------------
 

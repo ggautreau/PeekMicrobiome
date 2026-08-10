@@ -1115,6 +1115,8 @@ details[open] > .ena-summary::before { transform: rotate(90deg); }
    enough and stacked when it is not — the pie is read against where the point
    sits, so they belong on the same screen. */
 .fig-row { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 0.7rem; }
+/* The basis is replaced by multi.js with the open figure's own width — see the
+   comment there; this is the value before anything is drawn. */
 .fig-canvas { flex: 1 1 26rem; }
 /* min-width: 0 — without it a flex item refuses to shrink below the intrinsic
    width of its content, and a 620px figure would push the row off the page. */
@@ -1141,9 +1143,72 @@ details[open] > .ena-summary::before { transform: rotate(90deg); }
 .fig-detail-actions button { padding: 0.25rem 0.6rem; font-size: 0.82rem; }
 .fig-detail-body svg { display: block; max-width: 100%; height: auto; }
 
-/* A marker is a sample you can open: say so with the pointer, since nothing
-   else on a scatter plot suggests a click would do anything. */
-.pcoa-pt { cursor: pointer; }
+/* A marker, a bar, a diversity row: each is a sample you can open. Say so with
+   the pointer, since nothing else in a figure suggests a click would do
+   anything. */
+.pcoa-pt, .sample-row { cursor: pointer; }
+
+/* ---- what the panel holds under the pie ----
+   The plot beside it is 520 px tall and the pie is not; the space under it goes
+   to the two questions a figure raises and cannot answer. */
+.pie-facts { margin-top: 0.7rem; display: flex; flex-direction: column; gap: 0.7rem; }
+.pie-stats { display: flex; gap: 0.5rem; flex-wrap: wrap; }
+.pie-stat {
+  flex: 1 1 6rem;
+  padding: 0.45rem 0.6rem;
+  background: var(--bg-soft);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  display: flex;
+  flex-direction: column;
+  line-height: 1.25;
+  cursor: help;
+}
+.pie-stat b { color: var(--ink); font-size: 1.15rem; font-weight: 600; }
+.pie-stat b .of { font-size: 0.85rem; font-weight: 400; color: var(--ink-muted); }
+.pie-stat span { font-size: 0.76rem; color: var(--ink-muted); }
+
+.pie-near-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-bottom: 0.3rem;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--ink);
+}
+.pie-near-head .info { font-weight: 400; font-size: 0.74rem; cursor: help; }
+.pie-near-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  width: 100%;
+  padding: 0.25rem 0.4rem;
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-sm);
+  font: inherit;
+  font-size: 0.82rem;
+  color: var(--ink-soft);
+  cursor: pointer;
+  text-align: left;
+}
+.pie-near-row:hover { background: var(--accent-soft); color: var(--accent-ink); }
+.pie-near-name { flex: 0 0 9.5rem; display: flex; flex-direction: column; line-height: 1.2; }
+.pie-near-group { font-size: 0.72rem; color: var(--ink-muted); }
+/* The bar is the distance itself, on a fixed 0-1 scale — not normalised to the
+   nearest neighbour, or a sample whose closest relative is far away would look
+   as close as one with a twin. */
+.pie-near-bar {
+  flex: 1 1 auto;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--border);
+  overflow: hidden;
+}
+.pie-near-bar i { display: block; height: 100%; background: var(--accent); }
+.pie-near-d { flex: 0 0 auto; font-family: var(--font-mono); font-size: 0.76rem; }
 
 /* Follows the pointer over the ordination. pointer-events: none matters — a
    tooltip under the cursor would take the mouseout of the very point it
