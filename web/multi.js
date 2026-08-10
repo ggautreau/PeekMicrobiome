@@ -2734,12 +2734,21 @@ function drawFigure(kind, { toggle = true } = {}) {
     : kind === "alpha" ? alphaSvg(view)
     : pcoaSvg(view, { groupOf: metaGroupOf });
   canvas.innerHTML = svg;
-  // The row wraps or does not according to the figure's own width: the 620 px
-  // ordination sits beside the sample panel, the 900 px composition pushes it
-  // underneath instead of being squeezed to 57% and taking its sample names
-  // down with it. Flexbox decides, from the number the figure itself declares.
+  // Side by side the two cards are halves of the row, equal in width and — the
+  // stylesheet stretches them — equal in height. A figure wider than half the
+  // row does not get squeezed into one: the pair stacks instead, each at full
+  // width, which is the only way the 900 px composition keeps its sample names
+  // legible. Decided from the width the figure itself declares.
   const natural = Number(canvas.querySelector("svg")?.getAttribute("width"));
-  canvas.style.flexBasis = Number.isFinite(natural) && natural > 0 ? `${natural}px` : "";
+  const row = canvas.parentElement;
+  if (row) {
+    // 0.85 is the floor: a figure rendered smaller than that has type under 10 px
+    // and sample names that cannot be read, which costs more than the balance is
+    // worth. Above it — the 620 px ordination in a 583 px half — the shrink is
+    // invisible and the two cards stay a matched pair.
+    const half = (row.clientWidth - 12) / 2;
+    row.classList.toggle("fig-row-stacked", Number.isFinite(natural) && natural > half / 0.85);
+  }
   canvas.classList.remove("hide");
   dl?.classList.remove("hide");
   openFig = kind;

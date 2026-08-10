@@ -1114,16 +1114,20 @@ details[open] > .ena-summary::before { transform: rotate(90deg); }
 /* The plot and the sample opened from it, side by side while the window is wide
    enough and stacked when it is not — the pie is read against where the point
    sits, so they belong on the same screen. */
-.fig-row { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 0.7rem; }
-/* The basis is replaced by multi.js with the open figure's own width — see the
-   comment there; this is the value before anything is drawn. */
-.fig-canvas { flex: 1 1 26rem; }
+/* Two halves of one row, matched: same width, and `stretch` gives them the same
+   height as well — the pie panel is taller than the plot as often as the other
+   way round, and two cards of different heights read as one being unfinished.
+   multi.js adds .fig-row-stacked when the open figure is too wide to be a half.
+*/
+.fig-row { display: flex; flex-wrap: wrap; align-items: stretch; gap: 0.7rem; }
+.fig-canvas { flex: 1 1 0; }
+.fig-row-stacked .fig-canvas, .fig-row-stacked .fig-detail { flex: 1 1 100%; }
 /* min-width: 0 — without it a flex item refuses to shrink below the intrinsic
    width of its content, and a 620px figure would push the row off the page. */
 .fig-canvas, .fig-detail { min-width: 0; }
 
 .fig-detail {
-  flex: 1 1 22rem;
+  flex: 1 1 0;
   margin-top: 0.7rem;
   padding: 0.6rem;
   background: var(--bg-card);
@@ -1151,7 +1155,17 @@ details[open] > .ena-summary::before { transform: rotate(90deg); }
 /* ---- what the panel holds under the pie ----
    The plot beside it is 520 px tall and the pie is not; the space under it goes
    to the two questions a figure raises and cannot answer. */
-.pie-facts { margin-top: 0.7rem; display: flex; flex-direction: column; gap: 0.7rem; }
+.pie-facts {
+  margin-top: 0.7rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.7rem;
+  /* Stacked, the card is as wide as a 900 px figure; the content is not. A
+     distance bar drawn 1100 px long says nothing more than one drawn 400 px
+     long, and three stat tiles spread over a metre read as three separate
+     things rather than one line about one sample. */
+  max-width: 46rem;
+}
 .pie-stats { display: flex; gap: 0.5rem; flex-wrap: wrap; }
 .pie-stat {
   flex: 1 1 6rem;
