@@ -2724,32 +2724,31 @@ function drawFigure(kind, { toggle = true } = {}) {
     canvas.classList.add("hide");
     canvas.innerHTML = "";
     dl?.classList.add("hide");
-    closePie();
+    pickedSample = null;
+    hideDetail();
     if (note) note.textContent = "";
     for (const b of document.querySelectorAll(".fig-tab")) b.classList.remove("is-on");
     return;
   }
   const view = viewOf(lastMatrix);
-  const svg = kind === "composition" ? compositionSvg(view)
-    : kind === "alpha" ? alphaSvg(view)
-    : pcoaSvg(view, { groupOf: metaGroupOf });
-  canvas.innerHTML = svg;
-  // Side by side the two cards are halves of the row, equal in width and — the
-  // stylesheet stretches them — equal in height. A figure wider than half the
-  // row does not get squeezed into one: the pair stacks instead, each at full
-  // width, which is the only way the 900 px composition keeps its sample names
-  // legible. Decided from the width the figure itself declares.
-  const natural = Number(canvas.querySelector("svg")?.getAttribute("width"));
-  const row = canvas.parentElement;
-  if (row) {
-    // 0.85 is the floor: a figure rendered smaller than that has type under 10 px
-    // and sample names that cannot be read, which costs more than the balance is
-    // worth. Above it — the 620 px ordination in a 583 px half — the shrink is
-    // invisible and the two cards stay a matched pair.
-    const half = (row.clientWidth - 12) / 2;
-    row.classList.toggle("fig-row-stacked", Number.isFinite(natural) && natural > half / 0.85);
-  }
+  // The card is sized by the stylesheet — half the row, always, whether a sample
+  // is open or not — and the figure is then drawn to fit it exactly. Both halves
+  // of that matter:
+  //   · drawn to fit, so no figure has empty card beside it and none is scaled
+  //     down by the browser, which takes its type with it;
+  //   · always half, so clicking a point does not resize the plot under the
+  //     pointer that clicked it. The panel was appearing and taking 600 px off
+  //     the figure at the exact moment the figure was being used.
   canvas.classList.remove("hide");
+  // Put the panel in place BEFORE measuring: it is what makes the card a half,
+  // and measuring without it would draw every figure at full width and then
+  // shrink it as soon as the panel arrived.
+  if (!pickedSample) showDetailPrompt();
+  const room = Math.max(320, Math.floor(canvas.clientWidth - 20));
+  const svg = kind === "composition" ? compositionSvg(view, { width: room })
+    : kind === "alpha" ? alphaSvg(view, { width: room })
+    : pcoaSvg(view, { width: room, groupOf: metaGroupOf });
+  canvas.innerHTML = svg;
   dl?.classList.remove("hide");
   openFig = kind;
   for (const b of document.querySelectorAll(".fig-tab")) {
@@ -2940,12 +2939,36 @@ function wireFigure(canvas, view) {
 
 function closePie() {
   pickedSample = null;
+  showDetailPrompt();
+  const canvas = document.getElementById("figCanvas");
+  if (canvas) repaintPoints(canvas);
+}
+
+// The right half while no sample is open. Not blank and not absent: absent is
+// what used to make the figure jump when a point was clicked, and blank is a
+// question nobody asked. It says what the half is for.
+function showDetailPrompt() {
+  const panel = document.getElementById("figDetail");
+  if (!panel) return;
+  panel.innerHTML =
+    `<div class="fig-detail-prompt">` +
+    `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" ` +
+    `stroke-linecap="round" aria-hidden="true">` +
+    `<circle cx="12" cy="12" r="9"/><path d="M12 12 12 4"/><path d="M12 12 19 15"/></svg>` +
+    `<b>Pick a sample</b>` +
+    `<span>Click a point, a bar or a row and this is where it opens: what it is ` +
+    `made of, how diverse it is, and which samples it is really nearest.</span>` +
+    `</div>`;
+  panel.classList.remove("hide");
+}
+
+// Closing the figures closes the panel with them — there is nothing left for it
+// to be beside.
+function hideDetail() {
   const panel = document.getElementById("figDetail");
   if (!panel) return;
   panel.classList.add("hide");
   panel.innerHTML = "";
-  const canvas = document.getElementById("figCanvas");
-  if (canvas) repaintPoints(canvas);
 }
 
 function showPie(view, name) {
@@ -3020,6 +3043,15 @@ function factsHtml(view, name) {
   }
   return out + `</div>`;
 }
+
+// Drawn to fit, so it has to be redrawn when the fit changes. Debounced: a drag
+// of the window edge fires this by the hundred, and a PCoA is an eigenproblem.
+let figResize = null;
+addEventListener("resize", () => {
+  if (!openFig) return;
+  clearTimeout(figResize);
+  figResize = setTimeout(() => { if (openFig) drawFigure(openFig, { toggle: false }); }, 200);
+});
 
 // The tooltip is positioned in the viewport, so a scroll slides the plot out
 // from under it and leaves it labelling whatever is now there. The next pointer

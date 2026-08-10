@@ -1120,14 +1120,15 @@ details[open] > .ena-summary::before { transform: rotate(90deg); }
    multi.js adds .fig-row-stacked when the open figure is too wide to be a half.
 */
 .fig-row { display: flex; flex-wrap: wrap; align-items: stretch; gap: 0.7rem; }
-.fig-canvas { flex: 1 1 0; }
-.fig-row-stacked .fig-canvas, .fig-row-stacked .fig-detail { flex: 1 1 100%; }
+/* Two halves, always — the figure is drawn to fit whichever width this gives it,
+   so it never changes size when a sample is opened beside it. min-width is what
+   makes them stack on a narrow window instead of squeezing to nothing. */
+.fig-canvas, .fig-detail { flex: 1 1 0; min-width: min(22rem, 100%); }
 /* min-width: 0 — without it a flex item refuses to shrink below the intrinsic
    width of its content, and a 620px figure would push the row off the page. */
-.fig-canvas, .fig-detail { min-width: 0; }
+
 
 .fig-detail {
-  flex: 1 1 0;
   margin-top: 0.7rem;
   padding: 0.6rem;
   background: var(--bg-card);
@@ -1155,6 +1156,22 @@ details[open] > .ena-summary::before { transform: rotate(90deg); }
 /* ---- what the panel holds under the pie ----
    The plot beside it is 520 px tall and the pie is not; the space under it goes
    to the two questions a figure raises and cannot answer. */
+/* The invitation, while no sample is open. */
+.fig-detail-prompt {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+  padding: 1.5rem 2rem;
+  text-align: center;
+  color: var(--ink-muted);
+}
+.fig-detail-prompt svg { width: 30px; height: 30px; opacity: 0.55; }
+.fig-detail-prompt b { color: var(--ink-soft); font-size: 0.95rem; }
+.fig-detail-prompt span { font-size: 0.84rem; max-width: 26rem; }
+
 .pie-facts {
   margin-top: 0.7rem;
   display: flex;

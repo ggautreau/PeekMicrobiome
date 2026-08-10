@@ -235,8 +235,11 @@ export function compositionSvg(table, { topN = 10, width = 900, barH = 26 } = {}
   const keepSet = new Set(keep);
 
   const padL = 150, padT = 16, padR = 12, gap = 5;
-  const legendH = 18 * Math.ceil((keep.length + 1) / 3) + 14;
   const plotW = width - padL - padR;
+  // As many legend columns as fit at ~190 px each. Fixed at three, a figure
+  // drawn 583 px wide printed its species names over one another.
+  const legendCols = Math.max(1, Math.floor(plotW / 190));
+  const legendH = 18 * Math.ceil((keep.length + 1) / legendCols) + 14;
   const height = padT + samples.length * (barH + gap) + legendH + 10;
   let out = svgOpen(width, height, "Composition per sample");
 
@@ -273,10 +276,15 @@ export function compositionSvg(table, { topN = 10, width = 900, barH = 26 } = {}
   let ly = padT + samples.length * (barH + gap) + 12;
   [...keep.map((ri, k) => [rows[ri].species, PALETTE[k % PALETTE.length]]), ["other taxa", GREY]]
     .forEach(([label, colour], k) => {
-      const col = k % 3, row = Math.floor(k / 3);
-      const lx = padL + col * (plotW / 3);
+      const col = k % legendCols, row = Math.floor(k / legendCols);
+      const colW = plotW / legendCols;
+      const lx = padL + col * colW;
+      // Clipped to what the column can hold, at roughly 5.6 px per character.
+      const room = Math.max(8, Math.floor((colW - 20) / 5.6));
+      const text = String(label).length > room
+        ? `${String(label).slice(0, room - 1)}…` : String(label);
       out += `<rect x="${lx}" y="${ly + row * 18}" width="10" height="10" fill="${colour}"/>` +
-        `<text x="${lx + 15}" y="${ly + row * 18 + 9}" fill="#5a5550">${esc(String(label).slice(0, 34))}</text>`;
+        `<text x="${lx + 15}" y="${ly + row * 18 + 9}" fill="#5a5550">${esc(text)}</text>`;
     });
   return out + "</svg>";
 }
@@ -284,7 +292,13 @@ export function compositionSvg(table, { topN = 10, width = 900, barH = 26 } = {}
 /** Shannon (as effective taxa) and observed richness, one row per sample. */
 export function alphaSvg(table, { width = 760, rowH = 22 } = {}) {
   const a = alphaDiversity(table);
-  const padL = 150, padT = 30, padR = 60;
+  // padR holds the value written past the end of the longest bar. Measured from
+  // the longest label there actually is, at ~6.4 px a character: fixed at 60 it
+  // was cut off mid-number the moment the figure stopped being 760 px wide, and
+  // any fixed number is the same bug waiting for a longer number.
+  const longest = Math.max(8, ...a.map((d) =>
+    `${d.effective.toFixed(1)} (${d.richness} obs.)`.length));
+  const padL = 150, padT = 30, padR = Math.ceil(longest * 6.4) + 12;
   const plotW = width - padL - padR;
   const height = padT + a.length * rowH + 34;
   const maxEff = Math.max(1, ...a.map((d) => d.effective));

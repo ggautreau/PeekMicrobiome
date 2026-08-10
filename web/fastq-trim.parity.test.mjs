@@ -1319,6 +1319,33 @@ console.log("== the figures compute what they claim to ==");
     marked.some((m) => m.includes("S&amp;2")),
     `${marked.length} of ${nasty.samples.length}: ${marked.join(" ")}`);
 
+  // The figures are drawn to the width the page gives them — the card is half
+  // the row, and a figure that ignored that either left the card half empty or
+  // was scaled down by the browser with its type. So: whatever width is asked
+  // for is the width declared, and nothing is drawn outside it.
+  {
+    const wide = {
+      samples: Array.from({ length: 6 }, (_, i) => `SAMPLE_${i}`),
+      rows: Array.from({ length: 14 }, (_, i) => ({
+        species: `Genus species_${i} with a long name`, genome: `g${i}`,
+        values: Array.from({ length: 6 }, (_, j) => (i + j) % 7),
+      })),
+    };
+    let fits = true, why = "";
+    for (const [name, fn] of [["composition", compositionSvg], ["alpha", alphaSvg], ["pcoa", pcoaSvg]]) {
+      for (const width of [420, 562, 900]) {
+        const svg = fn(wide, { width });
+        if (!svg.includes(`width="${width}"`)) { fits = false; why = `${name} @${width} declares another width`; }
+        for (const m of svg.matchAll(/<rect x="([\d.]+)" y="[\d.-]+" width="([\d.]+)"/g)) {
+          if (Number(m[1]) + Number(m[2]) > width + 0.5) {
+            fits = false; why = `${name} @${width}: a rect ends at ${Number(m[1]) + Number(m[2])}`;
+          }
+        }
+      }
+    }
+    check("every figure is drawn to the width it is given, and stays inside it", fits, why);
+  }
+
   // Every figure has to be askable, not only the ordination: a bar of the
   // composition and a row of the diversity chart are samples too, and the panel
   // is opened by whatever carries data-sample.
