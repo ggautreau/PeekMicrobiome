@@ -19,6 +19,23 @@ const PALETTE = [
   "#c2568f", "#4d8b3f", "#a35c2a", "#5c6bc0", "#00897b", "#8d6e63",
 ];
 const GREY = "#b8bcbd";
+const INK = "#1f2426";
+
+/**
+ * Black or white on a given fill, whichever a reader can actually make out.
+ *
+ * Half this palette is light enough that white text on it lands near 3:1 —
+ * #d98c00 is 2.7:1 — and a percentage nobody can read is a percentage that is
+ * not there. sRGB relative luminance, per WCAG, with 0.45 as the crossover:
+ * that is where the two contrast ratios meet.
+ */
+function inkOn(hex) {
+  const v = (i) => {
+    const c = parseInt(hex.slice(1 + i * 2, 3 + i * 2), 16) / 255;
+    return c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+  };
+  return 0.2126 * v(0) + 0.7152 * v(1) + 0.0722 * v(2) > 0.45 ? INK : "#ffffff";
+}
 
 const esc = (s) => String(s ?? "")
   .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
@@ -148,9 +165,12 @@ export function pcoa(D, { dims = 2, iters = 200 } = {}) {
 
 // ---- drawing -----------------------------------------------------------------
 
-const svgOpen = (w, h, title) =>
+// `font` is the whole figure's type size. It is a parameter because the pie is
+// drawn into a side panel — on a phone, into about 300 px of one — and an SVG
+// scaled to a third of its width takes its text down with it.
+const svgOpen = (w, h, title, font = 11) =>
   `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${w} ${h}" width="${w}" height="${h}" ` +
-  `font-family="ui-sans-serif, system-ui, sans-serif" font-size="11" role="img" ` +
+  `font-family="ui-sans-serif, system-ui, sans-serif" font-size="${font}" role="img" ` +
   `aria-label="${esc(title)}"><rect width="${w}" height="${h}" fill="#ffffff"/>`;
 
 /**
@@ -269,7 +289,18 @@ export function pcoaSvg(table, { width = 620, height = 520, groupOf = null } = {
   const label = table.samples.length <= 20;
   points.forEach((p, i) => {
     const name = table.samples[i];
-    out += `<circle cx="${sx(p.x).toFixed(1)}" cy="${sy(p.y).toFixed(1)}" r="5.5" ` +
+    // data-sample is what makes the point findable from the page: the plot is
+    // handed over as one string, so the only way to answer "which sample is
+    // this" on hover or on click is for each marker to carry its own name.
+    // Inert in a downloaded SVG, where the <title> is what remains.
+    // Focusable only while the plot is small enough to be labelled. Above that
+    // it is a picture of a distance matrix, not a control panel, and putting
+    // eighty-five tab stops between the tabs and the table would cost every
+    // keyboard user more than it gives the ones who want the plot — who still
+    // have every number, per sample, in the matrix below.
+    out += `<circle class="pcoa-pt" data-sample="${esc(name)}" ` +
+      (label ? `tabindex="0" role="button" aria-label="${esc(name)}, open its composition" ` : "") +
+      `cx="${sx(p.x).toFixed(1)}" cy="${sy(p.y).toFixed(1)}" r="5.5" ` +
       `fill="${colourOf(name)}" fill-opacity="0.85" stroke="#fff" stroke-width="1">` +
       `<title>${esc(name)}${groupOf && groupOf(name) ? ` — ${esc(groupOf(name))}` : ""}</title></circle>`;
     if (label) {
@@ -284,5 +315,94 @@ export function pcoaSvg(table, { width = 620, height = 520, groupOf = null } = {
         `<text x="${pad + 15}" y="${25 + k * 16}" fill="#5a5550">${esc(g)}</text>`;
     });
   }
+  return out + "</svg>";
+}
+
+/**
+ * The composition of ONE sample as a pie, with its taxa named beside it.
+ *
+ * The counterpart to a point on the ordination: the PCoA says a sample sits
+ * apart from the others and never says what it is made of. `sample` is a name
+ * or a column index; an unknown name gives "" rather than an empty figure.
+ *
+ * The top N are taken WITHIN this sample, not from the run-wide ranking the
+ * composition bars use — the taxon that puts a sample on its own is usually one
+ * that is nowhere else in the run, which is exactly where a run-wide top 10
+ * would not have it.
+ *
+ * Narrower than the other figures on purpose: it is drawn into the panel beside
+ * the ordination, and anything wider is scaled down to fit — which shrinks the
+ * legend along with it.
+ */
+export function pieSvg(table, sample, { topN = 9, width = 470, radius = 84, font = 12.5 } = {}) {
+  const c = typeof sample === "number" ? sample : table.samples.indexOf(sample);
+  const name = table.samples[c];
+  if (c < 0 || name === undefined) return "";
+
+  const present = table.rows
+    .map((r) => ({ label: r.species, v: r.values[c] || 0 }))
+    .filter((d) => d.v > 0)
+    .sort((a, b) => b.v - a.v);
+  const total = present.reduce((a, d) => a + d.v, 0);
+  const title = `Composition of ${name}`;
+  const head = `<text x="18" y="20" fill="#275662" font-weight="600" font-size="13">${esc(name)}</text>`;
+  if (!(total > 0)) {
+    // A sample can legitimately match nothing — the wrong catalogue, too few
+    // reads. Saying so beats an empty disc.
+    return svgOpen(width, 62, title, font) + head +
+      `<text x="18" y="42" fill="#5a5550">No taxon detected in this sample.</text></svg>`;
+  }
+
+  const keep = present.slice(0, topN);
+  const restV = total - keep.reduce((a, d) => a + d.v, 0);
+  const slices = keep.map((d, i) => ({ ...d, colour: PALETTE[i % PALETTE.length] }));
+  if (restV > 1e-9) {
+    slices.push({
+      label: `other taxa (${present.length - keep.length})`,
+      v: restV,
+      colour: GREY,
+    });
+  }
+
+  const padT = 44, cx = 18 + radius, cy = padT + radius;
+  const height = Math.max(cy + radius + 16, padT + slices.length * 19 + 20);
+  let out = svgOpen(width, height, title, font) + head +
+    `<text x="18" y="36" fill="#6b7172">${present.length} taxa · ` +
+    `top ${Math.min(topN, present.length)} shown</text>`;
+
+  const at = (a) => `${(cx + radius * Math.cos(a)).toFixed(1)} ${(cy + radius * Math.sin(a)).toFixed(1)}`;
+  let a0 = -Math.PI / 2;
+  for (const s of slices) {
+    const frac = s.v / total;
+    const a1 = a0 + frac * 2 * Math.PI;
+    const pct = `${(frac * 100).toFixed(1)}%`;
+    const tip = `<title>${esc(s.label)} — ${pct}</title>`;
+    if (frac > 0.9999) {
+      // One taxon and nothing else: an arc whose two ends are the same point
+      // draws nothing at all, so a 100% sample would come out blank.
+      out += `<circle cx="${cx}" cy="${cy}" r="${radius}" fill="${s.colour}">${tip}</circle>`;
+    } else {
+      out += `<path d="M ${cx} ${cy} L ${at(a0)} A ${radius} ${radius} 0 ` +
+        `${frac > 0.5 ? 1 : 0} 1 ${at(a1)} Z" fill="${s.colour}" stroke="#fff" ` +
+        `stroke-width="1">${tip}</path>`;
+    }
+    if (frac >= 0.06) {
+      const am = (a0 + a1) / 2, lr = radius * 0.62;
+      out += `<text x="${(cx + lr * Math.cos(am)).toFixed(1)}" ` +
+        `y="${(cy + lr * Math.sin(am) + 4).toFixed(1)}" text-anchor="middle" ` +
+        `fill="${inkOn(s.colour)}" font-weight="600">${pct}</text>`;
+    }
+    a0 = a1;
+  }
+
+  const lx = 2 * radius + 34;
+  slices.forEach((s, k) => {
+    const y = padT + k * 19;
+    const clipped = s.label.length > 28 ? `${s.label.slice(0, 27)}…` : s.label;
+    out += `<rect x="${lx}" y="${y - 9}" width="10" height="10" fill="${s.colour}"/>` +
+      `<text x="${lx + 16}" y="${y}" fill="#5a5550">${esc(clipped)}</text>` +
+      `<text x="${width - 14}" y="${y}" text-anchor="end" fill="#275662">` +
+      `${((s.v / total) * 100).toFixed(1)}%</text>`;
+  });
   return out + "</svg>";
 }

@@ -223,7 +223,18 @@ main.container {
 }
 main.container.wide { max-width: 1280px; }
 
-.page-head { margin-bottom: 1.25rem; }
+/* The pitch on the left, the way past it on the right. Wrapping rather than
+   shrinking: below ~54rem the button goes under the paragraph at full width,
+   which is where a thumb expects it. */
+.page-head {
+  margin-bottom: 1.25rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1.6rem;
+  flex-wrap: wrap;
+}
+.page-head-text { flex: 1 1 32rem; min-width: 0; }
 h1 {
   margin: 0 0 0.3rem;
   font-size: 1.55rem;
@@ -1000,6 +1011,72 @@ table.matrix tbody tr:nth-child(even) { background: var(--bg-softer); }
 details[open] > .ena-summary::before { transform: rotate(90deg); }
 .ena-summary:hover strong { color: var(--accent-ink); }
 
+/* ---------- The worked example ----------
+   A way in for someone who has not decided yet whether this page is worth a
+   433 MB download — so it is the one filled, coloured control above the fold,
+   and the only one competing with the h1 for a first glance. */
+.demo-btn {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 0.8rem;
+  max-width: 22rem;
+  padding: 0.85rem 1.2rem;
+  border: 0;
+  border-radius: var(--radius-lg);
+  /* Fixed teal rather than --accent: white on #00a3a6 is 2.9:1, and this is the
+     one button on the page whose whole job is to be read from across the fold.
+     The same in both themes, deliberately. */
+  background: linear-gradient(135deg, var(--accent-ink) 0%, #005f63 100%);
+  color: #fff;
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+  box-shadow: 0 2px 10px rgba(0, 118, 122, 0.28);
+  transition: transform 0.15s, box-shadow 0.15s, filter 0.15s;
+}
+.demo-btn:hover:not(:disabled) {
+  filter: brightness(1.1);
+  transform: translateY(-1px);
+  box-shadow: 0 5px 16px rgba(0, 118, 122, 0.34);
+}
+.demo-btn:active:not(:disabled) { transform: translateY(0); box-shadow: var(--shadow-sm); }
+.demo-btn:disabled { cursor: progress; }
+.demo-btn svg { width: 22px; height: 22px; flex: 0 0 auto; opacity: 0.9; }
+.demo-btn-text { display: flex; flex-direction: column; line-height: 1.3; }
+.demo-btn-title { font-weight: 600; font-size: 0.98rem; }
+.demo-btn-sub { font-size: 0.78rem; opacity: 0.85; }
+@media (max-width: 54rem) {
+  /* Stacked: full width, where a thumb expects it. */
+  .demo-btn { max-width: none; width: 100%; }
+}
+
+/* Whose numbers are on screen. Amber rather than the accent: this is neither a
+   thing to act on nor a result of yours, and it has to read as a caveat at a
+   glance — a visitor who mistakes the example for their own run has been told
+   something false by the page. */
+.demo-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.8rem;
+  flex-wrap: wrap;
+  margin-bottom: 0.8rem;
+  padding: 0.6rem 0.8rem;
+  background: var(--bg-working-soft);
+  border: 1px solid var(--working);
+  border-radius: var(--radius-md);
+  color: var(--ink-soft);
+  font-size: 0.9rem;
+}
+.demo-banner strong { color: var(--working); }
+/* The global link teal is about 2.8:1 on this amber. The banner's own ink is
+   what the rest of it is read in, so the link takes that and keeps only the
+   underline to say it is one. */
+.demo-banner a { color: var(--ink); text-decoration: underline; }
+.demo-banner a:hover { color: var(--accent-ink); }
+.demo-banner div { flex: 1 1 22rem; }
+.demo-banner button { flex: 0 0 auto; padding: 0.3rem 0.7rem; font-size: 0.85rem; }
+
 /* ---------- Figures ----------
    An aside to the matrix, not a mode: opening one is a click, closing it is the
    same click again. */
@@ -1033,6 +1110,63 @@ details[open] > .ena-summary::before { transform: rotate(90deg); }
   overflow-x: auto;
 }
 .fig-canvas svg { display: block; max-width: 100%; height: auto; }
+
+/* The plot and the sample opened from it, side by side while the window is wide
+   enough and stacked when it is not — the pie is read against where the point
+   sits, so they belong on the same screen. */
+.fig-row { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 0.7rem; }
+.fig-canvas { flex: 1 1 26rem; }
+/* min-width: 0 — without it a flex item refuses to shrink below the intrinsic
+   width of its content, and a 620px figure would push the row off the page. */
+.fig-canvas, .fig-detail { min-width: 0; }
+
+.fig-detail {
+  flex: 1 1 22rem;
+  margin-top: 0.7rem;
+  padding: 0.6rem;
+  background: var(--bg-card);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-md);
+  overflow-x: auto;
+}
+.fig-detail-head {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  margin-bottom: 0.4rem;
+}
+.fig-detail-head strong { color: var(--ink); }
+.fig-detail-actions { margin-left: auto; display: flex; gap: 0.4rem; }
+.fig-detail-actions button { padding: 0.25rem 0.6rem; font-size: 0.82rem; }
+.fig-detail-body svg { display: block; max-width: 100%; height: auto; }
+
+/* A marker is a sample you can open: say so with the pointer, since nothing
+   else on a scatter plot suggests a click would do anything. */
+.pcoa-pt { cursor: pointer; }
+
+/* Follows the pointer over the ordination. pointer-events: none matters — a
+   tooltip under the cursor would take the mouseout of the very point it
+   describes, and the two would flicker against each other. */
+.fig-tip {
+  position: fixed;
+  z-index: 40;
+  pointer-events: none;
+  max-width: 20rem;
+  padding: 0.4rem 0.6rem;
+  background: var(--bg-card);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-md);
+  font-size: 0.82rem;
+  color: var(--ink-soft);
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+}
+.fig-tip strong { color: var(--ink); }
+.fig-tip-group { color: var(--accent-ink); }
+.fig-tip-hint { color: var(--ink-muted); font-style: italic; }
 
 /* ---------- Resource monitor ----------
    Fixed to the right edge, collapsed to a tab. Everything this page does is

@@ -1243,7 +1243,7 @@ console.log("== the export formats other tools read ==");
 
 console.log("== the figures compute what they claim to ==");
 {
-  const { alphaDiversity, distanceMatrix, pcoa, compositionSvg, alphaSvg, pcoaSvg } =
+  const { alphaDiversity, distanceMatrix, pcoa, compositionSvg, alphaSvg, pcoaSvg, pieSvg } =
     await import("./figures.js");
 
   // Shannon has known values: n equally-abundant taxa give exactly ln(n), and
@@ -1295,7 +1295,8 @@ console.log("== the figures compute what they claim to ==");
            { species: "t3", genome: "g3", values: [1, 2, 3] }],
     ref: null,
   };
-  for (const [name, fn] of [["composition", compositionSvg], ["alpha", alphaSvg], ["pcoa", pcoaSvg]]) {
+  for (const [name, fn] of [["composition", compositionSvg], ["alpha", alphaSvg], ["pcoa", pcoaSvg],
+                            ["pie", (t) => pieSvg(t, 0)]]) {
     const svg = fn(nasty);
     check(`${name} produces a complete SVG`, svg.startsWith("<svg") && svg.endsWith("</svg>"));
     // Species names and sample names go straight into the markup, so a name with
@@ -1306,6 +1307,143 @@ console.log("== the figures compute what they claim to ==");
       contents.length > 0 && !contents.some((c) => /&(?!amp;|lt;|gt;|quot;|#)/.test(c)),
       contents.find((c) => /&(?!amp;|lt;|gt;|quot;|#)/.test(c)) ?? `${contents.length} text nodes`);
   }
+
+  // Every point must carry its own name: it is the only thing that lets the page
+  // answer "which sample is this" on hover, and the only handle the click that
+  // opens a composition has. A plot drawn without them is a plot nothing can be
+  // asked of.
+  const marked = pcoaSvg(nasty).match(/data-sample="([^"]*)"/g) ?? [];
+  check("every PCoA point carries the sample it stands for",
+    marked.length === nasty.samples.length &&
+    marked.some((m) => m.includes("S&amp;2")),
+    `${marked.length} of ${nasty.samples.length}: ${marked.join(" ")}`);
+
+  // The pie is one sample out of the table, so the wrong column is the failure
+  // that would look right — every number plausible, none of them this sample's.
+  const three = {
+    samples: ["A", "B"],
+    rows: [{ species: "x", values: [75, 1] }, { species: "y", values: [25, 99] }],
+  };
+  const pieA = pieSvg(three, "A"), pieB = pieSvg(three, 1);
+  check("the pie reads the column of the sample it was asked for, by name or index",
+    /75\.0%/.test(pieA) && /25\.0%/.test(pieA) && /99\.0%/.test(pieB) && !/75\.0%/.test(pieB));
+  check("...and an unknown sample gives nothing rather than an empty figure",
+    pieSvg(three, "nobody") === "" && pieSvg(three, 7) === "");
+
+  // A single detected taxon is a real case — low depth, the wrong catalogue —
+  // and an arc whose two ends are the same point draws nothing at all, so the
+  // whole figure would come out blank at exactly 100%.
+  const solo = pieSvg({ samples: ["A"], rows: [{ species: "only", values: [100] }] }, "A");
+  check("a sample made of one taxon draws a disc, not an empty arc",
+    /<circle/.test(solo) && !/<path/.test(solo) && /100\.0%/.test(solo));
+  check("...and a sample with nothing detected says so",
+    /No taxon detected/.test(pieSvg({ samples: ["A"], rows: [{ species: "x", values: [0] }] }, "A")));
+
+  // Past the top N the rest is not dropped: a pie whose slices sum to 60% with
+  // no explanation reads as missing data rather than as a legend cut.
+  const many = {
+    samples: ["A"],
+    rows: Array.from({ length: 30 }, (_, i) => ({ species: `t${i}`, values: [30 - i] })),
+  };
+  const wide = pieSvg(many, "A", { topN: 5 });
+  const pcts = [...wide.matchAll(/>(\d+\.\d)%</g)].map((m) => Number(m[1]));
+  // Each slice is written twice — once in the wedge, once in the legend — and
+  // wedges under 6% carry no label, so the legend column is the one that must
+  // account for all of it.
+  const legend = pcts.slice(-6);
+  check("the taxa past the top N are kept as one named slice, and the shares sum to 100",
+    /other taxa \(25\)/.test(wide) && Math.abs(legend.reduce((a, v) => a + v, 0) - 100) < 0.3,
+    `${legend.join(" + ")} = ${legend.reduce((a, v) => a + v, 0).toFixed(1)}`);
+}
+
+console.log("== the worked example is what it claims to be ==");
+{
+  // The example is the first thing a visitor sees results in, and it arrives
+  // with a banner naming a study, a catalogue and a genome count. Every one of
+  // those claims is checkable against the file itself and against the catalogue
+  // it says it came from — so they are checked, because a demo that quietly
+  // stops matching its own label is a page lying to someone who has no way to
+  // know.
+  const { fromSession } = await import("./exports.js");
+  const demoText = readFileSync(here + "demo/gut-demo.session.json", "utf8");
+  const groupsText = readFileSync(here + "demo/gut-demo.groups.csv", "utf8");
+  const st = fromSession(demoText);   // throws on anything that is not a session
+
+  check("the example loads through the same reader as any saved session",
+    st.sampleOrder.length >= 10 && Object.keys(st.matrix).length > 100,
+    `${st.sampleOrder.length} samples x ${Object.keys(st.matrix).length} rows`);
+  // Saved at any rank above species, the restore path heads the first column
+  // "Genus" over per-genome rows until a database is loaded. The example ships
+  // with no database, so species is the only honest rank to save it at.
+  check("...at species level, the only rank it can be shown at with no database",
+    st.rank === "s", st.rank);
+  check("...naming public accessions, so the same runs can be profiled again",
+    st.sampleOrder.every((s) => /^[EDS]RR\d+$/.test(s)), st.sampleOrder.slice(0, 3).join(" "));
+
+  // Relative abundances of one sample sum to 100. A column that does not is not
+  // a profile, whatever else it is.
+  const sums = st.sampleOrder.map((s) =>
+    Object.values(st.matrix).reduce((a, m) => a + (m[s] ?? 0), 0));
+  check("...where every column sums to 100%",
+    sums.every((v) => Math.abs(v - 100) < 0.5),
+    sums.map((v) => v.toFixed(2)).join(" "));
+  check("...and no row is present in name only",
+    Object.values(st.matrix).every((m) => st.sampleOrder.some((s) => (m[s] ?? 0) > 0)));
+
+  // The defect this example was first built with: it came from an export taken
+  // before the app disambiguated repeated GTDB names, and shipped 8 labels over
+  // 25 rows. CroCoDeEL and phyloseq reject a matrix like that outright — so the
+  // demo would have been a demonstration of the bug.
+  const labels = Object.values(st.matrix).map((m) => m.species);
+  const seenLabel = new Map();
+  for (const l of labels) seenLabel.set(l, (seenLabel.get(l) ?? 0) + 1);
+  const sharedLabels = [...seenLabel].filter(([, n]) => n > 1);
+  check("...and no two rows of it share a label, as no export of this app may",
+    sharedLabels.length === 0, sharedLabels.slice(0, 3).map(([l, n]) => `${n}x ${l}`).join(", "));
+
+  // The reference is what every export header, the banner and the matrix line
+  // are written from. Checked against the catalogue rather than trusted.
+  const demoBiome = catalogEntries.find((b) => b.key === st.ref?.key);
+  check("the reference it names is a catalogue this page actually offers",
+    !!demoBiome, st.ref?.key);
+  check("...with the same file, URL, DOI and species count as that entry",
+    demoBiome && st.ref.file === demoBiome.file && st.ref.url === demoBiome.url &&
+    st.ref.doi === demoBiome.doi && st.ref.species === demoBiome.species,
+    `${st.ref?.file} ${st.ref?.species} vs ${demoBiome?.file} ${demoBiome?.species}`);
+  check("...and the genome count sylph loaded agrees with it",
+    st.ref.genomes === demoBiome?.species, `${st.ref?.genomes} vs ${demoBiome?.species}`);
+
+  // Loading the example borrows the catalogue's lineage map so the rank picker
+  // works without the 433 MB database. A genome the map does not know would be
+  // bucketed as "unclassified at genus level" — silently, in a table offered as
+  // the thing to explore.
+  const map = JSON.parse(readFileSync(here + demoBiome.lineage, "utf8"));
+  const strangers = Object.keys(st.matrix).filter((g) => !(g in map.species));
+  check("every genome in it is one the bundled lineage map can place",
+    strangers.length === 0, `${strangers.length} unknown, e.g. ${strangers.slice(0, 2)}`);
+
+  // The groups file is what colours the ordination. A name that matches no
+  // sample colours nothing and says so nowhere.
+  const groupOf = new Map(groupsText.trim().split(/\r?\n/).slice(1)
+    .map((l) => l.split(",").map((c) => c.trim())));
+  check("the groups file names every sample of the example, and only those",
+    st.sampleOrder.every((s) => groupOf.has(s)) && groupOf.size === st.sampleOrder.length,
+    `${groupOf.size} rows for ${st.sampleOrder.length} samples`);
+  const subjects = new Set(groupOf.values());
+  check("...and groups them into fewer subjects than there are runs, which is the point",
+    subjects.size > 1 && subjects.size < st.sampleOrder.length,
+    `${subjects.size} subjects`);
+
+  // The wiring, same reason as the cache-bust check: the files can be perfect
+  // and unreachable.
+  const html = readFileSync(here + "index.html", "utf8");
+  const multi = readFileSync(here + "multi.js", "utf8");
+  check("the page carries the button and the banner the example needs",
+    /id="demoLoad"/.test(html) && /id="demoBanner"/.test(html));
+  check("...and multi.js fetches the two files that exist",
+    multi.includes('"demo/gut-demo.session.json"') && multi.includes('"demo/gut-demo.groups.csv"'));
+  check("...and says whose numbers they are, in the banner and nowhere else needed",
+    /not your data/.test(multi));
 }
 
 console.log("== clustering orders the matrix without changing it ==");

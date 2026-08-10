@@ -132,6 +132,7 @@ is the real one and the UI says so rather than failing unexplained.
 |---|---|
 | `web/` | Static site: multi-sample profiler with INRAE-themed UI. |
 | `web/db/biomes.json` | The catalogue of catalogues — one entry per biome, read at load time. |
+| `web/demo/` | The worked example the page loads with one click: a saved session of fifteen public PRJEB83730 runs, built by `scripts/build_demo_session.py`. |
 | `web/biomes.js` | Builds the picker, freezes which database a result came from. |
 | `web/db-cache.js` | One resumable, cached download per database (OPFS). |
 | `web/ena.js` | Resolves an ENA accession and streams its FASTQs. |

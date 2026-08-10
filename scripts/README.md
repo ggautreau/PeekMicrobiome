@@ -289,3 +289,32 @@ UHGG `genomes-all_metadata.tsv`, which fills the 1187 human-gut species that
 `web/db/lineage.json` leaves empty). 41% of the 56 782 genomes have no species
 name at all — those are GTDB placeholders (empty `s__`), overwhelmingly soil and
 marine, not lookup failures.
+
+## `build_demo_session.py` — the worked example the page ships
+
+Rebuilds `web/demo/gut-demo.session.json` and `web/demo/gut-demo.groups.csv`
+from an abundance matrix the app exported. The demo is what the "Explore example
+results" button loads: fifteen public runs of **PRJEB83730** (human gut
+metagenomes, Ion Torrent), one run per ENA sample, profiled by PeekMicrobiome
+itself against the published Human gut (UHGG) catalogue and saved in the same
+JSON the *Save session* button writes.
+
+```bash
+python3 scripts/build_demo_session.py abundance_matrix_human-gut.tsv
+```
+
+It refuses to write anything it cannot vouch for: a matrix profiled against
+another catalogue, a `k`/`c` that is not 31/200, a genome count that disagrees
+with `web/db/biomes.json`, a column that does not sum to 100 %, or a genome the
+bundled lineage map cannot place — that last one because loading the example
+borrows `web/db/lineage/human-gut.json` (399 kB, independent of the 433 MB
+database) so the genus/family/phylum picker works, and an unplaceable genome
+would be bucketed as "unclassified" without saying so.
+
+The eight subjects each contribute a standard library and, for seven of them, a
+second one sequenced about six times deeper; the groups file colours by subject,
+so whether the two libraries of a subject land together in the ordination is a
+question the demo answers on screen rather than a claim it makes.
+
+`web/fastq-trim.parity.test.mjs` re-checks all of it against the catalogue on
+every run — the file cannot drift into disagreeing with its own banner.

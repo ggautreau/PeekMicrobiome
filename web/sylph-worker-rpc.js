@@ -131,7 +131,22 @@
 // satisfied, including while a run was still chewing through it.
 // v43: a Settings dialog — theme in four modes, and the three limits a browser
 // can actually enforce. theme.js became a module and gained schedule support.
-export const WORKER_VERSION = "45";
+// v44: Settings reports what THIS browser offers on the path Load database
+// takes — every line a feature test — after a Firefox report that could not be
+// reproduced here.
+// v45: two of those lines were probed from the page, where neither
+// createSyncAccessHandle nor createWritable exists on any browser, so both read
+// NO everywhere. They are probed inside a throwaway worker now.
+// v46: a PCoA point names its sample on hover and opens that sample's
+// composition as a pie when clicked. multi.js imports pieSvg from figures.js,
+// which a page on v45 does not have, and index.html/styles.css carry the panel
+// and the tooltip the page would otherwise render unstyled.
+// v47: the page ships a worked example — a saved session of fifteen public runs
+// of PRJEB83730 under web/demo/, loaded by a button in the page head. A page on
+// v46 has no button and would not fetch it, but the pairing that matters is the
+// stylesheet: the banner saying "this is the example, not your data" is styled
+// there, and unstyled it reads as an ordinary paragraph under the heading.
+export const WORKER_VERSION = "47";
 
 // ---- memory64 capability probe ----------------------------------------------
 

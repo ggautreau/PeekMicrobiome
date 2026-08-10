@@ -12,21 +12,21 @@ import {
   sylphWorkerRpc, detectMemory64, chooseWasmBits, WORKER_VERSION,
   readsBudget, readsBudgetNote, readsOverBudgetNote, loadedBuildNote, fmtReads,
   progressFraction, basesForReads, BUDGET_READ_BP,
-} from "./sylph-worker-rpc.js?v=45";
+} from "./sylph-worker-rpc.js?v=47";
 import {
   dbCacheClient, fmtRate, fmtEta, cacheSummary, assertSameDatabase,
-} from "./db-cache.js?v=45";
-import { matePattern, stripFastqExt } from "./sample-naming.js?v=45";
+} from "./db-cache.js?v=47";
+import { matePattern, stripFastqExt } from "./sample-naming.js?v=47";
 import {
   resolveAccession, validateAccession, ASSUMED_BPS,
   downloadEstimate, readCountVerdict, expectedProfiledReads,
-} from "./ena.js?v=45";
-import { normaliseMarkers, screenVerdict, SCREENING_DB, SCREENING_MARKERS } from "./screening.js?v=45";
-import { clusterTable, MAX_ROWS as CLUSTER_MAX_ROWS } from "./cluster.js?v=45";
-import { compositionSvg, alphaSvg, pcoaSvg, alphaDiversity } from "./figures.js?v=45";
-import { toMetaphlan, toBiom, toSylphTsv, toSession, fromSession } from "./exports.js?v=45";
+} from "./ena.js?v=47";
+import { normaliseMarkers, screenVerdict, SCREENING_DB, SCREENING_MARKERS } from "./screening.js?v=47";
+import { clusterTable, MAX_ROWS as CLUSTER_MAX_ROWS } from "./cluster.js?v=47";
+import { compositionSvg, alphaSvg, pcoaSvg, pieSvg, alphaDiversity } from "./figures.js?v=47";
+import { toMetaphlan, toBiom, toSylphTsv, toSession, fromSession } from "./exports.js?v=47";
 import { currentMode as themeMode, setMode as setThemeMode, applyTheme,
-  loadSchedule, saveSchedule } from "./theme.js?v=45";
+  loadSchedule, saveSchedule } from "./theme.js?v=47";
 import {
   fetchCatalog, fallbackCatalog, renderDbSelect, biomeForUrl, biomeNote,
   mgnifyGenomeUrl,
@@ -34,7 +34,7 @@ import {
   makeDbRef, sameDbRef, refLine, refShort, refCommentLines, refSlug, genomeCountMismatch,
   rememberBiome, recallBiome, catalogueName, LOCAL_VALUE,
   selectionMatchesLoaded, notLoadedNote, refMetaMismatch,
-} from "./biomes.js?v=45";
+} from "./biomes.js?v=47";
 
 const $ = (id) => document.getElementById(id);
 const els = {
@@ -732,7 +732,11 @@ els.dbSelect?.addEventListener("change", () => {
   renderCacheInfo();
 });
 
-(async () => {
+// Kept as a promise, not only as the variable it fills: the catalogue is a real
+// network round trip, and anything that runs off a click in the first second of
+// the page — the example does — would otherwise read `catalog` as null and
+// quietly do without it.
+const catalogReady = (async () => {
   try {
     catalog = await fetchCatalog();
   } catch (e) {
@@ -963,6 +967,10 @@ async function loadDatabase() {
     // the entry declares one; otherwise cleared, so the previous biome's names
     // cannot be pinned onto this one's genomes. Without a map the matrix shows
     // the genome accession, which is right rather than merely blank.
+    // The example is over: this database, and the map that belongs to it, take
+    // the page back. Cleared before the assignments below so that the restore
+    // inside clearDemo() cannot put the borrowed map back afterwards.
+    clearDemo();
     lineage = {}; ambiguousNames = new Set(); taxonomy = normaliseLineage(null);
     if (biome?.lineage) {
       try {
@@ -1871,6 +1879,10 @@ function setRunControls(running) {
   setDisabled(els.enaAdd, busy || (enaSelectedRuns().length === 0
     ? "Tick at least one run in the list above to add it."
     : ""));
+  // The example lends the page the gut lineage map, and the map is what names
+  // every row a finishing sample adds. Loading it mid-run would put gut species
+  // names on genomes from whatever catalogue is actually loaded.
+  setDisabled(document.getElementById("demoLoad"), busy);
   // Visible, not only on hover: there is no hover on a phone.
   if (els.runControlsNote) {
     els.runControlsNote.textContent = busy;
@@ -1941,8 +1953,11 @@ function refreshSteps() {
     running
       ? `profiling — ${okN} of ${files.length} done`
       : lastMatrix
-        ? `${lastMatrix.rows.length} species × ${lastMatrix.samples.length} samples` +
-          (badN ? ` · ${badN} need a look` : "")
+        // The strip is the one place a table with no run behind it could pass
+        // for one: steps 1 and 2 sit there unstarted while this line turns
+        // green. It says which it is.
+        ? `${demoOn ? "the example — " : ""}${lastMatrix.rows.length} species × ` +
+          `${lastMatrix.samples.length} samples` + (badN ? ` · ${badN} need a look` : "")
         : (done[0] && done[1] ? "ready — press Profile all" : "waiting for the two steps above"),
   ];
   for (let i = 0; i < 3; i++) {
@@ -2246,6 +2261,10 @@ async function runAll() {
   // a user gesture or the browser refuses it outright.
   await wantNotify();
   if (!dbMeta) return;
+  // A real run replaces the example — and must, before anything is profiled: the
+  // example lends the page the gut lineage map, and a run against another
+  // catalogue would take its species names from it.
+  clearDemo();
   els.error.textContent = "";
   els.results.classList.add("hide");
   els.progress.classList.remove("hide");
@@ -2628,6 +2647,9 @@ function rerankMatrix() {
   if (!lastRaw) return;
   lastMatrix = matrixToTable(lastRaw.matrix, lastRaw.sampleOrder, lastRaw.ref, lastRaw.refBySample);
   renderMatrix(viewOf(lastMatrix));
+  // An open figure is drawn from the matrix, so it has to follow it: leaving a
+  // species-level pie beside a phylum-level table shows two different runs.
+  if (openFig) drawFigure(openFig, { toggle: false });
 }
 document.getElementById("clusterPick")?.addEventListener("change", rerankMatrix);
 
@@ -2675,7 +2697,10 @@ document.getElementById("metaFile")?.addEventListener("change", async (e) => {
         : `no sample name in that file matches this run — the first column must ` +
           `be the sample name as shown here (e.g. ${lastMatrix?.samples?.[0] ?? "ERR…"})`;
     }
-    if (openFig === "pcoa") drawFigure("pcoa");
+    // toggle: false — the plain call reads as the tab being clicked again and
+    // CLOSES the plot, which is what loading groups did: the one action the
+    // caption under the ordination asks for made it disappear.
+    if (openFig === "pcoa") drawFigure("pcoa", { toggle: false });
   } catch (err) {
     const note = document.getElementById("figNote");
     if (note) note.textContent = `could not read that file: ${err?.message ?? err}`;
@@ -2683,17 +2708,22 @@ document.getElementById("metaFile")?.addEventListener("change", async (e) => {
   e.target.value = "";
 });
 
-function drawFigure(kind) {
+// `toggle: false` redraws whatever is open instead of closing it, which is what
+// a rank or clustering change needs: the figure on screen has to follow the
+// matrix under it, and a plain drawFigure(openFig) would read as the tab being
+// clicked again and shut it.
+function drawFigure(kind, { toggle = true } = {}) {
   const canvas = document.getElementById("figCanvas");
   const note = document.getElementById("figNote");
   const dl = document.getElementById("figDownload");
   if (!canvas) return;
   // Clicking the open tab closes it — the figures are an aside, not a mode.
-  if (!kind || kind === openFig || !lastMatrix?.rows?.length) {
+  if (!kind || (toggle && kind === openFig) || !lastMatrix?.rows?.length) {
     openFig = null;
     canvas.classList.add("hide");
     canvas.innerHTML = "";
     dl?.classList.add("hide");
+    closePie();
     if (note) note.textContent = "";
     for (const b of document.querySelectorAll(".fig-tab")) b.classList.remove("is-on");
     return;
@@ -2709,6 +2739,7 @@ function drawFigure(kind) {
   for (const b of document.querySelectorAll(".fig-tab")) {
     b.classList.toggle("is-on", b.dataset.fig === kind);
   }
+  if (kind === "pcoa") wirePcoa(canvas, view); else closePie();
   // Every figure is relative to one catalogue and to nothing else. Said here
   // too, because a figure is the thing that gets pasted into a slide with no
   // page around it.
@@ -2716,6 +2747,7 @@ function drawFigure(kind) {
     note.textContent = `${view.rows.length} ${RANK_LABELS[currentRank()].toLowerCase()}` +
       `${view.rows.length === 1 ? "" : currentRank() === "s" ? "" : ""} × ${view.samples.length} samples, ` +
       `against ${refShort(view.ref) || "the loaded catalogue"}` +
+      (kind === "pcoa" ? " · hover a point to name it, click it for that sample" : "") +
       (kind === "pcoa" && !metaGroups.size ? " · load metadata to colour by group" : "");
   }
 }
@@ -2723,6 +2755,218 @@ function drawFigure(kind) {
 for (const b of document.querySelectorAll(".fig-tab")) {
   b.addEventListener("click", () => drawFigure(b.dataset.fig));
 }
+
+// ---- the ordination, made answerable ----------------------------------------
+//
+// A point on a PCoA is a sample, and nothing on screen says which one. The SVG
+// carries a <title>, but that is a native tooltip: half a second of stillness,
+// no highlight, nothing at all under a finger. Hover names the point where the
+// pointer is; a click opens what that sample is made of, which is the question
+// an ordination raises every time and answers never.
+let pickedSample = null;
+let hoverSample = null;
+
+const FIG_INK = "#275662";
+const sampleSlug = (s) => String(s).replace(/[^A-Za-z0-9._-]+/g, "_").slice(0, 60) || "sample";
+
+function paintPoint(el) {
+  const name = el.getAttribute("data-sample");
+  const picked = name === pickedSample, hot = name === hoverSample;
+  el.setAttribute("r", picked || hot ? "8" : "5.5");
+  el.setAttribute("stroke", picked ? FIG_INK : "#ffffff");
+  el.setAttribute("stroke-width", picked ? "2.5" : hot ? "2" : "1");
+}
+const repaintPoints = (root) => {
+  for (const el of root.querySelectorAll(".pcoa-pt")) paintPoint(el);
+};
+
+// The point a keyboard-painted tooltip belongs to. A pointer tooltip is hidden
+// on scroll — the plot slides out from under it — but a focused one must not be,
+// because tabbing to a point is itself what scrolls the page: the tooltip would
+// be dismissed by the act of asking for it. It follows its point instead.
+let tipAnchor = null;
+
+function showTip(html, e) {
+  const tip = document.getElementById("figTip");
+  if (!tip) return;
+  tip.innerHTML = html;
+  tip.classList.remove("hide");
+  // Measured only once it is visible; a hidden element has no size, and the
+  // tooltip would then always be placed as if it were 0 x 0.
+  const r = tip.getBoundingClientRect();
+  const x = Math.min(e.clientX + 16, window.innerWidth - r.width - 8);
+  const y = Math.min(e.clientY + 16, window.innerHeight - r.height - 8);
+  tip.style.left = `${Math.max(8, x)}px`;
+  tip.style.top = `${Math.max(8, y)}px`;
+}
+const hideTip = () => {
+  tipAnchor = null;
+  document.getElementById("figTip")?.classList.add("hide");
+};
+
+// The one line worth having before the click: the dominant taxon and its share.
+function topTaxonOf(view, name) {
+  const c = view.samples.indexOf(name);
+  if (c < 0) return null;
+  let best = null, total = 0;
+  for (const r of view.rows) {
+    const v = r.values[c] || 0;
+    if (v <= 0) continue;
+    total += v;
+    if (!best || v > best.v) best = { label: r.species, v };
+  }
+  return best ? { ...best, share: best.v / total } : null;
+}
+
+function wirePcoa(canvas, view) {
+  const svg = canvas.querySelector("svg");
+  if (!svg) return;
+  // A sample can vanish between two draws — a session reloaded, a rank change
+  // that renames nothing but a run restarted. Drop the selection rather than
+  // keep highlighting a point that is no longer there.
+  if (pickedSample && !view.samples.includes(pickedSample)) closePie();
+  hoverSample = null;
+
+  // `e` may be a real pointer event or a point element — focus has no
+  // coordinates, and the tooltip has to go somewhere.
+  const paintTip = (name, e) => {
+    if (!name) { hideTip(); return; }
+    if (!("clientX" in e)) {
+      const el = e;
+      const r = el.getBoundingClientRect();
+      e = { clientX: r.right, clientY: r.bottom };
+      tipAnchor = el;
+    } else {
+      tipAnchor = null;
+    }
+    const group = metaGroupOf(name);
+    const top = topTaxonOf(view, name);
+    showTip(
+      `<strong>${escapeHTML(name)}</strong>` +
+      (group ? `<span class="fig-tip-group">${escapeHTML(group)}</span>` : "") +
+      (top ? `<span>${escapeHTML(top.label)} — ${(top.share * 100).toFixed(1)}%</span>` : "") +
+      `<span class="fig-tip-hint">${name === pickedSample ? "click to close" : "click for the full composition"}</span>`,
+      e);
+  };
+
+  // A finger has no hover: it moves the pointer once, on the way to the tap, and
+  // never leaves. The tooltip would then stay printed over the plot with nothing
+  // to dismiss it — so on touch the tap opens the panel and that is all.
+  let touch = false;
+  const fromFinger = (e) => e.pointerType === "touch" || e.pointerType === "pen";
+  // On pointerdown as well as on move: a stationary tap can produce no
+  // pointermove at all, and the click that follows would then be taken for a
+  // mouse click and print a tooltip nothing will ever dismiss.
+  svg.addEventListener("pointerdown", (e) => { touch = fromFinger(e); });
+  svg.addEventListener("pointermove", (e) => {
+    touch = fromFinger(e);
+    const name = e.target.closest?.(".pcoa-pt")?.getAttribute("data-sample") ?? null;
+    if (name !== hoverSample) {
+      hoverSample = name;
+      repaintPoints(svg);
+    }
+    if (touch) hideTip(); else paintTip(name, e);
+  });
+  svg.addEventListener("pointerleave", () => {
+    hoverSample = null;
+    repaintPoints(svg);
+    hideTip();
+  });
+  svg.addEventListener("click", (e) => {
+    const name = e.target.closest?.(".pcoa-pt")?.getAttribute("data-sample");
+    if (!name) return;
+    if (name === pickedSample) closePie(); else showPie(view, name);
+    repaintPoints(svg);
+    // The pointer has not moved, so nothing else would redraw the tooltip — and
+    // it is still offering "click for the full composition" for the sample that
+    // was just opened.
+    if (touch) hideTip(); else paintTip(name, e);
+  });
+  // The same two gestures without a mouse. Focus stands in for hover, Enter and
+  // Space for the click — the points carry tabindex only while the plot is
+  // small enough for that to be a reasonable number of stops (see pcoaSvg).
+  svg.addEventListener("focusin", (e) => {
+    const pt = e.target.closest?.(".pcoa-pt");
+    if (!pt) return;
+    hoverSample = pt.getAttribute("data-sample");
+    repaintPoints(svg);
+    paintTip(hoverSample, pt);
+  });
+  svg.addEventListener("focusout", () => {
+    hoverSample = null;
+    repaintPoints(svg);
+    hideTip();
+  });
+  svg.addEventListener("keydown", (e) => {
+    if (e.key !== "Enter" && e.key !== " ") return;
+    const name = e.target.closest?.(".pcoa-pt")?.getAttribute("data-sample");
+    if (!name) return;
+    e.preventDefault();   // Space would scroll the page out from under the plot
+    if (name === pickedSample) closePie(); else showPie(view, name);
+    repaintPoints(svg);
+    paintTip(name, e.target);
+  });
+
+  repaintPoints(svg);
+  if (pickedSample) showPie(view, pickedSample);
+}
+
+function closePie() {
+  pickedSample = null;
+  const panel = document.getElementById("figDetail");
+  if (!panel) return;
+  panel.classList.add("hide");
+  panel.innerHTML = "";
+  const canvas = document.getElementById("figCanvas");
+  if (canvas) repaintPoints(canvas);
+}
+
+function showPie(view, name) {
+  const panel = document.getElementById("figDetail");
+  if (!panel) return;
+  pickedSample = name;
+  const group = metaGroupOf(name);
+  panel.innerHTML =
+    `<div class="fig-detail-head">` +
+    `<strong>${escapeHTML(name)}</strong>` +
+    (group ? `<span class="info">${escapeHTML(group)}</span>` : "") +
+    `<span class="fig-detail-actions">` +
+    `<button type="button" id="pieDownload">Download SVG</button>` +
+    `<button type="button" id="pieClose" aria-label="Close this sample">✕</button>` +
+    `</span></div>` +
+    `<div class="fig-detail-body">${pieSvg(view, name)}</div>`;
+  panel.classList.remove("hide");
+  document.getElementById("pieClose")?.addEventListener("click", () => {
+    closePie();
+    hideTip();
+  });
+  document.getElementById("pieDownload")?.addEventListener("click", () => {
+    const svg = panel.querySelector(".fig-detail-body")?.innerHTML;
+    if (svg) saveBlob(svg, "image/svg+xml", `composition_${sampleSlug(name)}.svg`);
+  });
+}
+
+// The tooltip is positioned in the viewport, so a scroll slides the plot out
+// from under it and leaves it labelling whatever is now there. The next pointer
+// move puts it back where it belongs — unless it belongs to a focused point, in
+// which case it goes with it.
+addEventListener("scroll", () => {
+  const tip = document.getElementById("figTip");
+  if (!tip || tip.classList.contains("hide")) return;
+  if (!tipAnchor?.isConnected) { hideTip(); return; }
+  const r = tipAnchor.getBoundingClientRect();
+  tip.style.left = `${Math.max(8, Math.min(r.right + 16, window.innerWidth - tip.offsetWidth - 8))}px`;
+  tip.style.top = `${Math.max(8, Math.min(r.bottom + 16, window.innerHeight - tip.offsetHeight - 8))}px`;
+}, { passive: true, capture: true });
+
+// Escape closes the sample, as it would a dialog — but only when no real dialog
+// is open, which handles its own Escape and must not be shadowed.
+document.addEventListener("keydown", (e) => {
+  if (e.key !== "Escape" || !pickedSample) return;
+  if (document.querySelector("dialog[open]")) return;
+  closePie();
+  hideTip();
+});
 // The full GTDB lineage of a genome, in the shape exports.js wants.
 function lineageOf(genome) {
   const out = {};
@@ -2751,7 +2995,17 @@ document.getElementById("exportAs")?.addEventListener("change", (e) => {
     // Straight from what sylph wrote, so every column survives — including the
     // ones this page never reads.
     const tsv = toSylphTsv(files.filter((f) => f.tsv));
-    if (!tsv) { showError("No sylph output to export — no sample has finished yet."); return; }
+    // A matrix on screen is not enough: this export is sylph's own output, kept
+    // per sample as it was written, and neither a saved session nor the example
+    // carries it — they hold the assembled matrix and nothing else.
+    if (!tsv) {
+      showError(lastMatrix
+        ? "The raw sylph output is not part of a saved session — only the matrix is, which is " +
+          "what the TSV, CSV, MetaPhlAn and BIOM exports write. Profile a sample here to get " +
+          "sylph's own columns."
+        : "No sylph output to export — no sample has finished yet.");
+      return;
+    }
     saveBlob(tsv, "text/tab-separated-values", `sylph_profile_${slug}.tsv`);
   } else if (kind === "mpa") {
     saveBlob(toMetaphlan(view, {
@@ -2771,8 +3025,29 @@ document.getElementById("saveSession")?.addEventListener("click", () => {
     ref: lastRaw.ref, sampleOrder: lastRaw.sampleOrder, matrix: lastRaw.matrix,
     refBySample: lastRaw.refBySample, rank: currentRank(),
     savedAt: new Date().toISOString(),
-  }), "application/json", `session_${refSlug(lastRaw.ref)}.json`);
+    // Named for what it is. Saving while the example is on screen writes the
+    // example out, and a file called session_human-gut.json would be indexed a
+    // month later as somebody's own run.
+  }), "application/json", `${demoOn ? "example_" + DEMO_STUDY + "_" : "session_"}${refSlug(lastRaw.ref)}.json`);
 });
+
+// Putting a saved matrix back on screen. Shared by the file picker and by the
+// bundled example, so the example cannot drift into being a mock of the results:
+// it goes through the same restore as any session from disk.
+function applySession(st) {
+  lastRaw = { matrix: st.matrix, sampleOrder: st.sampleOrder, ref: st.ref,
+    refBySample: st.refBySample };
+  const pick = document.getElementById("rankPick");
+  if (pick && st.rank) pick.value = st.rank;
+  lastMatrix = matrixToTable(lastRaw.matrix, lastRaw.sampleOrder, lastRaw.ref, lastRaw.refBySample);
+  renderMatrix(viewOf(lastMatrix));
+  els.results.classList.remove("hide");
+  refreshSteps();
+  // A figure left open was drawn from the table that has just been replaced.
+  // Redrawn rather than left there: the SVG of the previous run beside the new
+  // matrix is two different results under one heading.
+  if (openFig) drawFigure(openFig, { toggle: false });
+}
 
 document.getElementById("loadSession")?.addEventListener("change", async (e) => {
   const f = e.target.files?.[0];
@@ -2780,14 +3055,9 @@ document.getElementById("loadSession")?.addEventListener("change", async (e) => 
   if (!f) return;
   try {
     const st = fromSession(await f.text());
-    lastRaw = { matrix: st.matrix, sampleOrder: st.sampleOrder, ref: st.ref,
-      refBySample: st.refBySample };
-    const pick = document.getElementById("rankPick");
-    if (pick && st.rank) pick.value = st.rank;
-    lastMatrix = matrixToTable(lastRaw.matrix, lastRaw.sampleOrder, lastRaw.ref, lastRaw.refBySample);
-    renderMatrix(viewOf(lastMatrix));
-    els.results.classList.remove("hide");
-    refreshSteps();
+    // A session of your own replaces the example, lineage map included.
+    clearDemo({ wipe: false });
+    applySession(st);
     // The saved rank may not be reachable: a session taken at genus level and
     // reopened before its database is loaded has no lineage map to aggregate
     // with, and silently showing species instead would be a different table
@@ -2801,6 +3071,172 @@ document.getElementById("loadSession")?.addEventListener("change", async (e) => 
     showError(`Could not read that session: ${err?.message ?? err}`);
   }
 });
+
+// ---- the worked example ------------------------------------------------------
+//
+// Nothing on this page shows a number until a 433 MB catalogue has come down the
+// wire and a sample has been profiled. That is a long way to walk to find out
+// whether the results are worth walking for — and it is the reason people close
+// the tab.
+//
+// So: a real run, saved and shipped. Fifteen public runs of PRJEB83730 profiled
+// against Human gut (UHGG), in the same JSON the Save session button writes,
+// rebuilt from the exported matrix by scripts/build_demo_session.py. Not a mock
+// and not simulated numbers: profile the same accessions from the ENA panel
+// below and the table comes back.
+const DEMO_SESSION = "demo/gut-demo.session.json";
+const DEMO_GROUPS = "demo/gut-demo.groups.csv";
+const DEMO_STUDY = "PRJEB83730";
+let demoOn = false;
+// Everything the example borrows from the page, handed back when it leaves.
+//
+// The lineage map, because a map from one catalogue names nothing in another —
+// leaving the gut map in place while a soil database is loaded would put gut
+// species names on soil genomes. And the results, because the button sits at the
+// top of the page and stays clickable after a run that took an hour: the example
+// has to be something you can look at and step out of, not something that eats
+// what you came for.
+let preDemo = null;
+// Bumped by anything that ends the example. loadDemo() checks it after every
+// await, so a database load or a run started while its three fetches are in
+// flight is not overwritten by them when they land.
+let demoEpoch = 0;
+
+async function loadDemo() {
+  const btn = document.getElementById("demoLoad");
+  // Only the title line: the button holds an icon and a second line, and writing
+  // over its textContent would flatten both away and never bring them back.
+  const title = btn?.querySelector(".demo-btn-title");
+  const label = title?.textContent;
+  setDisabled(btn, "Loading the example…");
+  if (title) title.textContent = "Loading the example…";
+  const mine = ++demoEpoch;
+  const stale = () => mine !== demoEpoch;
+  try {
+    const bust = `?v=${WORKER_VERSION}`;
+    const grab = async (path) => {
+      const r = await fetch(`./${path}${bust}`);
+      if (!r.ok) throw new Error(`${path} — HTTP ${r.status}`);
+      return r.text();
+    };
+    const [sessionText, groupsText] = await Promise.all([grab(DEMO_SESSION), grab(DEMO_GROUPS)]);
+    if (stale()) return;
+    const st = fromSession(sessionText);
+
+    if (!preDemo) {
+      preDemo = {
+        lineage, taxonomy, ambiguousNames, metaGroups,
+        lastRaw, lastMatrix, openFig, rank: currentRank(),
+      };
+    }
+
+    // The catalogue's lineage map is a 399 kB static file, independent of the
+    // 433 MB database beside it — so the example can offer genus, family and
+    // phylum, which is half of what there is to explore, without downloading
+    // anything of consequence. Awaited rather than read off `catalog`: a visitor
+    // who clicks this in the first second of the page would otherwise find the
+    // rank picker missing, with nothing saying why.
+    await catalogReady;
+    if (stale()) return;
+    const entry = catalog ? biomeByKey(catalog, st.ref?.key) : null;
+    if (entry?.lineage) {
+      try {
+        // No cache-buster: the same URL loadDatabase() uses, so a visitor who
+        // goes on to load the catalogue itself does not fetch this twice.
+        const r = await fetch(`./${entry.lineage}`);
+        if (r.ok) {
+          const map = await r.json();
+          if (stale()) return;
+          taxonomy = normaliseLineage(map);
+          lineage = taxonomy.species;
+          ambiguousNames = sharedNames(lineage);
+        }
+      } catch { /* species level still works: the labels are in the session */ }
+    }
+    if (stale()) return;
+
+    metaGroups = parseMetadata(groupsText);
+    // Before applySession, which paints the step strip: the strip asks demoOn
+    // whether to call this the example, and would otherwise announce it as a
+    // finished run of yours for as long as nothing else refreshed it.
+    demoOn = true;
+    applySession(st);
+    paintDemoBanner(st);
+    // Opened rather than merely offered: the ordination with its groups coloured
+    // is the one view that says in a glance what the example is for, and a tab
+    // nobody clicks shows nothing.
+    drawFigure("pcoa", { toggle: false });
+    els.results.scrollIntoView({ block: "start", behavior: "smooth" });
+  } catch (err) {
+    showError(`Could not load the example: ${err?.message ?? err}. ` +
+      `It ships with the page, so this usually means the files were not deployed.`);
+  } finally {
+    setDisabled(btn, "");
+    if (title && label) title.textContent = label;
+  }
+}
+
+function paintDemoBanner(st) {
+  const el = document.getElementById("demoBanner");
+  if (!el) return;
+  const n = st.sampleOrder.length;
+  // Counted over the samples on screen, not over the file: parseMetadata keeps
+  // the header row as an entry of its own, and every group it names for a sample
+  // this session does not have would be counted here as a subject.
+  const groups = new Set(st.sampleOrder.map((s) => metaGroupOf(s)).filter(Boolean)).size;
+  el.innerHTML =
+    `<div><strong>This is the example, not your data.</strong> ${n} public runs of ` +
+    `<a href="https://www.ebi.ac.uk/ena/browser/view/${DEMO_STUDY}" target="_blank" ` +
+    `rel="noopener noreferrer">${DEMO_STUDY}</a> — human gut metagenomes, one run per ENA ` +
+    `sample${groups ? `, from ${groups} subjects` : ""} — profiled with this page against ` +
+    `${escapeHTML(st.ref?.label ?? "a catalogue")} and saved. The numbers are real measurements, ` +
+    `but nothing was computed on your computer just now: profile the same accessions from the ` +
+    `ENA panel above and they come back.</div>` +
+    `<button type="button" id="demoClear">Clear the example</button>`;
+  el.classList.remove("hide");
+  document.getElementById("demoClear")?.addEventListener("click", () => clearDemo());
+}
+
+// `wipe: false` when something else is about to put its own results on screen —
+// the lineage still has to be handed back, but blanking the table first would
+// make the page flash empty on the way.
+function clearDemo({ wipe = true } = {}) {
+  demoEpoch++;
+  if (!demoOn) return;
+  demoOn = false;
+  const back = preDemo;
+  preDemo = null;
+  document.getElementById("demoBanner")?.classList.add("hide");
+  // Groups and the lineage map go back whatever happens next: the example's
+  // subjects must not colour a later run, and its map must not name a later
+  // catalogue's genomes.
+  if (back) {
+    ({ lineage, taxonomy, ambiguousNames, metaGroups } = back);
+  } else {
+    metaGroups = new Map();
+  }
+  if (!wipe) return;
+
+  // What was on screen before the example, put back — including nothing, which
+  // is the usual case.
+  lastRaw = back?.lastRaw ?? null;
+  lastMatrix = back?.lastMatrix ?? null;
+  const pick = document.getElementById("rankPick");
+  if (pick) pick.value = back?.rank ?? "s";
+  if (lastMatrix) {
+    renderMatrix(viewOf(lastMatrix));
+    els.results.classList.remove("hide");
+    drawFigure(back?.openFig ?? null, { toggle: false });
+  } else {
+    drawFigure(null);
+    els.results.classList.add("hide");
+    const note = document.getElementById("figNote");
+    if (note) note.textContent = "";
+  }
+  refreshSteps();
+}
+
+document.getElementById("demoLoad")?.addEventListener("click", loadDemo);
 
 document.getElementById("figDownload")?.addEventListener("click", () => {
   const svg = document.getElementById("figCanvas")?.innerHTML;

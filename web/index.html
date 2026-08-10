@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>PeekMicrobiome — upload-free, installation-free metagenomic profiling across biomes</title>
   <link rel="icon" type="image/svg+xml" href="./favicon.svg">
-  <link rel="stylesheet" href="./styles.css?v=45">
+  <link rel="stylesheet" href="./styles.css?v=47">
   <script>
     (function () {
       try {
@@ -87,8 +87,26 @@
     </nav>
 
     <div class="page-head">
-      <h1>Easy multi-sample metagenomic profiler</h1>
-      <p class="sub">Drop FASTQs, or paste an ENA accession — each sample is profiled against one MGnify biome catalogue, locally in your browser, and the results are assembled into a relative-abundance matrix. If you do not know the biome, the page can work it out from one sample.</p>
+      <div class="page-head-text">
+        <h1>Easy in-browser multi-sample metagenomic profiler</h1>
+        <p class="sub">Drop FASTQs, or paste an ENA accession — each sample is profiled against one MGnify biome catalogue, locally in your browser, and the results are assembled into a relative-abundance matrix. If you do not know the biome, the page can work it out from one sample.</p>
+      </div>
+      <!-- Everything below costs a 433 MB catalogue and a run before it shows
+           anything at all, which is a long way to walk to find out whether the
+           results are worth walking for. Beside the pitch rather than under it:
+           it is the alternative to reading the pitch, not a footnote to it. -->
+      <button id="demoLoad" class="demo-btn" type="button">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+             stroke-linecap="round" aria-hidden="true">
+          <line x1="6" y1="19" x2="6" y2="12"/>
+          <line x1="12" y1="19" x2="12" y2="5"/>
+          <line x1="18" y1="19" x2="18" y2="15"/>
+        </svg>
+        <span class="demo-btn-text">
+          <span class="demo-btn-title">Explore example results</span>
+          <span class="demo-btn-sub">15 public gut runs, already profiled — nothing to download</span>
+        </span>
+      </button>
     </div>
 
     <div class="privacy-notice" role="note">
@@ -269,6 +287,11 @@
 
     <section id="results" class="card hide">
       <h2><span class="step-num">3</span>Abundance matrix</h2>
+      <!-- Whose numbers these are. A table that appeared without a run looks
+           exactly like a table that came from one, and the only difference that
+           matters — nothing here was computed on your computer — is not visible
+           anywhere else on the page. Filled by multi.js. -->
+      <div class="demo-banner hide" id="demoBanner" role="note" aria-live="polite"></div>
       <!-- The reference these numbers are relative to, on screen, above them.
            Written by renderMatrix() from the database that was actually loaded
            when the run started — not from the picker, which the user may have
@@ -329,7 +352,13 @@
           </label>
           <span class="info" id="figNote"></span>
         </div>
-        <div class="fig-canvas hide" id="figCanvas"></div>
+        <!-- The plot and, once a PCoA point is clicked, what that one sample is
+             made of. Side by side when the window allows it, because the point
+             is to read the pie against the position of the point. -->
+        <div class="fig-row">
+          <div class="fig-canvas hide" id="figCanvas"></div>
+          <div class="fig-detail hide" id="figDetail" aria-live="polite"></div>
+        </div>
       </div>
 
       <div class="matrixWrap">
@@ -445,7 +474,12 @@
     <span class="credit">Created using Claude Opus 5, prompted by G. Gautreau — <a href="https://maiage.inrae.fr/">MaIAGE unit (UR 1404, Mathématiques et Informatique Appliquées du Génome à l'Environnement)</a>, INRAE.</span>
   </footer>
 
-  <script type="module" src="./theme.js?v=45"></script>
-  <script type="module" src="./multi.js?v=45"></script>
+  <!-- Follows the pointer over the ordination. A direct child of <body>: it is
+       position: fixed, and a transformed ancestor anywhere above it would make
+       it fixed relative to that ancestor instead of to the window. -->
+  <div class="fig-tip hide" id="figTip" role="status" aria-live="polite"></div>
+
+  <script type="module" src="./theme.js?v=47"></script>
+  <script type="module" src="./multi.js?v=47"></script>
 </body>
 </html>
