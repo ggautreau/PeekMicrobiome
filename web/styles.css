@@ -1106,8 +1106,6 @@ details[open] > .ena-summary::before { transform: rotate(90deg); }
   background: var(--bg-card);
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
-  /* A 900px figure must not widen the page on a narrow screen. */
-  overflow-x: auto;
 }
 .fig-canvas svg { display: block; max-width: 100%; height: auto; }
 
@@ -1120,10 +1118,20 @@ details[open] > .ena-summary::before { transform: rotate(90deg); }
    multi.js adds .fig-row-stacked when the open figure is too wide to be a half.
 */
 .fig-row { display: flex; flex-wrap: wrap; align-items: stretch; gap: 0.7rem; }
-/* Two halves, always — the figure is drawn to fit whichever width this gives it,
-   so it never changes size when a sample is opened beside it. min-width is what
-   makes them stack on a narrow window instead of squeezing to nothing. */
-.fig-canvas, .fig-detail { flex: 1 1 0; min-width: min(22rem, 100%); }
+/* Two cards of ONE size: the same for the ordination, the composition and the
+   diversity chart, and the same left and right — a fixed box, not one that
+   follows its content. Following the content is what made the plot resize when
+   a sample was opened beside it, and what left a band of empty card under the
+   short figures. The figure is drawn to fit this; anything that cannot fit
+   scrolls inside it, which is a box that stays put rather than a page that
+   jumps. min-width is what makes the pair stack on a narrow window instead of
+   squeezing to nothing. */
+.fig-canvas, .fig-detail {
+  flex: 1 1 0;
+  min-width: min(22rem, 100%);
+  height: clamp(24rem, 58vh, 38rem);
+  overflow: auto;
+}
 /* min-width: 0 — without it a flex item refuses to shrink below the intrinsic
    width of its content, and a 620px figure would push the row off the page. */
 
@@ -1134,7 +1142,6 @@ details[open] > .ena-summary::before { transform: rotate(90deg); }
   background: var(--bg-card);
   border: 1px solid var(--accent);
   border-radius: var(--radius-md);
-  overflow-x: auto;
 }
 .fig-detail-head {
   display: flex;

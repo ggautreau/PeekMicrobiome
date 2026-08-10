@@ -2731,6 +2731,10 @@ function drawFigure(kind, { toggle = true } = {}) {
     return;
   }
   const view = viewOf(lastMatrix);
+  // A sample that no longer exists cannot stay open — a session reloaded, a run
+  // restarted. Checked before the panel is painted, since the panel is what the
+  // figure is measured against.
+  if (pickedSample && !view.samples.includes(pickedSample)) closePie();
   // The card is sized by the stylesheet — half the row, always, whether a sample
   // is open or not — and the figure is then drawn to fit it exactly. Both halves
   // of that matter:
@@ -2740,14 +2744,18 @@ function drawFigure(kind, { toggle = true } = {}) {
   //     pointer that clicked it. The panel was appearing and taking 600 px off
   //     the figure at the exact moment the figure was being used.
   canvas.classList.remove("hide");
-  // Put the panel in place BEFORE measuring: it is what makes the card a half,
-  // and measuring without it would draw every figure at full width and then
-  // shrink it as soon as the panel arrived.
-  if (!pickedSample) showDetailPrompt();
-  const room = Math.max(320, Math.floor(canvas.clientWidth - 20));
-  const svg = kind === "composition" ? compositionSvg(view, { width: room })
-    : kind === "alpha" ? alphaSvg(view, { width: room })
-    : pcoaSvg(view, { width: room, groupOf: metaGroupOf });
+  // Measure an EMPTY card. The panel beside it is what the row is sized by —
+  // both cards stretch to it — so with the old figure cleared out, the card's
+  // own box is exactly the room the new one has, in both directions. Drawn to
+  // that, every figure is the same size as every other and the same size as the
+  // panel, instead of leaving a band of empty card under a short one.
+  canvas.innerHTML = "";
+  if (pickedSample) showPie(view, pickedSample); else showDetailPrompt();
+  const w = Math.max(320, Math.floor(canvas.clientWidth - 20));
+  const h = Math.max(300, Math.floor(canvas.clientHeight - 20));
+  const svg = kind === "composition" ? compositionSvg(view, { width: w, height: h })
+    : kind === "alpha" ? alphaSvg(view, { width: w, height: h })
+    : pcoaSvg(view, { width: w, height: h, groupOf: metaGroupOf });
   canvas.innerHTML = svg;
   dl?.classList.remove("hide");
   openFig = kind;
@@ -2847,10 +2855,6 @@ function topTaxonOf(view, name) {
 function wireFigure(canvas, view) {
   const svg = canvas.querySelector("svg");
   if (!svg) return;
-  // A sample can vanish between two draws — a session reloaded, a rank change
-  // that renames nothing but a run restarted. Drop the selection rather than
-  // keep highlighting a point that is no longer there.
-  if (pickedSample && !view.samples.includes(pickedSample)) closePie();
   hoverSample = null;
 
   // `e` may be a real pointer event or a point element — focus has no
@@ -2934,7 +2938,6 @@ function wireFigure(canvas, view) {
   });
 
   repaintPoints(svg);
-  if (pickedSample) showPie(view, pickedSample);
 }
 
 function closePie() {
@@ -3098,6 +3101,10 @@ document.getElementById("exportAs")?.addEventListener("change", (e) => {
   if (!kind || !lastMatrix) return;
   const slug = refSlug(lastMatrix.ref);
   const view = viewOf(lastMatrix);
+  // A sample that no longer exists cannot stay open — a session reloaded, a run
+  // restarted. Checked before the panel is painted, since the panel is what the
+  // figure is measured against.
+  if (pickedSample && !view.samples.includes(pickedSample)) closePie();
   if (kind === "sylph") {
     // Straight from what sylph wrote, so every column survives — including the
     // ones this page never reads.

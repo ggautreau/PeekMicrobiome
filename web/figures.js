@@ -227,7 +227,7 @@ const svgOpen = (w, h, title, font = 11) =>
  * reach 100%, and a bar that stops at 60% with no explanation reads as missing
  * data rather than as a legend cut.
  */
-export function compositionSvg(table, { topN = 10, width = 900, barH = 26 } = {}) {
+export function compositionSvg(table, { topN = 10, width = 900, barH = 0, height = 0 } = {}) {
   const { samples, rows } = table;
   const totals = rows.map((r, i) => ({ i, sum: r.values.reduce((a, v) => a + v, 0) }));
   totals.sort((a, b) => b.sum - a.sum);
@@ -240,11 +240,20 @@ export function compositionSvg(table, { topN = 10, width = 900, barH = 26 } = {}
   // drawn 583 px wide printed its species names over one another.
   const legendCols = Math.max(1, Math.floor(plotW / 190));
   const legendH = 18 * Math.ceil((keep.length + 1) / legendCols) + 14;
-  const height = padT + samples.length * (barH + gap) + legendH + 10;
-  let out = svgOpen(width, height, "Composition per sample");
+  // `height` is the room the page has for this figure. The bars are sized to
+  // fill it rather than to a fixed 26 px, so the drawing is the size of the card
+  // it sits in instead of leaving a band of empty card under it. Clamped: a run
+  // of three samples must not get bars as tall as a hand, and a run of eighty
+  // must not get bars too thin to hover.
+  const room = height ? height - padT - legendH - 10 : 0;
+  const bar = barH || (room
+    ? Math.max(10, Math.min(46, room / samples.length - gap))
+    : 26);
+  const h = padT + samples.length * (bar + gap) + legendH + 10;
+  let out = svgOpen(width, h, "Composition per sample");
 
   samples.forEach((name, c) => {
-    const y = padT + c * (barH + gap);
+    const y = padT + c * (bar + gap);
     const total = rows.reduce((a, r) => a + (r.values[c] || 0), 0) || 1;
     let x = padL;
     // A row is a sample you can open, and the whole strip — name included — is
@@ -252,14 +261,14 @@ export function compositionSvg(table, { topN = 10, width = 900, barH = 26 } = {}
     // is what makes the gaps between segments part of the row rather than holes
     // in it, and what the page tints on hover.
     out += `<g class="sample-row" data-sample="${esc(name)}">` +
-      `<rect class="row-hit" x="0" y="${y - 2}" width="${width}" height="${barH + 4}" ` +
+      `<rect class="row-hit" x="0" y="${y - 2}" width="${width}" height="${bar + 4}" ` +
       `fill="#275662" fill-opacity="0"/>` +
-      `<text x="${padL - 8}" y="${y + barH / 2 + 4}" text-anchor="end" fill="#275662">${esc(name)}</text>`;
+      `<text x="${padL - 8}" y="${y + bar / 2 + 4}" text-anchor="end" fill="#275662">${esc(name)}</text>`;
     keep.forEach((ri, k) => {
       const frac = (rows[ri].values[c] || 0) / total;
       const w = frac * plotW;
       if (w > 0.2) {
-        out += `<rect x="${x.toFixed(1)}" y="${y}" width="${w.toFixed(1)}" height="${barH}" ` +
+        out += `<rect x="${x.toFixed(1)}" y="${y}" width="${w.toFixed(1)}" height="${bar}" ` +
           `fill="${PALETTE[k % PALETTE.length]}"><title>${esc(rows[ri].species)} — ${(frac * 100).toFixed(1)}%</title></rect>`;
       }
       x += w;
@@ -267,13 +276,13 @@ export function compositionSvg(table, { topN = 10, width = 900, barH = 26 } = {}
     const rest = padL + plotW - x;
     if (rest > 0.2) {
       const restFrac = rest / plotW;
-      out += `<rect x="${x.toFixed(1)}" y="${y}" width="${rest.toFixed(1)}" height="${barH}" ` +
+      out += `<rect x="${x.toFixed(1)}" y="${y}" width="${rest.toFixed(1)}" height="${bar}" ` +
         `fill="${GREY}"><title>other taxa — ${(restFrac * 100).toFixed(1)}%</title></rect>`;
     }
     out += "</g>";
   });
 
-  let ly = padT + samples.length * (barH + gap) + 12;
+  let ly = padT + samples.length * (bar + gap) + 12;
   [...keep.map((ri, k) => [rows[ri].species, PALETTE[k % PALETTE.length]]), ["other taxa", GREY]]
     .forEach(([label, colour], k) => {
       const col = k % legendCols, row = Math.floor(k / legendCols);
@@ -290,7 +299,7 @@ export function compositionSvg(table, { topN = 10, width = 900, barH = 26 } = {}
 }
 
 /** Shannon (as effective taxa) and observed richness, one row per sample. */
-export function alphaSvg(table, { width = 760, rowH = 22 } = {}) {
+export function alphaSvg(table, { width = 760, rowH = 0, height = 0 } = {}) {
   const a = alphaDiversity(table);
   // padR holds the value written past the end of the longest bar. Measured from
   // the longest label there actually is, at ~6.4 px a character: fixed at 60 it
@@ -300,21 +309,26 @@ export function alphaSvg(table, { width = 760, rowH = 22 } = {}) {
     `${d.effective.toFixed(1)} (${d.richness} obs.)`.length));
   const padL = 150, padT = 30, padR = Math.ceil(longest * 6.4) + 12;
   const plotW = width - padL - padR;
-  const height = padT + a.length * rowH + 34;
+  // Same as the composition: the rows fill the height the page has for them.
+  const row = rowH || (height
+    ? Math.max(14, Math.min(40, (height - padT - 34) / a.length))
+    : 22);
+  const h = padT + a.length * row + 34;
   const maxEff = Math.max(1, ...a.map((d) => d.effective));
-  let out = svgOpen(width, height, "Alpha diversity per sample");
+  let out = svgOpen(width, h, "Alpha diversity per sample");
   out += `<text x="${padL}" y="16" fill="#275662" font-weight="600">Effective number of taxa (e^Shannon)</text>`;
   a.forEach((d, i) => {
-    const y = padT + i * rowH;
+    const y = padT + i * row;
     const w = (d.effective / maxEff) * plotW;
     out += `<g class="sample-row" data-sample="${esc(d.sample)}">` +
-      `<rect class="row-hit" x="0" y="${y}" width="${width}" height="${rowH - 2}" ` +
+      `<rect class="row-hit" x="0" y="${y}" width="${width}" height="${row - 2}" ` +
       `fill="#275662" fill-opacity="0"/>` +
-      `<text x="${padL - 8}" y="${y + 12}" text-anchor="end" fill="#275662">${esc(d.sample)}</text>` +
-      `<rect x="${padL}" y="${y + 3}" width="${w.toFixed(1)}" height="13" fill="#00a3a6">` +
+      `<text x="${padL - 8}" y="${(y + row / 2 + 4).toFixed(1)}" text-anchor="end" fill="#275662">${esc(d.sample)}</text>` +
+      `<rect x="${padL}" y="${(y + row / 2 - 6.5).toFixed(1)}" width="${w.toFixed(1)}" ` +
+      `height="13" fill="#00a3a6">` +
       `<title>${esc(d.sample)}: ${d.effective.toFixed(1)} effective taxa, ` +
       `Shannon ${d.shannon.toFixed(2)}, ${d.richness} observed</title></rect>` +
-      `<text x="${padL + w + 6}" y="${y + 14}" fill="#5a5550">${d.effective.toFixed(1)} ` +
+      `<text x="${padL + w + 6}" y="${(y + row / 2 + 4).toFixed(1)}" fill="#5a5550">${d.effective.toFixed(1)} ` +
       `<tspan fill="#6b7172">(${d.richness} obs.)</tspan></text></g>`;
   });
   return out + "</svg>";
