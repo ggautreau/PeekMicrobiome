@@ -1217,6 +1217,27 @@ details[open] > .ena-summary::before { transform: rotate(90deg); }
   color: var(--ink);
 }
 .pie-near-head .info { font-weight: 400; font-size: 0.74rem; cursor: help; }
+/* Which distance the list is sorted by. Two buttons rather than a dropdown: the
+   point is to flip between them and watch the order change. */
+.pie-metric { display: flex; gap: 0.15rem; cursor: help; }
+.pie-metric button {
+  padding: 0.12rem 0.45rem;
+  font: inherit;
+  font-size: 0.72rem;
+  font-weight: 400;
+  color: var(--ink-muted);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.pie-metric button:hover { color: var(--accent-ink); border-color: var(--border); }
+.pie-metric button.is-on {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: var(--accent-ink);
+  font-weight: 600;
+}
 .pie-near-row {
   display: flex;
   align-items: center;

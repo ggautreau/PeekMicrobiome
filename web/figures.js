@@ -84,7 +84,22 @@ export function alphaDiversity(table) {
  * Pure arithmetic over the table already in memory: O(samples x rows), one
  * column against the rest, rather than the whole matrix for one answer.
  */
-export function sampleFacts(table, sample, { neighbours = 4 } = {}) {
+export const METRICS = {
+  // Both over every row of the matrix, both on the abundances as they are.
+  //
+  // Bray-Curtis asks what share of the two profiles is NOT shared: 0 is the same
+  // profile, 1 shares nothing. It is bounded, it ignores taxa absent from both,
+  // and it is what the ordination is computed from.
+  //
+  // Euclidean is the straight-line distance between the two abundance vectors.
+  // It is dominated by the few most abundant taxa — a sample differing by 30
+  // points of Prevotella outweighs a hundred rare species — and its ceiling for
+  // percentages is sqrt(2) x 100.
+  bray: { label: "Bray-Curtis", max: 1, digits: 3 },
+  euclid: { label: "Euclidean", max: Math.SQRT2 * 100, digits: 1 },
+};
+
+export function sampleFacts(table, sample, { neighbours = 4, metric = "bray" } = {}) {
   const c = typeof sample === "number" ? sample : table.samples.indexOf(sample);
   if (c < 0 || table.samples[c] === undefined) return null;
 
@@ -94,17 +109,25 @@ export function sampleFacts(table, sample, { neighbours = 4 } = {}) {
   // two identical samples cannot be 6th and 7th.
   const rank = alpha.filter((a) => a.effective > mine.effective).length + 1;
 
+  const how = METRICS[metric] ? metric : "bray";
   const col = (j) => table.rows.map((r) => r.values[j] || 0);
   const self = col(c);
   const near = table.samples.map((name, j) => {
     if (j === c) return null;
     const other = col(j);
-    let sumMin = 0, sumAll = 0;
+    let sumMin = 0, sumAll = 0, sq = 0;
     for (let k = 0; k < self.length; k++) {
       sumMin += Math.min(self[k], other[k]);
       sumAll += self[k] + other[k];
+      const d = self[k] - other[k];
+      sq += d * d;
     }
-    return { sample: name, distance: sumAll === 0 ? 0 : 1 - (2 * sumMin) / sumAll };
+    return {
+      sample: name,
+      distance: how === "euclid"
+        ? Math.sqrt(sq)
+        : (sumAll === 0 ? 0 : 1 - (2 * sumMin) / sumAll),
+    };
   }).filter(Boolean).sort((a, b) => a.distance - b.distance).slice(0, neighbours);
 
   return {
@@ -114,6 +137,7 @@ export function sampleFacts(table, sample, { neighbours = 4 } = {}) {
     effective: mine.effective,
     rank,
     of: table.samples.length,
+    metric: how,
     nearest: near,
   };
 }
@@ -135,6 +159,44 @@ export function distanceMatrix(table) {
     }
   }
   return D;
+}
+
+/**
+ * Every eigenvalue of a symmetric matrix, by cyclic Jacobi rotations.
+ *
+ * Values only, no vectors: this exists to answer "how much of the variation is
+ * the plot NOT showing", which needs the whole spectrum and none of the
+ * directions. O(n^3) in the number of SAMPLES — a few million operations for a
+ * run of eighty-five, and the ordination is drawn on demand.
+ */
+export function eigenvaluesSym(M, { sweeps = 24, tol = 1e-10 } = {}) {
+  const n = M.length;
+  const a = Array.from({ length: n }, (_, i) => Float64Array.from(M[i]));
+  for (let sweep = 0; sweep < sweeps; sweep++) {
+    let off = 0;
+    for (let i = 0; i < n; i++) for (let j = i + 1; j < n; j++) off += a[i][j] * a[i][j];
+    if (off <= tol) break;
+    for (let p = 0; p < n; p++) {
+      for (let q = p + 1; q < n; q++) {
+        if (Math.abs(a[p][q]) < 1e-14) continue;
+        // The rotation that zeroes a[p][q], from the standard stable formula.
+        const theta = (a[q][q] - a[p][p]) / (2 * a[p][q]);
+        const t = Math.sign(theta || 1) / (Math.abs(theta) + Math.sqrt(theta * theta + 1));
+        const c = 1 / Math.sqrt(t * t + 1), s2 = t * c;
+        for (let k = 0; k < n; k++) {
+          const akp = a[k][p], akq = a[k][q];
+          a[k][p] = c * akp - s2 * akq;
+          a[k][q] = s2 * akp + c * akq;
+        }
+        for (let k = 0; k < n; k++) {
+          const apk = a[p][k], aqk = a[q][k];
+          a[p][k] = c * apk - s2 * aqk;
+          a[q][k] = s2 * apk + c * aqk;
+        }
+      }
+    }
+  }
+  return Array.from({ length: n }, (_, i) => a[i][i]).sort((x, y) => y - x);
 }
 
 /**
@@ -172,34 +234,60 @@ export function pcoa(D, { dims = 2, iters = 200 } = {}) {
     return out;
   };
 
+  // Deflate a vector against the axes already taken, in place.
+  const orth = (w) => {
+    for (let k = 0; k < vecs.length; k++) {
+      let dot = 0;
+      for (let i = 0; i < n; i++) dot += w[i] * vecs[k][i];
+      for (let i = 0; i < n; i++) w[i] -= dot * vecs[k][i];
+    }
+    return Math.hypot(...w);
+  };
+
   const vecs = [], vals = [];
   for (let d = 0; d < dims; d++) {
-    // A fixed start, not a random one: the same matrix must give the same plot
-    // twice, and a sign flip between redraws reads as the points moving.
-    let v = Float64Array.from({ length: n }, (_, i) => Math.sin(i + 1 + d));
-    let lambda = 0;
-    for (let it = 0; it < iters; it++) {
-      let w = mul(v);
-      // Deflate against the axes already taken, so this one is orthogonal.
-      for (let k = 0; k < vecs.length; k++) {
-        let dot = 0;
-        for (let i = 0; i < n; i++) dot += w[i] * vecs[k][i];
-        for (let i = 0; i < n; i++) w[i] -= dot * vecs[k][i];
+    let v = null, lambda = 0;
+    // Fixed starts, not random ones: the same matrix must give the same plot
+    // twice, and a sign flip between redraws reads as the points moving. Several
+    // of them, because ONE fixed start is a trap — where an eigenvalue is
+    // repeated, the iteration converges to the projection of its start vector
+    // onto that eigenspace, and if the next start projects onto the same
+    // direction, deflation leaves nothing and the axis collapses to zero. Eight
+    // points at the corners of a cube did exactly that: three equal eigenvalues,
+    // PCo2 reported as 0, every sample drawn on one horizontal line.
+    for (let k = 0; k < 4 && !(lambda > 1e-9); k++) {
+      let u = Float64Array.from({ length: n },
+        (_, i) => Math.sin((i + 1) * (1 + 0.37 * k) + 1 + d + 2.1 * k));
+      // The START is orthogonalised, so the iteration begins inside the subspace
+      // that is left rather than being pulled back out of it every step.
+      if (!(orth(u) > 1e-12)) continue;
+      let norm = Math.hypot(...u);
+      for (let i = 0; i < n; i++) u[i] /= norm;
+      for (let it = 0; it < iters; it++) {
+        const w = mul(u);
+        norm = orth(w);
+        if (!(norm > 1e-12)) { lambda = 0; break; }
+        for (let i = 0; i < n; i++) w[i] /= norm;
+        lambda = norm;
+        u = w;
       }
-      let norm = Math.hypot(...w);
-      if (!(norm > 1e-12)) { w = new Float64Array(n); norm = 0; break; }
-      for (let i = 0; i < n; i++) w[i] /= norm;
-      lambda = norm;
-      v = w;
+      v = u;
     }
-    vecs.push(v);
+    vecs.push(v ?? new Float64Array(n));
     vals.push(lambda);
   }
 
   // Only positive eigenvalues carry variance that a plane can show; Bray-Curtis
   // routinely produces negative ones and calling their total "100%" would be a
   // lie in the axis label.
-  const posTotal = vals.filter((x) => x > 0).reduce((a, x) => a + x, 0) || 1;
+  //
+  // The total is taken over the WHOLE spectrum, not over the axes that happen to
+  // have been computed. Summed over `vals` — two numbers — the two fractions
+  // added up to 100% whatever the data, so the plot claimed to show all of the
+  // variation every time; asking for four axes changed the first two from
+  // 53%/47% to 43%/37% on the same plot. What is lost in the projection is
+  // exactly what these labels exist to report.
+  const posTotal = eigenvaluesSym(A).filter((x) => x > 0).reduce((a, x) => a + x, 0) || 1;
   const scale = vals.map((l) => Math.sqrt(Math.max(0, l)));
   return {
     points: Array.from({ length: n }, (_, i) => ({

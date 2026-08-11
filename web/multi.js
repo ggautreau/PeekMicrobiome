@@ -12,22 +12,22 @@ import {
   sylphWorkerRpc, detectMemory64, chooseWasmBits, WORKER_VERSION,
   readsBudget, readsBudgetNote, readsOverBudgetNote, loadedBuildNote, fmtReads,
   progressFraction, basesForReads, BUDGET_READ_BP,
-} from "./sylph-worker-rpc.js?v=48";
+} from "./sylph-worker-rpc.js?v=49";
 import {
   dbCacheClient, fmtRate, fmtEta, cacheSummary, assertSameDatabase,
-} from "./db-cache.js?v=48";
-import { matePattern, stripFastqExt } from "./sample-naming.js?v=48";
+} from "./db-cache.js?v=49";
+import { matePattern, stripFastqExt } from "./sample-naming.js?v=49";
 import {
   resolveAccession, validateAccession, ASSUMED_BPS,
   downloadEstimate, readCountVerdict, expectedProfiledReads,
-} from "./ena.js?v=48";
-import { normaliseMarkers, screenVerdict, SCREENING_DB, SCREENING_MARKERS } from "./screening.js?v=48";
-import { clusterTable, MAX_ROWS as CLUSTER_MAX_ROWS } from "./cluster.js?v=48";
-import { compositionSvg, alphaSvg, pcoaSvg, pieSvg, sampleFacts, alphaDiversity }
-  from "./figures.js?v=48";
-import { toMetaphlan, toBiom, toSylphTsv, toSession, fromSession } from "./exports.js?v=48";
+} from "./ena.js?v=49";
+import { normaliseMarkers, screenVerdict, SCREENING_DB, SCREENING_MARKERS } from "./screening.js?v=49";
+import { clusterTable, MAX_ROWS as CLUSTER_MAX_ROWS } from "./cluster.js?v=49";
+import { compositionSvg, alphaSvg, pcoaSvg, pieSvg, sampleFacts, METRICS, alphaDiversity }
+  from "./figures.js?v=49";
+import { toMetaphlan, toBiom, toSylphTsv, toSession, fromSession } from "./exports.js?v=49";
 import { currentMode as themeMode, setMode as setThemeMode, applyTheme,
-  loadSchedule, saveSchedule } from "./theme.js?v=48";
+  loadSchedule, saveSchedule } from "./theme.js?v=49";
 import {
   fetchCatalog, fallbackCatalog, renderDbSelect, biomeForUrl, biomeNote,
   mgnifyGenomeUrl,
@@ -35,7 +35,7 @@ import {
   makeDbRef, sameDbRef, refLine, refShort, refCommentLines, refSlug, genomeCountMismatch,
   rememberBiome, recallBiome, catalogueName, LOCAL_VALUE,
   selectionMatchesLoaded, notLoadedNote, refMetaMismatch,
-} from "./biomes.js?v=48";
+} from "./biomes.js?v=49";
 
 const $ = (id) => document.getElementById(id);
 const els = {
@@ -2998,6 +2998,12 @@ function showPie(view, name) {
     const svg = panel.querySelector(".fig-detail-body")?.innerHTML;
     if (svg) saveBlob(svg, "image/svg+xml", `composition_${sampleSlug(name)}.svg`);
   });
+  for (const b of panel.querySelectorAll("[data-metric]")) {
+    b.addEventListener("click", () => {
+      neighbourMetric = b.dataset.metric;
+      showPie(view, name);
+    });
+  }
   // A neighbour is a sample: opening it is the same thing as clicking its point.
   for (const b of panel.querySelectorAll("[data-jump]")) {
     b.addEventListener("click", () => {
@@ -3011,8 +3017,13 @@ function showPie(view, name) {
 // The rest of the panel, and the reason the panel is as tall as the plot beside
 // it: composition alone leaves the two questions a point raises unanswered — how
 // much is in there, and what is it actually near.
+// Which distance the neighbour list is sorted by. Kept across samples and
+// redraws: someone who has decided they want Euclidean has decided it for the
+// session, not for one click.
+let neighbourMetric = "bray";
+
 function factsHtml(view, name) {
-  const f = sampleFacts(view, name);
+  const f = sampleFacts(view, name, { metric: neighbourMetric });
   if (!f) return "";
   const stat = (v, label, title) =>
     `<div class="pie-stat" title="${escapeHTML(title)}"><b>${v}</b><span>${label}</span></div>`;
@@ -3029,18 +3040,29 @@ function factsHtml(view, name) {
   if (f.nearest.length) {
     // The distances are the FULL ones. The ordination is a projection of them
     // onto two axes and says so in its own labels; these are what it projects.
+    const m = METRICS[f.metric];
     out += `<div class="pie-near"><div class="pie-near-head">Closest samples` +
-      `<span class="info" title="Bray-Curtis distance over all ${view.rows.length} rows — ` +
-      `the real distance, not the two-dimensional shadow of it the ordination draws. ` +
-      `0 is an identical profile, 1 shares nothing.">Bray-Curtis, all rows</span></div>`;
+      `<label class="pie-metric" title="Computed over all ${view.rows.length} rows of the ` +
+      `matrix — the real distance, not the two-dimensional shadow of it the ordination ` +
+      `draws. Bray-Curtis is the share of the two profiles that is not shared, 0 to 1, and ` +
+      `is what the ordination itself is computed from. Euclidean is the straight-line ` +
+      `distance between the two abundance vectors, which the most abundant taxa dominate.">` +
+      Object.entries(METRICS).map(([key, meta]) =>
+        `<button type="button" data-metric="${key}"` +
+        `${key === f.metric ? ' class="is-on"' : ""}>${escapeHTML(meta.label)}</button>`).join("") +
+      `</label></div>`;
     for (const n of f.nearest) {
       const g = metaGroupOf(n.sample);
       out += `<button type="button" class="pie-near-row" data-jump="${escapeHTML(n.sample)}" ` +
         `title="Open ${escapeHTML(n.sample)}">` +
         `<span class="pie-near-name">${escapeHTML(n.sample)}` +
         (g ? `<span class="pie-near-group">${escapeHTML(g)}</span>` : "") + `</span>` +
-        `<span class="pie-near-bar"><i style="width:${(n.distance * 100).toFixed(1)}%"></i></span>` +
-        `<span class="pie-near-d">${n.distance.toFixed(3)}</span></button>`;
+        // Against the metric's own ceiling, not against the nearest neighbour:
+        // a sample whose closest relative is far away must not look as close as
+        // one with a twin.
+        `<span class="pie-near-bar"><i style="width:${
+          Math.min(100, (n.distance / m.max) * 100).toFixed(1)}%"></i></span>` +
+        `<span class="pie-near-d">${n.distance.toFixed(m.digits)}</span></button>`;
     }
     out += `</div>`;
   }

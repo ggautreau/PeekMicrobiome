@@ -1244,7 +1244,7 @@ console.log("== the export formats other tools read ==");
 console.log("== the figures compute what they claim to ==");
 {
   const { alphaDiversity, distanceMatrix, pcoa, compositionSvg, alphaSvg, pcoaSvg, pieSvg,
-    sampleFacts } =
+    sampleFacts, eigenvaluesSym } =
     await import("./figures.js");
 
   // Shannon has known values: n equally-abundant taxa give exactly ln(n), and
@@ -1384,6 +1384,60 @@ console.log("== the figures compute what they claim to ==");
     `A=${sampleFacts(facts, "A").rank} B=${sampleFacts(facts, "B").rank} D=${sampleFacts(facts, "D").rank}`);
   check("...and an unknown sample gives null rather than a table of zeros",
     sampleFacts(facts, "nobody") === null);
+
+  // The list can be sorted by either distance, and they are not the same order:
+  // Bray-Curtis asks what share is not shared, Euclidean is dominated by the
+  // most abundant taxa. Both over every row; neither comes from the ordination.
+  const twoWays = {
+    samples: ["me", "same-shape", "one-big-difference"],
+    rows: [
+      { species: "dominant", values: [50, 25, 80] },
+      { species: "rest", values: [50, 75, 20] },
+    ],
+  };
+  const byBray = sampleFacts(twoWays, "me", { metric: "bray" }).nearest;
+  const byEuclid = sampleFacts(twoWays, "me", { metric: "euclid" }).nearest;
+  check("the neighbour list is sorted by the distance asked for",
+    byBray.every((n, i, a) => i === 0 || a[i - 1].distance <= n.distance) &&
+    byEuclid.every((n, i, a) => i === 0 || a[i - 1].distance <= n.distance));
+  // 25/75 against 50/50 is 25 points of Bray-Curtis and sqrt(2)*25 of Euclidean;
+  // 80/20 is 30 and sqrt(2)*30. Same order here, different numbers — the check
+  // that matters is that the numbers are the metric asked for, not that they
+  // disagree.
+  check("...and Bray-Curtis is bounded by 1 where Euclidean is not",
+    byBray.every((n) => n.distance <= 1) && byEuclid.some((n) => n.distance > 1),
+    `${byBray[0].distance.toFixed(3)} vs ${byEuclid[0].distance.toFixed(2)}`);
+  check("...and an unknown metric falls back to Bray-Curtis rather than to nothing",
+    JSON.stringify(sampleFacts(twoWays, "me", { metric: "nope" }).nearest) ===
+    JSON.stringify(byBray));
+
+  // What the ordination's axis labels claim. Summed over the two axes that were
+  // computed, the two fractions added to 100% whatever the data — the plot said
+  // it was showing all of the variation every time. Eight points at the corners
+  // of a cube are the case that catches both halves of it: three equal
+  // eigenvalues, so two axes can only ever show two thirds of it, and a repeated
+  // eigenvalue is also what used to collapse PCo2 to zero.
+  const at = (P) => P.map((a) => P.map((b) => Math.hypot(...a.map((v, i) => v - b[i]))));
+  const cube = [[0, 0, 0], [1, 0, 0], [0, 1, 0], [0, 0, 1],
+                [1, 1, 0], [1, 0, 1], [0, 1, 1], [1, 1, 1]];
+  const pc = pcoa(at(cube));
+  check("a plot of a three-dimensional cube says it is showing two thirds of it",
+    Math.abs(pc.explained[0] - 1 / 3) < 0.01 && Math.abs(pc.explained[1] - 1 / 3) < 0.01,
+    pc.explained.map((x) => (x * 100).toFixed(1)).join(" / "));
+  check("...and neither axis of it is flat",
+    pc.points.filter((p) => Math.abs(p.y) > 1e-9).length === cube.length);
+  // A configuration that IS flat is the other side of the same claim.
+  const flat = [[0, 0], [1, 0], [0, 1], [2, 2], [3, 1], [1, 3]];
+  const pf = pcoa(at(flat));
+  check("...while a plot of a flat one says it is showing all of it",
+    Math.abs(pf.explained[0] + pf.explained[1] - 1) < 1e-6,
+    pf.explained.map((x) => (x * 100).toFixed(1)).join(" + "));
+
+  // The spectrum the fractions are taken over, checked against a matrix whose
+  // eigenvalues are known by hand: diag(3,1) rotated 45 degrees.
+  const known = eigenvaluesSym([[2, 1], [1, 2]]);
+  check("eigenvaluesSym recovers eigenvalues that are known by hand",
+    Math.abs(known[0] - 3) < 1e-9 && Math.abs(known[1] - 1) < 1e-9, JSON.stringify(known));
 
   // The pie is one sample out of the table, so the wrong column is the failure
   // that would look right — every number plausible, none of them this sample's.

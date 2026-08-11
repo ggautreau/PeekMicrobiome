@@ -151,7 +151,13 @@
 // pie, the sample's diversity and the samples it is really nearest. A page on
 // v47 pairs the new markup with a stylesheet that does not tint a hovered row
 // and does not lay out the panel's stat tiles.
-export const WORKER_VERSION = "48";
+// v49: the ordination's axis labels are true. The fractions were taken over the
+// two axes that had been computed, so they added to 100% whatever the data — the
+// example's plot claimed to show all of the variation and shows 41% of it. They
+// are taken over the whole spectrum now (a Jacobi eigenvalue pass), and a
+// repeated eigenvalue no longer collapses PCo2 to zero. The neighbour list can
+// also be sorted by Euclidean distance; the stylesheet carries its switch.
+export const WORKER_VERSION = "49";
 
 // ---- memory64 capability probe ----------------------------------------------
 
