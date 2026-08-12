@@ -163,15 +163,35 @@ const LABELS = [
  * here: they are the same for 90-100% of the samples of a study, so they belong
  * in one line above the table rather than repeated down every sample.
  */
-export function metaLines(raw) {
+export function metaLines(raw, { except = null } = {}) {
   const m = usableMeta(raw);
   if (Number.isFinite(m.lat)) {
     m.coords = `${m.lat.toFixed(3)}, ${m.lon.toFixed(3)}`;
   }
   return LABELS
     .filter(([k]) => m[k] !== undefined && m[k] !== "")
+    // `except` is what the line above the table already says. The two must not
+    // repeat each other: "Singapore" printed once over the run and again on
+    // every sample of it is the same word eighteen times, and it costs the panel
+    // two lines that the pie beside it needs.
+    .filter(([k]) => !except?.has(k))
     .map(([k, label]) => ({ key: k, label, value: String(m[k]) }));
 }
+
+// The fields that go ABOVE the table when every sample agrees on them, in
+// reading order. Deliberately not sample_alias, sample_accession or
+// collection_date: those are what tells one sample from another, and a run where
+// they were constant would be a run of one sample repeated.
+const RUN_LEVEL = [
+  ["scientific_name", "biome"],
+  ["study_title", "study"],
+  ["study_accession", ""],
+  ["host_scientific_name", "host"],
+  ["instrument_model", "sequenced on"],
+  ["library_selection", "selection"],
+  ["country", "in"],
+  ["coords", "at"],
+];
 
 /**
  * What a whole run shares, for the line above the table.
@@ -183,14 +203,14 @@ export function metaLines(raw) {
  */
 export function runFacts(store, samples) {
   const out = [];
-  for (const [key, label] of [["scientific_name", "biome"],
-    ["study_title", "study"], ["study_accession", ""],
-    ["instrument_model", "sequenced on"], ["country", "in"]]) {
+  for (const [key, label] of RUN_LEVEL) {
     const seen = new Set();
     let held = 0;
     for (const s of samples) {
       const m = usableMeta(store.get(s));
-      const v = key === "country" ? m.country : m[key];
+      const v = key === "coords"
+        ? (Number.isFinite(m.lat) ? `${m.lat.toFixed(3)}, ${m.lon.toFixed(3)}` : "")
+        : m[key];
       if (v) { seen.add(v); held++; }
     }
     if (seen.size === 1 && held === samples.length && samples.length > 0) {

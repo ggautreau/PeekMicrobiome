@@ -1715,76 +1715,57 @@ console.log("== enterotypes: a split, and the names that carry it ==");
   const of = (s) => split.find((r) => r.sample === s);
 
   check("every sample is divided between the three poles, and the shares add to 100",
-    split.length === 15 &&
+    split.length === 18 &&
     split.every((r) => Math.abs(r.shares.reduce((a, v) => a + v, 0) - 100) < 1e-9));
 
   // THE MEASUREMENT THIS FEATURE EXISTS FOR. The 2011 marker names applied to a
-  // GTDB catalogue miss the genera that were split out of them, and it is not
-  // academic: subject MQB_086 inverts on Phocaeicola alone.
-  const b2011 = (s) => {
-    const row = table.rows.find((r) => r.species === "Bacteroides");
-    return row.values[table.samples.indexOf(s)];
+  // GTDB catalogue miss the genera that were split out of them. Phocaeicola is
+  // 56% of the Bacteroides pole on this example, and forgetting it inverts which
+  // pole leads on four of the eighteen samples — SRR14473874 has Bacteroides
+  // 4.03 against Phocaeicola 28.17.
+  const genusVal = (name, sample) => {
+    const row = table.rows.find((r) => r.species === name);
+    return row ? row.values[table.samples.indexOf(sample)] : 0;
   };
-  const p2011 = (s) => {
-    const row = table.rows.find((r) => r.species === "Prevotella");
-    return row.values[table.samples.indexOf(s)];
-  };
-  const bothPoles = (s) => {
-    const r = of(s);
-    return { B: r.sums[0], P: r.sums[1] };
-  };
-  check("a rule written from the 2011 names inverts a real sample; the GTDB names do not",
-    ["ERR14098625", "ERR14098650"].every((s) => {
-      const { B, P } = bothPoles(s);
-      return b2011(s) < p2011(s) && B > P;       // 2011 says Prevotella, GTDB says Bacteroides
-    }),
-    ["ERR14098625", "ERR14098650"].map((s) =>
-      `${s}: 2011 ${b2011(s).toFixed(2)}v${p2011(s).toFixed(2)}, GTDB ` +
-      `${bothPoles(s).B.toFixed(2)}v${bothPoles(s).P.toFixed(2)}`).join(" | "));
+  const inverted = table.samples.filter((s2) => {
+    const b = genusVal("Bacteroides", s2), ph = genusVal("Phocaeicola", s2);
+    const r = of(s2).sums[2];
+    return (b < r) !== (b + ph < r);
+  });
+  check("a rule written from the 2011 names inverts real samples; the GTDB names do not",
+    inverted.length === 4 && inverted.includes("SRR14473874") &&
+    of("SRR14473874").sums[0] > of("SRR14473874").sums[2],
+    `${inverted.length} inverted: ${inverted.join(" ")}`);
   // Bare `Ruminococcus` is not merely zero here — it has no row at all, its
-  // genomes having been detected in none of the fifteen samples. A rule looking
-  // for that one name would find nothing and could not tell that apart from a
-  // gut with no Ruminococcus in it.
+  // genomes having been detected in none of the samples. A rule looking for that
+  // one name would find nothing and could not tell that apart from a gut with no
+  // Ruminococcus in it.
   const bare = table.rows.find((r) => r.species === "Ruminococcus");
   check("...and bare Ruminococcus carries nothing, so the suffixed genera are the pole",
     (bare === undefined || bare.values.every((v) => v === 0)) &&
     split.every((r) => r.sums[2] > 0),
     bare === undefined ? "no bare Ruminococcus row at all" : "present but all zero");
 
-  // A name is only printed with more daylight than the page's own noise. The
-  // example ships the measurement: seven samples sequenced twice.
+  // An enterotype is a statement about a sample, not about a person: the example
+  // ships six people sampled three times over eight weeks, and one of them
+  // changes which pole leads, twice. That is the caution the panel prints, and
+  // it is measured here rather than asserted.
   const subject = new Map(readFileSync(here + "demo/gut-demo.groups.csv", "utf8")
     .trim().split(/\r?\n/).slice(1).map((l) => l.split(",").map((c) => c.trim())));
-  const said = (r) => (!r.call ? "none"
-    : r.call === "between" ? `between ${r.pair.join("+")}` : ENTEROTYPE_POLES[r.lead].key);
-  const pairs = new Map();
+  const perPerson = new Map();
   for (const r of split) {
     const k = subject.get(r.sample);
-    if (!pairs.has(k)) pairs.set(k, []);
-    pairs.get(k).push(said(r));
+    if (!perPerson.has(k)) perPerson.set(k, []);
+    perPerson.get(k).push(r);
   }
-  const disagree = [...pairs].filter(([, v]) => v.length === 2 && v[0] !== v[1]);
-  check("what the page says never changes between two sequencings of one sample",
-    disagree.length === 0,
-    disagree.map(([k, v]) => `${k}: ${v.join(" vs ")}`).join(" | "));
-  // And that is not free: the same rule with no gap at all does flip one.
-  const naive = [...pairs].filter(([, v]) => v.length === 2);
-  check("...which a bare 'whichever pole leads' rule does not manage",
-    split.filter((r) => r.call === "between").length > 0 &&
-    naive.some(([k]) => {
-      const two = split.filter((r) => subject.get(r.sample) === k);
-      return two[0].lead !== two[1].lead;
-    }),
-    "MQB_032 leads on different poles in its two libraries");
-
-  check("the gap that licenses a name is the measured one, not a round number",
-    ENTEROTYPE_GAP > 5 && ENTEROTYPE_GAP < 15 &&
-    split.filter((r) => r.call === "between").every((r) => r.gap < ENTEROTYPE_GAP) &&
-    split.filter((r) => r.call && r.call !== "between").every((r) => r.gap >= ENTEROTYPE_GAP));
-  // The pair is named in pole order, so one finding has one wording.
-  check("...and a sample between two poles names them in a fixed order",
-    split.filter((r) => r.call === "between")
-      .every((r) => r.pair[0] < r.pair[1]));
+  const moved = [...perPerson].filter(([, v]) => new Set(v.map((r) => r.lead)).size > 1);
+  const widest = Math.max(...[...perPerson.values()].map((v) =>
+    Math.max(...[0, 1, 2].map((i) =>
+      Math.max(...v.map((r) => r.shares[i])) - Math.min(...v.map((r) => r.shares[i]))))));
+  check("one person's split moves between visits, so a name describes a sample",
+    perPerson.size === 6 && [...perPerson.values()].every((v) => v.length === 3) &&
+    moved.length >= 1 && widest > ENTEROTYPE_GAP,
+    `${moved.length} of 6 change the leading pole; widest move ${widest.toFixed(0)} points`);
 
   // Exact names. /^Bacteroides/ takes Bacteroides_F, which is a LACHNOSPIRACEAE.
   const trap = {
@@ -1811,7 +1792,7 @@ console.log("== enterotypes: a split, and the names that carry it ==");
   check("the triangle is drawn to its box, names its three corners, and carries every point",
     svg.includes('width="562"') && svg.includes('height="586"') &&
     ENTEROTYPE_POLES.every((p) => svg.includes(`>${p.label}</text>`)) &&
-    (svg.match(/data-sample=/g) ?? []).length === 15);
+    (svg.match(/data-sample=/g) ?? []).length === 18);
   // Corner labels hung off the corners ran out of the viewBox: the left one drew
   // as "acteroides" in the browser. Everything stays inside the box.
   const xs = [...svg.matchAll(/ x="(-?[\d.]+)"/g)].map((m) => Number(m[1]));
@@ -1978,19 +1959,20 @@ console.log("== the worked example is what it claims to be ==");
       meta.size === st.sampleOrder.length &&
       st.sampleOrder.every((s) => meta.has(s)),
       `${meta.size} described of ${st.sampleOrder.length}`);
-    const one = usableMeta(meta.get("ERR14098585"));
+    const one = usableMeta(meta.get("SRR14473825"));
     check("...cleaned, so the archive's own boilerplate never reaches the page",
-      one.sample_alias === "MQB_023" && one.collection_date === "2022" &&
-      one.country === "France" && one.sample_title === undefined &&
-      one.sample_description === undefined,
+      one.sample_alias === "A.M065_1" && one.collection_date === "2018-12-05" &&
+      one.country === "Singapore" && one.sample_title === undefined &&
+      one.sample_description === undefined && one.host_sex === "female",
       JSON.stringify(one));
-    // The two runs of a subject were sequenced on different machines at
-    // different depths, which is the whole reason the example is what it is —
-    // so the instrument must NOT reach the line that speaks for every sample.
+    // One study, one machine, one country, one biome: those belong on the line
+    // above the matrix. The collection date does NOT — it is the one field that
+    // moves between the three visits, which is the point of this example.
     const shared = runFacts(meta, st.sampleOrder).map((f) => f.key);
-    check("...and the run line says only what all fifteen agree on",
+    check("...and the run line says only what all eighteen agree on",
       shared.includes("scientific_name") && shared.includes("study_title") &&
-      !shared.includes("instrument_model"),
+      shared.includes("instrument_model") && shared.includes("country") &&
+      !shared.some((k) => k === "collection_date"),
       shared.join(",") || "(nothing)");
   }
 

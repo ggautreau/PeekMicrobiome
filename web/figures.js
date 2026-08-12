@@ -510,12 +510,28 @@ export const ENTEROTYPE_POLES = [
 
 // How far apart the top two shares must be before the page says a name.
 //
-// Measured, not chosen: the example ships seven samples sequenced twice — the
-// same DNA, 6.1x apart in depth — and the largest move in the split between two
-// libraries of one sample is 8.3 points. Below that, a name would be a coin the
-// page is flipping on the reader's behalf: MQB_032 comes out 52/48 to
-// Bacteroides in one library and 47/53 to Ruminococcus in the other, so a bare
-// label changes what that person IS between two sequencings of one stool.
+// Measured, not chosen — and measured on a study this repository no longer
+// ships, which is worth saying plainly.
+//
+// The threshold answers one question: how far apart must two poles be before the
+// difference is more than the measurement moving? That needs the same material
+// profiled twice, and the retired example had it. PRJEB83730 is the
+// "metaquantibiote" contamination experiment: each donor's stool, and the same
+// DNA with another donor's added, re-sequenced about six times deeper.
+//
+//   0.1% to 1% added (five pairs) ....... 3.3 points   — near-technical noise
+//   10% added (two pairs) ............... 8.3 points   — a tenth of another gut
+//
+// The larger is used: it is the point at which this page can tell a donor apart
+// from the same donor carrying a tenth of someone else. Below it a name would be
+// a coin flipped on the reader's behalf.
+//
+// What the CURRENT example shows is the other half of the same caution, and it
+// is biology rather than noise: eighteen samples, six people, three visits over
+// eight weeks. One person's split moves by up to 39 points between visits —
+// M092 leads Bacteroides, then Ruminococcus, then Bacteroides again; M060 goes
+// from 3% Prevotella to 42% in eight weeks. So a name here is a statement about
+// a SAMPLE and never about a person, which is what the panel prints beside it.
 export const ENTEROTYPE_GAP = 8.3;
 
 // Below this, the three poles are too small a part of the profile to be worth

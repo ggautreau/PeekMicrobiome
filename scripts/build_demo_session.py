@@ -11,20 +11,35 @@ exported and it rebuilds the demo byte for byte.
 
 WHAT THE DEMO IS
 ----------------
-Fifteen runs of PRJEB83730 — a public ENA study, human gut metagenomes on Ion
-Torrent — profiled by PeekMicrobiome itself against the published Human gut
-(UHGG) catalogue. Nothing here is simulated: every number is a taxonomic
-abundance sylph computed, and anyone can re-profile the same accessions from the
-ENA panel of the page and land on the same table.
+Eighteen runs of PRJNA728374 — a public dietary-intervention study, human gut
+metagenomes on Illumina HiSeq 4000 — profiled by PeekMicrobiome itself against
+the published Human gut (UHGG) catalogue. Nothing is simulated: every number is a
+taxonomic abundance sylph computed, and anyone can re-profile the same
+accessions from the ENA panel of the page and land on the same table. The read
+cap is the page's own default, so "the same accessions" really is the same work.
 
-One run per ENA sample, so the demo is fifteen samples rather than eighty-four
-runs of the same fifteen: the matrix stays readable, the ordination stays
-labelled (the plot drops point labels past twenty), and row clustering stays
-under its ceiling. The eight subjects each contribute a standard library and, for
-seven of them, a deeper one — which is the point of the groups file: the two
-libraries of one subject land on top of each other in the ordination, at six
-times the sequencing depth. That is what a reproducible profile looks like, and
-it is worth more in a demo than any synthetic separation.
+Six volunteers in Singapore gave a stool sample three times over eight weeks —
+day 0, day 14, day 56 — while eating one of three cooking oils in a double-blind
+trial. Six people, three visits each, and the person is readable from the sample
+alias the ENA already returns: `A.M065_1` is arm A, subject M065, visit 1.
+
+WHY THIS STUDY AND NOT THE LAST ONE. The demo used to be fifteen runs of
+PRJEB83730, whose "repeat samples of one person" were nothing of the kind:
+metaquantibiote is a CONTAMINATION experiment, and seven of those fifteen were a
+donor's stool with 0.1% to 10% of another donor's added, re-sequenced six times
+deeper. It said so only in the `comment` attribute of the sample XML, which no
+portal field carries. The page had been deriving a noise threshold from those
+pairs — measuring a spike-in and calling it sequencing noise.
+
+Here the repeat is real. Six subjects x three visits shows what this page is
+for: one person's three samples land beside each other in the ordination and a
+different person's land elsewhere, so a visitor learns the one intuition worth
+having — the individual is the signal, and eight weeks of a diet change is not.
+Colour the same plot by the trial arm and A, B and C interleave. That negative
+is worth more than any manufactured separation.
+
+The arms are BLINDED. The record says A, B and C and never which oil each is;
+this script and the page must not name them.
 
 USAGE
 -----
@@ -43,39 +58,44 @@ from typing import NoReturn
 
 REPO = pathlib.Path(__file__).resolve().parent.parent
 BIOMES = REPO / "web/db/biomes.json"
-MANIFEST = REPO / "web/db/prjeb83730.manifest.json"
 # What the ENA says these fifteen runs ARE — collected when, where, on what
 # machine. Written out, like DEMO_RUNS below and for the same reason: a build
 # script that needs the network to reproduce a committed file is a build script
 # that stops reproducing it. Refreshed by hand from
-#   filereport?accession=PRJEB83730&result=read_run&fields=<web/ena.js ENA_FIELDS>
-META = REPO / "web/db/prjeb83730.meta.json"
+#   filereport?accession=PRJNA728374&result=read_run&fields=<web/ena.js ENA_FIELDS>
+META = REPO / "web/db/prjna728374.meta.json"
 LINEAGE = REPO / "web/db/lineage/human-gut.json"
 OUT_DIR = REPO / "web/demo"
 
 BIOME_KEY = "human-gut"
-STUDY = "PRJEB83730"
+STUDY = "PRJNA728374"
 
 # The deepest run of each of the fifteen ENA samples of PRJEB83730, by base_count
 # from the ENA portal API (filereport?accession=PRJEB83730&result=read_run).
 # Written out rather than fetched: a build script that needs the network to
 # reproduce a committed file is a build script that stops reproducing it.
 DEMO_RUNS = [
-    "ERR14098576",  # MQB_014       514 Mb
-    "ERR14098636",  # MQB_014_l3   3074 Mb
-    "ERR14098585",  # MQB_023       508 Mb
-    "ERR14098638",  # MQB_023_l2   2966 Mb
-    "ERR14098593",  # MQB_032       502 Mb
-    "ERR14098641",  # MQB_032_l2   3069 Mb
-    "ERR14098601",  # MQB_041       530 Mb
-    "ERR14098609",  # MQB_059       466 Mb
-    "ERR14098644",  # MQB_059_l2    3093 Mb
-    "ERR14098617",  # MQB_068       459 Mb
-    "ERR14098647",  # MQB_068_l2   3194 Mb
-    "ERR14098625",  # MQB_086       495 Mb
-    "ERR14098650",  # MQB_086_l2   2918 Mb
-    "ERR14098633",  # MQB_095       463 Mb
-    "ERR14098653",  # MQB_095_l2   2741 Mb
+    # subject, then visit. Day 0 / 14 / 56, from the sample alias A.M065_1 and
+    # corroborated by collection_date, which really moves: M065 is 2018-12-05,
+    # 2018-12-19, 2019-01-30.
+    "SRR14473825",  # A.M065_1  M065 arm A day 0    1.00 Gbp
+    "SRR14473824",  # A.M065_2  M065 arm A day 14   0.90 Gbp
+    "SRR14473823",  # A.M065_3  M065 arm A day 56   1.06 Gbp
+    "SRR14473855",  # A.M055_1  M055 arm A day 0    0.98 Gbp
+    "SRR14473854",  # A.M055_2  M055 arm A day 14   1.32 Gbp
+    "SRR14473853",  # A.M055_3  M055 arm A day 56   0.85 Gbp
+    "SRR14473662",  # B.M092_1  M092 arm B day 0    1.19 Gbp
+    "SRR14473661",  # B.M092_2  M092 arm B day 14   0.91 Gbp
+    "SRR14473660",  # B.M092_3  M092 arm B day 56   1.17 Gbp
+    "SRR14473875",  # B.M048_1  M048 arm B day 0    1.07 Gbp
+    "SRR14473874",  # B.M048_2  M048 arm B day 14   1.01 Gbp
+    "SRR14473873",  # B.M048_3  M048 arm B day 56   1.06 Gbp
+    "SRR14473848",  # C.M058_1  M058 arm C day 0    1.12 Gbp
+    "SRR14473847",  # C.M058_2  M058 arm C day 14   0.90 Gbp
+    "SRR14473846",  # C.M058_3  M058 arm C day 56   0.93 Gbp
+    "SRR14473842",  # C.M060_1  M060 arm C day 0    1.15 Gbp
+    "SRR14473841",  # C.M060_2  M060 arm C day 14   0.59 Gbp
+    "SRR14473840",  # C.M060_3  M060 arm C day 56   1.06 Gbp
 ]
 
 # sylph's own parameters, as recorded in the header of the matrix this is built
@@ -154,7 +174,6 @@ def main():
         if labels != {biome["label"]}:
             die(f"the export was not profiled against one catalogue: {sorted(labels)}")
 
-    manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
     sample_meta = json.loads(META.read_text(encoding="utf-8"))
     missing_meta = [r for r in DEMO_RUNS if r not in sample_meta]
     if missing_meta:
@@ -164,24 +183,29 @@ def main():
     stray = [r for r in sample_meta if r not in DEMO_RUNS]
     if stray:
         die(f"{META} describes {', '.join(stray)}, which the demo does not include")
-    # run accession -> the study's own sample name, from the manifest already in
-    # the repo. No network, and it is the same mapping the ENA panel uses.
-    #
-    # The trailing _l2 / _l3 is a second library of the SAME subject, sequenced
-    # about six times deeper. Stripping it is what makes the groups file worth
-    # loading: the two libraries of one subject are then the same colour, and
-    # whether they land together is a question the ordination answers on screen.
-    subject = {}
-    for fname, meta in manifest.items():
-        run = fname.split(".")[0].split("_")[0]
-        subject[run] = re.sub(r"_l\d+$", "", meta["sample"])
 
-    missing = [r for r in DEMO_RUNS if r not in samples]
-    if missing:
-        die(f"{args.matrix} has no column for {', '.join(missing)}")
-    unknown = [r for r in DEMO_RUNS if r not in subject]
-    if unknown:
-        die(f"{MANIFEST} does not name the sample of {', '.join(unknown)}")
+    # run accession -> the subject, from the sample alias the ENA itself
+    # returns: "A.M065_1" is arm A, subject M065, visit 1. Derived rather than
+    # listed, so a run that ever moved to another subject could not be silently
+    # mislabelled here — and taken from a PORTAL field, so the page shows the
+    # same string for anyone who profiles these accessions themselves.
+    subject, visit, arm = {}, {}, {}
+    for run in DEMO_RUNS:
+        alias = sample_meta.get(run, {}).get("sample_alias", "")
+        m = re.fullmatch(r"([ABC])\.(M\d+)_([123])", alias)
+        if not m:
+            die(f"{run}: sample_alias {alias!r} is not the arm.subject_visit shape this study uses")
+        arm[run], subject[run], visit[run] = m.group(1), m.group(2), int(m.group(3))
+
+
+    subjects = sorted({subject[r] for r in DEMO_RUNS})
+    # Three visits each, or this is not the time course the banner describes.
+    per_subject = collections.Counter(subject.values())
+    odd = {k: n for k, n in per_subject.items() if n != 3}
+    if odd:
+        die(f"these subjects do not have three visits: {odd}")
+    if sorted(visit[r] for r in DEMO_RUNS) != sorted([1, 2, 3] * len(per_subject)):
+        die("the visits are not one 1, one 2 and one 3 per subject")
 
     col = {s: i for i, s in enumerate(samples)}
     matrix, kept, dropped = {}, 0, 0
@@ -269,8 +293,9 @@ def main():
         "demo": {
             "study": STUDY,
             "studyUrl": f"https://www.ebi.ac.uk/ena/browser/view/{STUDY}",
-            "note": (f"{len(DEMO_RUNS)} public runs of {STUDY} (human gut metagenome, Ion "
-                     f"Torrent), one per ENA sample, profiled by PeekMicrobiome against "
+            "note": (f"{len(DEMO_RUNS)} public runs of {STUDY}: {len(subjects)} volunteers in "
+                     f"Singapore, each sampled three times over eight weeks (day 0, 14, 56) "
+                     f"during a blinded dietary trial. Profiled by PeekMicrobiome against "
                      f"{biome['label']} — {ref['catalogue']}, {genomes} genomes, k={k}, c={c}. "
                      f"Real measurements, not simulated: the same accessions profiled from "
                      f"the ENA panel of this page reproduce them."),
@@ -290,7 +315,7 @@ def main():
         lines.append(f"{run},{subject[run]}")
     out_csv.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
-    subjects = sorted({subject[r] for r in DEMO_RUNS})
+
     print(f"{out_json.relative_to(REPO)}  {out_json.stat().st_size:,} B")
     print(f"{out_csv.relative_to(REPO)}  {out_csv.stat().st_size:,} B")
     print(f"  {len(DEMO_RUNS)} runs x {kept} rows ({dropped} all-zero rows dropped), "

@@ -3415,7 +3415,10 @@ let neighbourMetric = "bray";
  * nothing, which is the truth about it.
  */
 function metaHtml(name) {
-  const lines = metaLines(metaOf(name));
+  // Everything the run line above the matrix already carries is left out here.
+  const shared = new Set((lastRaw?.metaBySample?.size
+    ? runFacts(lastRaw.metaBySample, lastMatrix?.samples ?? []) : []).map((f) => f.key));
+  const lines = metaLines(metaOf(name), { except: shared });
   if (!lines.length) return "";
   return `<div class="pie-meta" title="From the ENA, in the same request that ` +
     `found this run's files. Values the archive marks as missing are not shown.">` +
@@ -3467,9 +3470,11 @@ function enterotypeHtml(name) {
       : row.call === "between"
         ? `Between <b>${escapeHTML(pair)}</b> — ${row.gap.toFixed(0)} points apart.`
         : `Leaning <b>${escapeHTML(lead)}</b> — ${row.gap.toFixed(0)} points clear.`) +
-    `<span title="Two libraries of one sample — the same DNA at 6x the depth — move ` +
-    `this split by up to ${ENTEROTYPE_GAP} points on the shipped example, which is why a ` +
-    `name needs that much daylight before it is printed.">` +
+    `<span title="A name needs ${ENTEROTYPE_GAP} points of daylight, which is how far the ` +
+    `split moves between two profiles of essentially the same material. It describes this ` +
+    `SAMPLE, not this person: in the shipped example one person's split moves by up to 39 ` +
+    `points between visits eight weeks apart, and one of the six changes which pole leads ` +
+    `twice.">` +
     `${pct(row.markers)}% of the profile is on these three axes, ${pct(100 - row.markers)}% is not.` +
     `</span></div>`;
   return out;
@@ -3681,14 +3686,27 @@ document.getElementById("loadSession")?.addEventListener("change", async (e) => 
 // whether the results are worth walking for — and it is the reason people close
 // the tab.
 //
-// So: a real run, saved and shipped. Fifteen public runs of PRJEB83730 profiled
-// against Human gut (UHGG), in the same JSON the Save session button writes,
-// rebuilt from the exported matrix by scripts/build_demo_session.py. Not a mock
-// and not simulated numbers: profile the same accessions from the ENA panel
-// below and the table comes back.
+// So: a real run, saved and shipped. Eighteen public runs of PRJNA728374
+// profiled against Human gut (UHGG), in the same JSON the Save session button
+// writes, rebuilt from the exported matrix by scripts/build_demo_session.py. Not
+// a mock and not simulated numbers: profile the same accessions from the ENA
+// panel below, at the read cap this page already defaults to, and the table
+// comes back.
+//
+// Six people, three stool samples each over eight weeks. That is the example
+// doing a job no synthetic one could: a visitor colours the ordination by
+// subject and sees each person's three samples land together, which is the one
+// intuition worth leaving with — the individual is the signal.
+//
+// It replaced fifteen runs of PRJEB83730, which looked like the same thing and
+// was not: metaquantibiote is a contamination experiment, and what looked like
+// repeat samples of one donor were that donor's stool with 0.1% to 10% of
+// another's added. It said so only in the `comment` attribute of the sample XML,
+// which no portal field carries and no amount of reading the run table would
+// have shown.
 const DEMO_SESSION = "demo/gut-demo.session.json";
 const DEMO_GROUPS = "demo/gut-demo.groups.csv";
-const DEMO_STUDY = "PRJEB83730";
+const DEMO_STUDY = "PRJNA728374";
 let demoOn = false;
 // Everything the example borrows from the page, handed back when it leaves.
 //
@@ -3789,8 +3807,9 @@ function paintDemoBanner(st) {
   el.innerHTML =
     `<div><strong>This is the example, not your data.</strong> ${n} public runs of ` +
     `<a href="https://www.ebi.ac.uk/ena/browser/view/${DEMO_STUDY}" target="_blank" ` +
-    `rel="noopener noreferrer">${DEMO_STUDY}</a> — human gut metagenomes, one run per ENA ` +
-    `sample${groups ? `, from ${groups} subjects` : ""} — profiled with this page against ` +
+    `rel="noopener noreferrer">${DEMO_STUDY}</a> — ${groups || "six"} volunteers in Singapore, ` +
+    `each of whom gave a stool sample three times over eight weeks while eating one of three ` +
+    `cooking oils in a blinded trial. Profiled with this page against ` +
     `${escapeHTML(st.ref?.label ?? "a catalogue")} and saved. The numbers are real measurements, ` +
     `but nothing was computed on your computer just now: profile the same accessions from the ` +
     `ENA panel above and they come back.</div>` +

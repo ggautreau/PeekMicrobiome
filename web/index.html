@@ -214,7 +214,7 @@
           <span class="info" style="display:block;margin-top:.35rem"><strong>This mode downloads public FASTQs from the EBI.</strong> This page asks the <a href="https://www.ebi.ac.uk/ena/browser/home">EBI's public ENA API</a> which files an accession covers, then streams those public FASTQs from the EBI's servers (any host under <code>ebi.ac.uk</code> — usually <code>ftp.sra.ebi.ac.uk</code>) straight into the profiler, without ever writing them to your disk. The EBI therefore sees your IP address and which accessions you looked up, exactly as it would if you downloaded them yourself.</span>
         </div>
         <div class="row" style="margin:.6rem 0 .2rem">
-          <input type="text" id="enaAcc" class="ena-input" placeholder="ERR14098592 · SAMEA115468000 · PRJEB83730"
+          <input type="text" id="enaAcc" class="ena-input" placeholder="SRR14473825 · SAMN19078431 · PRJNA728374"
                  autocomplete="off" autocapitalize="characters" spellcheck="false" aria-label="ENA accession">
           <button id="enaResolve" type="button">Look up</button>
           <button id="enaCancelLookup" type="button" class="hide">Cancel</button>

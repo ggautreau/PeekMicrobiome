@@ -290,14 +290,43 @@ UHGG `genomes-all_metadata.tsv`, which fills the 1187 human-gut species that
 name at all — those are GTDB placeholders (empty `s__`), overwhelmingly soil and
 marine, not lookup failures.
 
+## `profile_ena_runs.mjs` — the measurements the example is made of
+
+```
+node scripts/profile_ena_runs.mjs --db gut.syldb --runs runs.txt --out matrix.tsv
+```
+
+Profiles ENA runs into the abundance matrix `build_demo_session.py` reads, using
+**the same code the page runs**: it imports `web/ena.js`, `web/fastq-trim.js` and
+the wasm profiler and drives them exactly as `web/multi.js` does — resolve,
+stream from the EBI, gunzip, sketch, stop at the read cap, finish the sample.
+Nothing but the matrix is written to disk; the FASTQs are never stored.
+
+That matters because the demo's banner promises that profiling the same
+accessions from the page reproduces the table. The cap defaults to the page's own
+default (3,000,000 reads), so it is the same work and not merely the same data —
+on the shipped example each run stops after about 190 MiB of a 270-500 MB file.
+
+Species labels are built here the way `web/multi.js` builds them: the lineage
+name, plus the accession when GTDB gives that name to several representatives. A
+matrix with duplicate labels is rejected by the demo builder and by downstream
+tools.
+
 ## `build_demo_session.py` — the worked example the page ships
 
 Rebuilds `web/demo/gut-demo.session.json` and `web/demo/gut-demo.groups.csv`
 from an abundance matrix the app exported. The demo is what the "Explore example
-results" button loads: fifteen public runs of **PRJEB83730** (human gut
-metagenomes, Ion Torrent), one run per ENA sample, profiled by PeekMicrobiome
-itself against the published Human gut (UHGG) catalogue and saved in the same
-JSON the *Save session* button writes.
+results" button loads: eighteen public runs of **PRJNA728374** (human gut
+metagenomes, Illumina HiSeq 4000) — six volunteers in Singapore who each gave a
+stool sample three times over eight weeks, profiled by PeekMicrobiome itself
+against the published Human gut (UHGG) catalogue and saved in the same JSON the
+*Save session* button writes.
+
+It replaced fifteen runs of PRJEB83730, which is the "metaquantibiote"
+contamination experiment: seven of those fifteen were a donor's stool with 0.1%
+to 10% of another donor's added, and the ENA says so only in the `comment`
+attribute of the sample XML. Anything that looks like a repeat sample deserves
+that check before it is shipped as one.
 
 ```bash
 python3 scripts/build_demo_session.py abundance_matrix_human-gut.tsv
