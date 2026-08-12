@@ -12,22 +12,24 @@ import {
   sylphWorkerRpc, detectMemory64, chooseWasmBits, WORKER_VERSION,
   readsBudget, readsBudgetNote, readsOverBudgetNote, loadedBuildNote, fmtReads,
   progressFraction, basesForReads, BUDGET_READ_BP,
-} from "./sylph-worker-rpc.js?v=49";
+} from "./sylph-worker-rpc.js?v=50";
 import {
   dbCacheClient, fmtRate, fmtEta, cacheSummary, assertSameDatabase,
-} from "./db-cache.js?v=49";
-import { matePattern, stripFastqExt } from "./sample-naming.js?v=49";
+} from "./db-cache.js?v=50";
+import { matePattern, stripFastqExt } from "./sample-naming.js?v=50";
 import {
   resolveAccession, validateAccession, ASSUMED_BPS,
   downloadEstimate, readCountVerdict, expectedProfiledReads,
-} from "./ena.js?v=49";
-import { normaliseMarkers, screenVerdict, SCREENING_DB, SCREENING_MARKERS } from "./screening.js?v=49";
-import { clusterTable, MAX_ROWS as CLUSTER_MAX_ROWS } from "./cluster.js?v=49";
-import { compositionSvg, alphaSvg, pcoaSvg, pieSvg, sampleFacts, METRICS, alphaDiversity }
-  from "./figures.js?v=49";
-import { toMetaphlan, toBiom, toSylphTsv, toSession, fromSession } from "./exports.js?v=49";
+} from "./ena.js?v=50";
+import { normaliseMarkers, screenVerdict, SCREENING_DB, SCREENING_MARKERS } from "./screening.js?v=50";
+import { metaLines, runFacts } from "./meta.js?v=50";
+import { clusterTable, MAX_ROWS as CLUSTER_MAX_ROWS } from "./cluster.js?v=50";
+import { compositionSvg, alphaSvg, pcoaSvg, pcoaLayout, pieSvg, sampleFacts, METRICS, alphaDiversity,
+  enterotypeSvg, enterotypeSplit, ENTEROTYPE_POLES, ENTEROTYPE_GAP, ENTEROTYPE_MIN_MARKERS }
+  from "./figures.js?v=50";
+import { toMetaphlan, toBiom, toSylphTsv, toSession, fromSession } from "./exports.js?v=50";
 import { currentMode as themeMode, setMode as setThemeMode, applyTheme,
-  loadSchedule, saveSchedule } from "./theme.js?v=49";
+  loadSchedule, saveSchedule } from "./theme.js?v=50";
 import {
   fetchCatalog, fallbackCatalog, renderDbSelect, biomeForUrl, biomeNote,
   mgnifyGenomeUrl,
@@ -35,7 +37,7 @@ import {
   makeDbRef, sameDbRef, refLine, refShort, refCommentLines, refSlug, genomeCountMismatch,
   rememberBiome, recallBiome, catalogueName, LOCAL_VALUE,
   selectionMatchesLoaded, notLoadedNote, refMetaMismatch,
-} from "./biomes.js?v=49";
+} from "./biomes.js?v=50";
 
 const $ = (id) => document.getElementById(id);
 const els = {
@@ -51,6 +53,7 @@ const els = {
   dbSelect: $("dbSelect"), loadDb: $("loadDb"), dbInfo: $("dbInfo"), dbFile: $("dbFile"),
   cancelDb: $("cancelDb"), dbCacheInfo: $("dbCacheInfo"), dbBiomeNote: $("dbBiomeNote"),
   matrixRef: $("matrixRef"),
+  matrixMeta: $("matrixMeta"),
   poolSize: $("poolSize"),
   // ENA input mode
   enaAcc: $("enaAcc"), enaResolve: $("enaResolve"), enaCancelLookup: $("enaCancelLookup"),
@@ -1552,6 +1555,20 @@ els.enaAll?.addEventListener("click", () => {
   renderEnaRuns();
 });
 els.enaNone?.addEventListener("click", () => { enaSelected.clear(); renderEnaRuns(); });
+// ---- what the archive said about each sample ---------------------------------
+//
+// Keyed on the sample name as SHOWN, never on the run accession: two runs of
+// one sample, or a name already taken, and uniqueSampleName has made it
+// `ERR14098576_2`. The matrix knows that name and nothing else.
+//
+// Rebuilt from `files` on every redraw, like refBySample beside it, so a sample
+// removed from the list takes its metadata with it instead of leaving a label
+// hanging over a column that no longer exists.
+const metaStore = () =>
+  new Map(files.filter((f) => f.enaMeta).map((f) => [f.sampleName, f.enaMeta]));
+
+const metaOf = (sample) => lastRaw?.metaBySample?.get(sample) ?? null;
+
 els.enaAdd?.addEventListener("click", () => {
   const chosen = enaSelectedRuns();
   for (const r of chosen) {
@@ -1577,6 +1594,11 @@ els.enaAdd?.addEventListener("click", () => {
       enaReadCount: r.reads,
       enaBases: r.bases,
       enaLayout: r.layout,
+      // What the archive says this sample IS. Carried here and nowhere else:
+      // the run row is gone by the time the matrix exists, and re-fetching it
+      // to label a column would be a second request for something we were
+      // already told.
+      enaMeta: r.meta,
       enaReads: expectedProfiledReads({
         readCount: r.reads, layout: r.layout, pairsAsTwo: pairsCountAsTwo(),
       }),
@@ -2477,7 +2499,8 @@ async function runAll() {
         // enough to tell whether the run is worth waiting for. The download
         // buttons work on what is there — the summary says how much that is.
         lastRaw = { matrix, sampleOrder, ref: runRef,
-          refBySample: new Map(files.filter((f) => f.ref).map((f) => [f.sampleName, f.ref])) };
+          refBySample: new Map(files.filter((f) => f.ref).map((f) => [f.sampleName, f.ref])),
+          metaBySample: metaStore() };
         lastMatrix = matrixToTable(lastRaw.matrix, lastRaw.sampleOrder, lastRaw.ref, lastRaw.refBySample);
         renderMatrix(viewOf(lastMatrix), { done: completed + 1, total: totalTodo });
         if (!verdict.ok) shortCount++;
@@ -2509,7 +2532,8 @@ async function runAll() {
   refreshRunButton();
   if (okCount > 0) {
     lastRaw = { matrix, sampleOrder, ref: runRef,
-      refBySample: new Map(files.filter((f) => f.ref).map((f) => [f.sampleName, f.ref])) };
+      refBySample: new Map(files.filter((f) => f.ref).map((f) => [f.sampleName, f.ref])),
+      metaBySample: metaStore() };
     lastMatrix = matrixToTable(lastRaw.matrix, lastRaw.sampleOrder, lastRaw.ref, lastRaw.refBySample);
     renderMatrix(viewOf(lastMatrix));
   }
@@ -2725,6 +2749,9 @@ function drawFigure(kind, { toggle = true } = {}) {
     canvas.innerHTML = "";
     dl?.classList.add("hide");
     pickedSample = null;
+    pcoaZoom = null;
+    paintZoomControls();
+    paintTopN();
     hideDetail();
     if (note) note.textContent = "";
     for (const b of document.querySelectorAll(".fig-tab")) b.classList.remove("is-on");
@@ -2753,12 +2780,24 @@ function drawFigure(kind, { toggle = true } = {}) {
   if (pickedSample) showPie(view, pickedSample); else showDetailPrompt();
   const w = Math.max(320, Math.floor(canvas.clientWidth - 20));
   const h = Math.max(300, Math.floor(canvas.clientHeight - 20));
-  const svg = kind === "composition" ? compositionSvg(view, { width: w, height: h })
+  figView = view;
+  // The one figure that can refuse. A card saying why, in the card the figure
+  // would have been in — and Download SVG stays hidden, because a downloadable
+  // picture of the word "no" is not a figure.
+  const refusal = kind === "enterotype" ? enterotypeRefusal(view) : "";
+  const svg = refusal ? ""
+    : kind === "composition" ? compositionSvg(view, { width: w, height: h, topN: figTopN })
     : kind === "alpha" ? alphaSvg(view, { width: w, height: h })
-    : pcoaSvg(view, { width: w, height: h, groupOf: metaGroupOf });
-  canvas.innerHTML = svg;
-  dl?.classList.remove("hide");
+    : kind === "enterotype"
+      ? enterotypeSvg(genusTable(), { width: w, height: h, groupOf: metaGroupOf })
+      : ordinationSvg(view, w, h);
+  canvas.innerHTML = refusal
+    ? `<div class="fig-refusal"><b>Not this run</b><span>${escapeHTML(refusal)}</span></div>`
+    : svg;
+  dl?.classList.toggle("hide", !!refusal);
   openFig = kind;
+  paintZoomControls();
+  paintTopN();
   for (const b of document.querySelectorAll(".fig-tab")) {
     b.classList.toggle("is-on", b.dataset.fig === kind);
   }
@@ -2770,7 +2809,8 @@ function drawFigure(kind, { toggle = true } = {}) {
     note.textContent = `${view.rows.length} ${RANK_LABELS[currentRank()].toLowerCase()}` +
       `${view.rows.length === 1 ? "" : currentRank() === "s" ? "" : ""} × ${view.samples.length} samples, ` +
       `against ${refShort(view.ref) || "the loaded catalogue"}` +
-      (kind === "pcoa" ? " · hover a point to name it, click it for that sample"
+      (kind === "pcoa" ? " · hover a point to name it, click it for that sample · scroll over the plot to zoom, drag to pan"
+        : kind === "enterotype" ? " · at genus rank, whatever the picker says · click a point for the genera behind it"
         : " · click a sample for what it is made of") +
       (kind === "pcoa" && !metaGroups.size ? " · load metadata to colour by group" : "");
   }
@@ -2779,6 +2819,309 @@ function drawFigure(kind, { toggle = true } = {}) {
 for (const b of document.querySelectorAll(".fig-tab")) {
   b.addEventListener("click", () => drawFigure(b.dataset.fig));
 }
+
+// ---- how many taxa are named -------------------------------------------------
+//
+// Ten was a constant in two figures, and ten is not the right number for every
+// run: a gut sample where Prevotella is 60% of everything is described by three,
+// and a soil profile with no dominant taxon needs twenty before the bars stop
+// being mostly grey. The rest are never dropped — they stay as "other taxa" —
+// so this changes how much of a profile is NAMED, never how much is counted.
+//
+// Kept for the session, across figures and redraws: someone who has decided
+// they want fifteen has decided it for the run, not for one click.
+let figTopN = 10;
+let topNFrame = 0;
+
+// Shown only where it does something: the bars, and the pie of an open sample.
+// The diversity chart with nothing open has no taxa to name, and a control that
+// does nothing is worse than one that is not there.
+function paintTopN() {
+  document.getElementById("figTopN")
+    ?.classList.toggle("hide", !(openFig === "composition" || (openFig && pickedSample)));
+}
+
+document.getElementById("figTopNRange")?.addEventListener("input", (e) => {
+  figTopN = Math.max(1, Number(e.target.value) || 10);
+  const out = document.getElementById("figTopNOut");
+  if (out) out.textContent = String(figTopN);
+  // A drag fires this by the pixel and each one redraws a figure over every row
+  // of the matrix. Coalesced, so the value the drag ends on is the one drawn —
+  // on a timer rather than an animation frame, which a tab in the background
+  // never runs, leaving the figure showing a number the slider no longer says.
+  clearTimeout(topNFrame);
+  topNFrame = setTimeout(() => {
+    if (openFig) drawFigure(openFig, { toggle: false });
+  }, 60);
+});
+
+// ---- enterotypes ---------------------------------------------------------------
+//
+// The one figure that is not drawable from any run. Everything else here works
+// on whatever was profiled against whatever catalogue; the poles of an
+// enterotype are three named genera of the adult human gut, so the page has to
+// know it is looking at one — and every obvious way of asking that question is
+// broken, each for a measured reason.
+const HUMAN_GUT_GENOMES = 4744;
+
+function enterotypeRefusal(view) {
+  const ref = view?.ref;
+  if (view?.mixed) {
+    return "This session mixes two reference databases. A marker share is a share " +
+      "of one catalogue, so there is nothing here to divide.";
+  }
+  if (!ref || ref.local) {
+    return "These are shares of a profile made against a database whose contents this " +
+      "page does not know. Load a named catalogue to draw this.";
+  }
+  // `ref.key`, and never `ref.catalogue`: catalogueName() makes that
+  // "MGnify human-gut v2.0.2", so `ref.catalogue === "human-gut"` is false for
+  // every biome there is, human gut included. It would not be a gate, it would
+  // be an off switch nobody noticed.
+  if (ref.key !== "human-gut") {
+    return `Enterotypes are described for adult human stool. This run is against ` +
+      `${refShort(ref) || "another catalogue"}. Composition, Diversity and PCoA work on any run.`;
+  }
+  // The smoke-test database declares catalogue "human-gut", version "v2.0.2"
+  // and the SAME lineage file — with 50 genomes of the 4,744. A catalogue check
+  // and a version check both wave it through; the genome count is what separates
+  // them. It also pins the build: GTDB renames genera between releases, and the
+  // pole names above were verified against this one.
+  if (Number(ref.genomes) !== HUMAN_GUT_GENOMES) {
+    return `The marker genera were checked against MGnify human-gut v2.0.2 ` +
+      `(${HUMAN_GUT_GENOMES.toLocaleString("en-US")} genomes); this database holds ` +
+      `${Number(ref.genomes).toLocaleString("en-US")}. Genus names move between GTDB ` +
+      `releases, so the poles have to be re-checked before this can be drawn.`;
+  }
+  if (!canAggregate()) {
+    return "This session was saved at species level and its database is not loaded, so " +
+      "genus names are unavailable. Load the catalogue to draw this.";
+  }
+  return "";
+}
+
+// The table at genus rank, whatever the picker says, built from the same
+// matrixToTable the page uses everywhere else so there is one aggregation and
+// not two.
+function genusTable() {
+  return matrixToTable(lastRaw.matrix, lastRaw.sampleOrder, lastRaw.ref,
+    lastRaw.refBySample, { rank: "g" });
+}
+
+// What the archive knows about the specimen, which is a different question from
+// what the catalogue is. The gate checks the database; this checks the sample,
+// and says so when it cannot.
+function specimenNote(samples) {
+  const seen = new Map();
+  for (const s of samples) {
+    const v = (metaOf(s) ?? {}).scientific_name;
+    if (v) seen.set(v, (seen.get(v) ?? 0) + 1);
+  }
+  if (!seen.size) {
+    return "The catalogue was checked, not the specimen: nothing here says whether these " +
+      "FASTQs are human stool.";
+  }
+  const odd = [...seen].filter(([v]) => !/human gut|gut metagenome/i.test(v));
+  if (odd.length) {
+    return `The archive calls ${odd.length === seen.size ? "these samples" : "some of these samples"} ` +
+      `${odd.map(([v, n]) => `"${v}" (${n})`).join(", ")} — which is not human stool.`;
+  }
+  return `The archive calls all ${samples.length} of these ${[...seen.keys()].join(", ")}.`;
+}
+
+// ---- zooming the ordination --------------------------------------------------
+//
+// Fifteen samples fit in a card; eighty-five in a gut study do not, and the
+// interesting ones are precisely the ones piled on top of each other in the
+// middle. Zooming is what makes that pile readable — and it pays twice, because
+// the names are printed once few enough points are in the window to have room
+// for them, so a cluster that was anonymous dots becomes a labelled cluster.
+//
+// The window lives here, in the ordination's own units, and the eigenproblem
+// does not: the layout is computed once per matrix and every frame of a drag
+// reuses it. Panning an 85-sample PCoA would otherwise solve it sixty times a
+// second.
+let pcoaZoom = null;      // {x, y, k} or null for the whole thing
+let pcoaFit = null;       // {key, layout} — the ordination, cached against redraws
+let figView = null;       // the view the open figure was drawn from
+
+const viewKey = (view) =>
+  `${view.samples.join("\u0001")}|${view.rows.length}|${view.ref ?? ""}`;
+
+function ordinationSvg(view, w, h) {
+  const key = viewKey(view);
+  if (pcoaFit?.key !== key) {
+    // Different data, so a window onto the old data means nothing: a zoom is
+    // remembered across a resize or a recolouring and not across a new run.
+    pcoaFit = { key, layout: pcoaLayout(view) };
+    pcoaZoom = null;
+  }
+  return pcoaSvg(view, {
+    width: w, height: h, groupOf: metaGroupOf, layout: pcoaFit.layout, zoom: pcoaZoom,
+  });
+}
+
+// Redraw the plot alone, at the size it already has. drawFigure() measures an
+// empty card and repaints the panel beside it; neither can happen on every frame
+// of a drag, and neither needs to — a zoom changes the window and nothing else.
+function redrawPcoa() {
+  const canvas = document.getElementById("figCanvas");
+  if (!canvas || openFig !== "pcoa" || !figView) return;
+  const old = canvas.querySelector("svg");
+  const w = Number(old?.getAttribute("width")) || Math.max(320, canvas.clientWidth - 20);
+  const h = Number(old?.getAttribute("height")) || Math.max(300, canvas.clientHeight - 20);
+  canvas.innerHTML = ordinationSvg(figView, w, h);
+  wireFigure(canvas, figView);
+  paintZoomControls();
+}
+
+function paintZoomControls() {
+  const box = document.getElementById("figZoom");
+  if (!box) return;
+  box.classList.toggle("hide", openFig !== "pcoa");
+  const k = pcoaZoom?.k ?? 1;
+  const out = document.getElementById("figZoomK");
+  if (out) out.textContent = `×${k.toFixed(1)}`;
+  box.querySelector('[data-zoom="reset"]')?.toggleAttribute("disabled", k <= 1.001);
+  box.querySelector('[data-zoom="out"]')?.toggleAttribute("disabled", k <= 1.001);
+  // Only the ordination pans, and only while it is the figure on screen: the
+  // zoom survives a trip to the composition tab, and the composition must not
+  // come back with a grab cursor and a finger that cannot scroll the page.
+  document.getElementById("figCanvas")
+    ?.classList.toggle("can-pan", openFig === "pcoa" && k > 1.001);
+}
+
+/**
+ * The mapping the plot published on itself: pixels in, ordination units out.
+ *
+ * Read off the SVG rather than recomputed here — the padding, the room kept for
+ * the labels and the window that survived clamping are the figure's business,
+ * and a second copy of them in this file would be a second copy to get wrong.
+ */
+function plotGeom(svg) {
+  const raw = svg?.getAttribute?.("data-plot");
+  if (!raw) return null;
+  const [x0, x1, y0, y1, L, R, T, B] = raw.split(",").map(Number);
+  const rect = svg.getBoundingClientRect();
+  const vw = Number(svg.getAttribute("width")), vh = Number(svg.getAttribute("height"));
+  if (!(rect.width > 0 && rect.height > 0 && vw > 0 && vh > 0)) return null;
+  // The card may be showing the figure scaled — a viewBox unit is not a pixel.
+  const ux = vw / rect.width, uy = vh / rect.height;
+  const toBox = (cx, cy) => ({ x: (cx - rect.left) * ux, y: (cy - rect.top) * uy });
+  return {
+    centre: () => ({ x: (x0 + x1) / 2, y: (y0 + y1) / 2 }),
+    // How far one pixel of drag moves the window, in ordination units.
+    perPx: { x: ((x1 - x0) / (R - L)) * ux, y: ((y1 - y0) / (B - T)) * uy },
+    over: (cx, cy) => cx >= rect.left && cx <= rect.right && cy >= rect.top && cy <= rect.bottom,
+    at: (cx, cy) => {
+      const v = toBox(cx, cy);
+      return {
+        x: x0 + ((v.x - L) / (R - L)) * (x1 - x0),
+        y: y1 - ((v.y - T) / (B - T)) * (y1 - y0),
+      };
+    },
+  };
+}
+
+// Zoom by `factor`, keeping `p` — the point under the pointer, or the middle of
+// the window for a button — where it is.
+function zoomBy(factor, p = null) {
+  const canvas = document.getElementById("figCanvas");
+  const g = plotGeom(canvas?.querySelector("svg"));
+  if (!g) return;
+  const k0 = pcoaZoom?.k ?? 1;
+  const k1 = Math.min(16, Math.max(1, k0 * factor));
+  if (Math.abs(k1 - k0) < 1e-6) return;
+  if (k1 <= 1.001) {
+    pcoaZoom = null;
+  } else {
+    const c = g.centre(), at = p ?? c, r = k0 / k1;
+    // The classic: the window shrinks about `at`, so whatever was under the
+    // pointer stays under it instead of sliding away as the plot grows.
+    pcoaZoom = { x: at.x - (at.x - c.x) * r, y: at.y - (at.y - c.y) * r, k: k1 };
+  }
+  redrawPcoa();
+}
+
+const figCanvasEl = document.getElementById("figCanvas");
+
+// The button has no pointer to zoom about, so it uses the sample that is open
+// beside the plot if there is one: the middle of the ordination is usually where
+// nothing is, and "zoom in" landing on empty space is a worse answer than
+// "zoom in on the one I am reading".
+function zoomFocus() {
+  if (!pickedSample || !pcoaFit || !figView) return null;
+  const p = pcoaFit.layout.points[figView.samples.indexOf(pickedSample)];
+  return p ? { x: p.x, y: p.y } : null;
+}
+
+for (const b of document.querySelectorAll("#figZoom [data-zoom]")) {
+  b.addEventListener("click", () => {
+    if (b.dataset.zoom === "reset") { pcoaZoom = null; redrawPcoa(); return; }
+    const inward = b.dataset.zoom === "in";
+    zoomBy(inward ? 1.6 : 1 / 1.6, inward ? zoomFocus() : null);
+  });
+}
+
+// Over the plot, the wheel is the plot's: it zooms, about the point under the
+// pointer, in both directions. Anywhere else on the page it is the page's.
+//
+// The one exception is the wheel that asks to zoom out of the whole ordination,
+// which is not a zoom at all — there is nothing outside the full extent to show.
+// Swallowing it would make the figure a 600 px hole a scroll stops in halfway
+// down a long page, so the page takes that one back.
+figCanvasEl?.addEventListener("wheel", (e) => {
+  if (openFig !== "pcoa") return;
+  const g = plotGeom(figCanvasEl.querySelector("svg"));
+  if (!g || !g.over(e.clientX, e.clientY)) return;
+  // Lines and pages, not just pixels: Firefox reports a wheel in lines.
+  const dy = e.deltaMode === 1 ? e.deltaY * 16 : e.deltaMode === 2 ? e.deltaY * 400 : e.deltaY;
+  if (dy > 0 && !((pcoaZoom?.k ?? 1) > 1.001)) return;
+  e.preventDefault();
+  zoomBy(Math.exp(-dy * 0.0018), g.at(e.clientX, e.clientY));
+}, { passive: false });
+
+// Drag to pan, once there is something outside the window to drag into view. The
+// capture is on the card, not on the plot: the plot is replaced by a new one on
+// every frame, and a pointer captured by an element that no longer exists stops
+// reporting halfway through the gesture.
+let figPan = null;
+figCanvasEl?.addEventListener("pointerdown", (e) => {
+  if (openFig !== "pcoa" || e.button !== 0 || !((pcoaZoom?.k ?? 1) > 1.001)) return;
+  if (e.target.closest?.(".pcoa-pt")) return;         // that is a click on a sample
+  const g = plotGeom(figCanvasEl.querySelector("svg"));
+  if (!g || !g.over(e.clientX, e.clientY)) return;
+  figPan = { x: e.clientX, y: e.clientY, from: g.centre(), perPx: g.perPx };
+  figCanvasEl.setPointerCapture(e.pointerId);
+  figCanvasEl.classList.add("is-panning");
+  hideTip();
+});
+figCanvasEl?.addEventListener("pointermove", (e) => {
+  if (!figPan) return;
+  e.preventDefault();
+  // Drag right and the points follow the pointer right, which means the window
+  // moves left. Screen y counts downwards and the ordination's y does not.
+  pcoaZoom = {
+    ...pcoaZoom,
+    x: figPan.from.x - (e.clientX - figPan.x) * figPan.perPx.x,
+    y: figPan.from.y + (e.clientY - figPan.y) * figPan.perPx.y,
+  };
+  redrawPcoa();
+});
+const endPan = (e) => {
+  if (!figPan) return;
+  figPan = null;
+  figCanvasEl?.classList.remove("is-panning");
+  try { figCanvasEl?.releasePointerCapture(e.pointerId); } catch { /* already gone */ }
+};
+figCanvasEl?.addEventListener("pointerup", endPan);
+figCanvasEl?.addEventListener("pointercancel", endPan);
+// Back to every sample. Not on a point: two clicks there are open-then-close.
+figCanvasEl?.addEventListener("dblclick", (e) => {
+  if (openFig !== "pcoa" || !pcoaZoom || e.target.closest?.(".pcoa-pt")) return;
+  pcoaZoom = null;
+  redrawPcoa();
+});
 
 // ---- the figures, made answerable -------------------------------------------
 //
@@ -2943,6 +3286,7 @@ function wireFigure(canvas, view) {
 function closePie() {
   pickedSample = null;
   showDetailPrompt();
+  paintTopN();
   const canvas = document.getElementById("figCanvas");
   if (canvas) repaintPoints(canvas);
 }
@@ -2987,9 +3331,11 @@ function showPie(view, name) {
     `<button type="button" id="pieDownload">Download SVG</button>` +
     `<button type="button" id="pieClose" aria-label="Close this sample">✕</button>` +
     `</span></div>` +
-    `<div class="fig-detail-body">${pieSvg(view, name)}</div>` +
+    `<div class="fig-detail-body"></div>` +
     factsHtml(view, name);
   panel.classList.remove("hide");
+  fitPie(panel, view, name);
+  paintTopN();
   document.getElementById("pieClose")?.addEventListener("click", () => {
     closePie();
     hideTip();
@@ -3014,6 +3360,37 @@ function showPie(view, name) {
   }
 }
 
+/**
+ * Draw the pie into the room the panel has left, once everything else in the
+ * panel has taken its own.
+ *
+ * The panel is a fixed card — the same box as the figure beside it — and the
+ * numbers under the pie are as tall as they are: three tiles and four
+ * neighbours, more of both on a narrow window where they wrap. What is left over
+ * is the pie's, and it is measured rather than guessed. Drawn at a fixed 470 px
+ * it left a strip of empty card down one side of a 563 px panel and pushed the
+ * neighbour list out of the bottom of it, which is the one part of the panel
+ * nobody scrolls to find.
+ */
+function fitPie(panel, view, name) {
+  const body = panel.querySelector(".fig-detail-body");
+  if (!body) return;
+  const foot = panel.querySelector(".pie-facts") ?? body;
+  // Measured with the body EMPTY: the bottom of the numbers is then everything
+  // above the pie plus everything below it, margins and all, in one number.
+  const used = foot.getBoundingClientRect().bottom - panel.getBoundingClientRect().top;
+  const padB = parseFloat(getComputedStyle(panel).paddingBottom) || 0;
+  const room = Math.floor(panel.clientHeight - used - padB - 4);
+  body.innerHTML = pieSvg(view, name, {
+    topN: figTopN,
+    width: Math.max(240, body.clientWidth),
+    // A floor, because a phone-sized panel would otherwise get a pie the size of
+    // its own legend; a ceiling, because a stacked card is 600 px tall and a
+    // 600 px disc is not more informative than a 400 px one.
+    height: Math.max(180, Math.min(440, room)),
+  });
+}
+
 // The rest of the panel, and the reason the panel is as tall as the plot beside
 // it: composition alone leaves the two questions a point raises unanswered — how
 // much is in there, and what is it actually near.
@@ -3021,6 +3398,82 @@ function showPie(view, name) {
 // redraws: someone who has decided they want Euclidean has decided it for the
 // session, not for one click.
 let neighbourMetric = "bray";
+
+/**
+ * What the archive said this sample is — when there is anything to say.
+ *
+ * An accession is not a sample: ERR14098585 tells a reader nothing, and the
+ * EBI told us in the same request that it was collected in 2022, in France,
+ * from a human gut, on an Ion GeneStudio. That was being fetched and thrown
+ * away.
+ *
+ * Every value here has been through meta.js, so a sentinel ("not provided"), an
+ * archive-generated title, or a pair of zero coordinates never reaches the
+ * page. A field with nothing behind it produces no chip at all — never a dash,
+ * because a dash reads as a broken page rather than as an empty archive. A
+ * sample with no metadata at all — a FASTQ off the user's own disk — produces
+ * nothing, which is the truth about it.
+ */
+function metaHtml(name) {
+  const lines = metaLines(metaOf(name));
+  if (!lines.length) return "";
+  return `<div class="pie-meta" title="From the ENA, in the same request that ` +
+    `found this run's files. Values the archive marks as missing are not shown.">` +
+    lines.map((l) =>
+      `<span class="pie-meta-bit">` +
+      (l.label ? `<i>${escapeHTML(l.label)}</i> ` : "") +
+      `${escapeHTML(l.value)}</span>`).join("") +
+    `</div>`;
+}
+
+/**
+ * The genera behind one sample's split, and the name that follows from them.
+ *
+ * The reason this is not optional: every failure the pole names can have is
+ * invisible in a total and obvious in a list. `Ruminococcus 0.00` beside
+ * `Ruminococcus_E 9.32` is the whole GTDB problem in one line, and a reader who
+ * knows the field will spot a missing genus here in a second — where they could
+ * stare at a triangle for an hour and see nothing wrong.
+ */
+function enterotypeHtml(name) {
+  if (openFig !== "enterotype" || !lastRaw?.matrix) return "";
+  const table = genusTable();
+  const row = enterotypeSplit(table).find((r) => r.sample === name);
+  if (!row) return "";
+  const pct = (v) => v.toFixed(v < 10 ? 2 : 1);
+  let out = `<div class="pie-pole">`;
+  ENTEROTYPE_POLES.forEach((pole, i) => {
+    const mine = row.genera.filter(([g]) => pole.genera.includes(g));
+    out += `<div class="pie-pole-head">${escapeHTML(pole.label)}` +
+      `<span class="share">${row.shares[i].toFixed(0)}%</span>` +
+      `<span class="sum">${pct(row.sums[i])}% of the profile</span></div>` +
+      `<div class="pie-pole-genera">` +
+      (mine.length
+        ? mine.map(([g, v]) => `<span><i>${escapeHTML(g)}</i> ${pct(v)}</span>`).join("")
+        // Naming what was looked for and not found is the point: "no Prevotella
+        // detected" and "we never looked for Segatella" are different answers.
+        : `<span class="zero">none of ${pole.genera.slice(0, 3).map(escapeHTML).join(", ")}` +
+          `${pole.genera.length > 3 ? "…" : ""} detected</span>`) +
+      `</div>`;
+  });
+  out += `</div>`;
+
+  const lead = ENTEROTYPE_POLES[row.lead].label;
+  const pair = row.pair.map((i) => ENTEROTYPE_POLES[i].label).join(" and ");
+  out += `<div class="pie-call">` +
+    (!row.call
+      ? `<b>No call.</b> These three groups are ${pct(row.markers)}% of this profile — ` +
+        `under ${ENTEROTYPE_MIN_MARKERS}%, there is not enough here to divide.`
+      : row.call === "between"
+        ? `Between <b>${escapeHTML(pair)}</b> — ${row.gap.toFixed(0)} points apart.`
+        : `Leaning <b>${escapeHTML(lead)}</b> — ${row.gap.toFixed(0)} points clear.`) +
+    `<span title="Two libraries of one sample — the same DNA at 6x the depth — move ` +
+    `this split by up to ${ENTEROTYPE_GAP} points on the shipped example, which is why a ` +
+    `name needs that much daylight before it is printed.">` +
+    `${pct(row.markers)}% of the profile is on these three axes, ${pct(100 - row.markers)}% is not.` +
+    `</span></div>`;
+  return out;
+}
 
 function factsHtml(view, name) {
   const f = sampleFacts(view, name, { metric: neighbourMetric });
@@ -3035,9 +3488,13 @@ function factsHtml(view, name) {
       `this diversity. Fewer than the count above, because the abundances are uneven.`) +
     stat(`${f.rank}<span class="of"> / ${f.of}</span>`, "by diversity",
       `1 is the most diverse sample of the ${f.of} on screen, by effective taxa.`) +
-    `</div>`;
+    `</div>` + enterotypeHtml(name) + metaHtml(name);
 
-  if (f.nearest.length) {
+  // Not on the enterotype tab: "which samples is this one nearest" is the
+  // ordination's question, it is one tab away, and the panel is a fixed box that
+  // the pole audit already spends 250 px of. Something had to go and this is the
+  // part that is drawn twice.
+  if (f.nearest.length && openFig !== "enterotype") {
     // The distances are the FULL ones. The ordination is a projection of them
     // onto two axes and says so in its own labels; these are what it projects.
     const m = METRICS[f.metric];
@@ -3053,15 +3510,23 @@ function factsHtml(view, name) {
       `</label></div>`;
     for (const n of f.nearest) {
       const g = metaGroupOf(n.sample);
+      // How CLOSE, not how far: the list is sorted nearest first, and drawing
+      // the distance gave the nearest sample the shortest bar — a chart that
+      // shrank as it went down a list headed "Closest samples".
+      //
+      // Against the metric's own ceiling, not against the nearest neighbour: a
+      // sample whose closest relative is far away must not look as close as one
+      // with a twin. So a full bar is an identical profile, an empty one shares
+      // nothing, and the number beside it stays the distance itself.
+      const close = Math.max(0, Math.min(100, (1 - n.distance / m.max) * 100));
       out += `<button type="button" class="pie-near-row" data-jump="${escapeHTML(n.sample)}" ` +
         `title="Open ${escapeHTML(n.sample)}">` +
         `<span class="pie-near-name">${escapeHTML(n.sample)}` +
         (g ? `<span class="pie-near-group">${escapeHTML(g)}</span>` : "") + `</span>` +
-        // Against the metric's own ceiling, not against the nearest neighbour:
-        // a sample whose closest relative is far away must not look as close as
-        // one with a twin.
-        `<span class="pie-near-bar"><i style="width:${
-          Math.min(100, (n.distance / m.max) * 100).toFixed(1)}%"></i></span>` +
+        `<span class="pie-near-bar" title="${close.toFixed(0)}% of the way to an ` +
+        `identical profile — a full bar is the same sample twice, an empty one ` +
+        `shares nothing. The number is the ${escapeHTML(m.label)} distance itself.">` +
+        `<i style="width:${close.toFixed(1)}%"></i></span>` +
         `<span class="pie-near-d">${n.distance.toFixed(m.digits)}</span></button>`;
     }
     out += `</div>`;
@@ -3159,7 +3624,8 @@ document.getElementById("saveSession")?.addEventListener("click", () => {
   if (!lastRaw) { showError("Nothing to save yet — no sample has been profiled."); return; }
   saveBlob(toSession({
     ref: lastRaw.ref, sampleOrder: lastRaw.sampleOrder, matrix: lastRaw.matrix,
-    refBySample: lastRaw.refBySample, rank: currentRank(),
+    refBySample: lastRaw.refBySample, sampleMeta: lastRaw.metaBySample,
+    rank: currentRank(),
     savedAt: new Date().toISOString(),
     // Named for what it is. Saving while the example is on screen writes the
     // example out, and a file called session_human-gut.json would be indexed a
@@ -3172,7 +3638,7 @@ document.getElementById("saveSession")?.addEventListener("click", () => {
 // it goes through the same restore as any session from disk.
 function applySession(st) {
   lastRaw = { matrix: st.matrix, sampleOrder: st.sampleOrder, ref: st.ref,
-    refBySample: st.refBySample };
+    refBySample: st.refBySample, metaBySample: st.sampleMeta ?? new Map() };
   const pick = document.getElementById("rankPick");
   if (pick && st.rank) pick.value = st.rank;
   lastMatrix = matrixToTable(lastRaw.matrix, lastRaw.sampleOrder, lastRaw.ref, lastRaw.refBySample);
@@ -3407,8 +3873,11 @@ function speciesLabel(genome) {
   return `${name} [${acc}]`;
 }
 
-function matrixToTable(matrix, sampleOrder, ref, refBySample = new Map()) {
-  const rank = currentRank();
+function matrixToTable(matrix, sampleOrder, ref, refBySample = new Map(), { rank = null } = {}) {
+  // `rank` overrides the picker. One figure needs genus whatever the table is
+  // showing — the enterotype poles are genera — and re-ranking the page under
+  // the user to draw it would be a figure moving the matrix.
+  rank = rank ?? currentRank();
   // At species level a row is one genome, as it always was. Above it, rows are
   // SUMMED per taxon — which is the arithmetic a rank actually means, and the
   // reason it is done here rather than in the renderer: the exports must carry
@@ -3464,6 +3933,22 @@ function renderMatrix({ samples, rows, ref, refs, mixed }, progress = null) {
       : "";
     els.matrixRef.classList.toggle("hide", !line);
     els.matrixRef.classList.toggle("db-ref-local", !!ref?.local);
+  }
+  // What the whole run shares, from the archive: the biome it says these
+  // samples are, the study they came from, the machine that read them. Only
+  // fields every sample agrees on get here — the moment two disagree it is a
+  // property of the sample and belongs in its own panel, not printed once over
+  // all of them. Measured across 31,523 studies, this is where 78-100% of the
+  // filled descriptive fields belong: they are constant within a study, and a
+  // constant repeated down 85 rows of a table is noise.
+  if (els.matrixMeta) {
+    const facts = lastRaw?.metaBySample?.size
+      ? runFacts(lastRaw.metaBySample, samples) : [];
+    els.matrixMeta.innerHTML = facts.map((f) =>
+      `<span class="matrix-meta-bit">` +
+      (f.label ? `<i>${escapeHTML(f.label)}</i> ` : "") +
+      `${escapeHTML(f.value)}</span>`).join("");
+    els.matrixMeta.classList.toggle("hide", !facts.length);
   }
   // A second header row naming the catalogue each COLUMN was profiled against.
   // With one database loaded it repeats — and that repetition is the point: the

@@ -44,6 +44,12 @@ from typing import NoReturn
 REPO = pathlib.Path(__file__).resolve().parent.parent
 BIOMES = REPO / "web/db/biomes.json"
 MANIFEST = REPO / "web/db/prjeb83730.manifest.json"
+# What the ENA says these fifteen runs ARE — collected when, where, on what
+# machine. Written out, like DEMO_RUNS below and for the same reason: a build
+# script that needs the network to reproduce a committed file is a build script
+# that stops reproducing it. Refreshed by hand from
+#   filereport?accession=PRJEB83730&result=read_run&fields=<web/ena.js ENA_FIELDS>
+META = REPO / "web/db/prjeb83730.meta.json"
 LINEAGE = REPO / "web/db/lineage/human-gut.json"
 OUT_DIR = REPO / "web/demo"
 
@@ -149,6 +155,15 @@ def main():
             die(f"the export was not profiled against one catalogue: {sorted(labels)}")
 
     manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
+    sample_meta = json.loads(META.read_text(encoding="utf-8"))
+    missing_meta = [r for r in DEMO_RUNS if r not in sample_meta]
+    if missing_meta:
+        die(f"{META} says nothing about {', '.join(missing_meta)}")
+    # The metadata must describe THESE runs and no others: a stale file naming a
+    # run the demo dropped would ship a label for a column that is not there.
+    stray = [r for r in sample_meta if r not in DEMO_RUNS]
+    if stray:
+        die(f"{META} describes {', '.join(stray)}, which the demo does not include")
     # run accession -> the study's own sample name, from the manifest already in
     # the repo. No network, and it is the same mapping the ENA panel uses.
     #
@@ -244,6 +259,10 @@ def main():
         "samples": list(DEMO_RUNS),
         "matrix": matrix,
         "refBySample": {run: ref for run in DEMO_RUNS},
+        # The archive's own description of each sample, so the example shows what
+        # a run profiled from the ENA panel shows. Read back by fromSession() as
+        # an optional key: a session saved before this existed still opens.
+        "sampleMeta": sample_meta,
         "rank": "s",
         # Ignored by fromSession(), which validates only what it reads. Here so
         # the file explains itself when it is opened on its own.

@@ -170,6 +170,13 @@ export function toSession(state) {
     // sum of it, so saving the view would freeze the choice made at save time.
     matrix: state.matrix ?? {},
     refBySample: Object.fromEntries(state.refBySample ?? []),
+    // What the archive said about each sample, when it came from one. An
+    // optional key, and the format number does not move for it: fromSession
+    // builds a fixed object and ignores what it does not know, so a session
+    // saved by this page still opens on the one before it, and a session saved
+    // before this line still opens here — with no metadata, which is exactly
+    // what it had.
+    sampleMeta: Object.fromEntries(state.sampleMeta ?? []),
     rank: state.rank ?? "s",
   }, null, 1);
 }
@@ -198,6 +205,7 @@ export function fromSession(text) {
     sampleOrder: j.samples,
     matrix: j.matrix,
     refBySample: new Map(Object.entries(j.refBySample ?? {})),
+    sampleMeta: new Map(Object.entries(j.sampleMeta ?? {})),
     rank: typeof j.rank === "string" ? j.rank : "s",
     savedAt: j.savedAt ?? null,
   };

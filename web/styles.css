@@ -1108,6 +1108,48 @@ details[open] > .ena-summary::before { transform: rotate(90deg); }
   border-radius: var(--radius-md);
 }
 .fig-canvas svg { display: block; max-width: 100%; height: auto; }
+/* Zoomed in, the plot is a window on the ordination and can be dragged around
+   it. The cursor is the only thing that says so before the drag starts. */
+/* touch-action: a finger drags the window instead of scrolling the page — but
+   only once the plot is zoomed, so an untouched figure is still something you
+   can scroll past. */
+.fig-canvas.can-pan svg { cursor: grab; touch-action: none; }
+.fig-canvas.can-pan .pcoa-pt { cursor: pointer; }
+.fig-canvas.is-panning svg,
+.fig-canvas.is-panning .pcoa-pt { cursor: grabbing; }
+
+/* The zoom controls, in the tab strip beside Download SVG rather than floating
+   over the plot: a panel of buttons on top of a scatter plot covers the points
+   it is there to help with, and this is the one figure whose corner is where
+   the outliers are. */
+/* How many taxa the figures name. In the tab strip with the other figure
+   controls, and only while a figure it applies to is open. */
+.fig-topn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  font-size: 0.85rem;
+  color: var(--ink-soft);
+  cursor: pointer;
+}
+.fig-topn b { color: var(--ink); font-variant-numeric: tabular-nums; }
+.fig-topn input { width: 7rem; accent-color: var(--accent); cursor: pointer; }
+
+.fig-zoom { display: inline-flex; align-items: center; gap: 0.2rem; }
+.fig-zoom button {
+  min-width: 1.9rem;
+  padding: 0.2rem 0.5rem;
+  font-size: 0.85rem;
+  line-height: 1.2;
+}
+.fig-zoom button[disabled] { opacity: 0.45; cursor: default; }
+.fig-zoom-k {
+  min-width: 2.4rem;
+  text-align: center;
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  color: var(--ink-muted);
+}
 
 /* The plot and the sample opened from it, side by side while the window is wide
    enough and stacked when it is not — the pie is read against where the point
@@ -1190,6 +1232,30 @@ details[open] > .ena-summary::before { transform: rotate(90deg); }
      things rather than one line about one sample. */
   max-width: 46rem;
 }
+/* What the archive said about the sample, under the three numbers. Chips rather
+   than a table: most samples carry three or four of these and a table of
+   sixteen rows, twelve of them empty, is what the census says a page must not
+   draw. */
+.pie-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem 0.55rem;
+  font-size: 0.78rem;
+  color: var(--ink-soft);
+  line-height: 1.35;
+}
+.pie-meta-bit {
+  background: var(--bg-soft);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 0.1rem 0.4rem;
+  white-space: nowrap;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.pie-meta-bit i { color: var(--ink-muted); font-style: normal; }
+
 .pie-stats { display: flex; gap: 0.5rem; flex-wrap: wrap; }
 .pie-stat {
   flex: 1 1 6rem;
@@ -1767,3 +1833,73 @@ html[data-theme="dark"] .notice.biome-warning .notice-icon { color: #e07a63; }
   color: var(--ink-soft);
   font-weight: 500;
 }
+
+/* The run's own description, from the archive, under the reference line. Same
+   chips as the per-sample panel so the two read as one vocabulary; hidden
+   entirely when the samples came off a disk and nothing is known about them. */
+.matrix-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem 0.5rem;
+  margin: 0.35rem 0 0;
+  font-size: 0.78rem;
+  color: var(--ink-soft);
+}
+.matrix-meta-bit {
+  background: var(--bg-soft);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 0.1rem 0.45rem;
+}
+.matrix-meta-bit i { color: var(--ink-muted); font-style: normal; }
+
+/* A figure that will not be drawn, in the card the figure would have been in.
+   Not an error and not empty: the reason, at the size of the thing it replaces. */
+.fig-refusal {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  padding: 2rem;
+  text-align: center;
+  color: var(--ink-muted);
+}
+.fig-refusal b { color: var(--ink-soft); font-size: 1rem; }
+.fig-refusal span { max-width: 34rem; font-size: 0.88rem; line-height: 1.5; }
+
+/* The genera behind one sample's split. The point of the panel is that every
+   failure of the pole names — a genus missing, a genus reading 0.00 — is
+   invisible in a total and obvious in this list. */
+.pie-pole { display: flex; flex-direction: column; gap: 0.35rem; }
+.pie-pole-head {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  font-weight: 600;
+  color: var(--ink);
+  font-size: 0.9rem;
+}
+.pie-pole-head .share { font-family: var(--font-mono); color: var(--accent-ink); }
+.pie-pole-head .sum { font-weight: 400; color: var(--ink-muted); font-size: 0.8rem; }
+.pie-pole-genera {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.2rem 0.5rem;
+  font-size: 0.78rem;
+  color: var(--ink-soft);
+  padding-left: 0.2rem;
+}
+.pie-pole-genera i { font-style: italic; }
+.pie-pole-genera .zero { color: var(--ink-muted); }
+.pie-call {
+  font-size: 0.85rem;
+  color: var(--ink);
+  background: var(--bg-soft);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 0.35rem 0.6rem;
+}
+.pie-call b { color: var(--accent-ink); }
+.pie-call span { color: var(--ink-muted); font-size: 0.78rem; display: block; margin-top: 0.15rem; }

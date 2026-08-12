@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>PeekMicrobiome — upload-free, installation-free metagenomic profiling across biomes</title>
   <link rel="icon" type="image/svg+xml" href="./favicon.svg">
-  <link rel="stylesheet" href="./styles.css?v=49">
+  <link rel="stylesheet" href="./styles.css?v=50">
   <script>
     (function () {
       try {
@@ -297,6 +297,10 @@
            when the run started — not from the picker, which the user may have
            moved since. -->
       <div class="db-ref" id="matrixRef"></div>
+      <!-- What the archive says the whole run is, when every sample agrees:
+           biome, study, machine. Empty and hidden for FASTQs off a disk, which
+           carry no metadata at all. -->
+      <div class="matrix-meta hide" id="matrixMeta"></div>
       <div class="toolbar">
         <!-- Rows are one genome at species level, and summed per taxon above it.
              Hidden when the loaded catalogue ships no lineage ranks, rather than
@@ -343,7 +347,30 @@
           <button class="fig-tab" data-fig="composition" role="tab" type="button">Composition</button>
           <button class="fig-tab" data-fig="alpha" role="tab" type="button">Diversity</button>
           <button class="fig-tab" data-fig="pcoa" role="tab" type="button">PCoA</button>
+          <!-- The only figure that can refuse: its poles are three named genera
+               of the adult human gut, so it needs to know it is looking at one.
+               The tab is always here; what it says depends on the catalogue. -->
+          <button class="fig-tab" data-fig="enterotype" role="tab" type="button">Enterotype</button>
           <button id="figDownload" class="hide" type="button">Download SVG</button>
+          <!-- How many taxa are named one by one. Shown only where it does
+               something: the bars, and the pie of an open sample. The rest are
+               never dropped — they are kept together as "other taxa" — so the
+               figure still adds up to everything that was detected. -->
+          <label class="fig-topn hide" id="figTopN" title="How many taxa the composition bars and the pie name one by one, most abundant first. The rest are not dropped: they are kept together as “other taxa”, in grey, so the figure still accounts for everything detected. The pie names as many of them as its panel has room for and says how many that was.">
+            <span>Top <b id="figTopNOut">10</b> taxa</span>
+            <input type="range" id="figTopNRange" min="3" max="30" step="1" value="10"
+                   aria-label="How many taxa are named in the composition bars and the pie">
+          </label>
+          <!-- Only the ordination has a window that can be narrowed, so these
+               appear with it and go away with everything else. The wheel and the
+               drag do the same thing without leaving the plot; these are what
+               says the plot can be zoomed at all, and what a keyboard uses. -->
+          <span class="fig-zoom hide" id="figZoom" role="group" aria-label="Zoom the ordination">
+            <button type="button" data-zoom="out" aria-label="Zoom out" title="Show more of the ordination (or scroll down over the plot)">−</button>
+            <span class="fig-zoom-k" id="figZoomK" aria-live="off">×1.0</span>
+            <button type="button" data-zoom="in" aria-label="Zoom in" title="Zoom in on the sample opened beside the plot, or on the middle of it (scrolling up over the plot zooms about the pointer)">+</button>
+            <button type="button" data-zoom="reset" title="Show every sample again (or double-click the plot)">Reset</button>
+          </span>
           <!-- Metadata is read here and goes no further than this tab, like
                everything else dropped on this page. -->
           <label class="fig-meta" title="A CSV or TSV whose first column is the sample name and second is the group. Read in this tab only — it is never uploaded, like every other file here.">
@@ -479,7 +506,7 @@
        it fixed relative to that ancestor instead of to the window. -->
   <div class="fig-tip hide" id="figTip" role="status" aria-live="polite"></div>
 
-  <script type="module" src="./theme.js?v=49"></script>
-  <script type="module" src="./multi.js?v=49"></script>
+  <script type="module" src="./theme.js?v=50"></script>
+  <script type="module" src="./multi.js?v=50"></script>
 </body>
 </html>

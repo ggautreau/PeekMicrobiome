@@ -1243,9 +1243,11 @@ console.log("== the export formats other tools read ==");
 
 console.log("== the figures compute what they claim to ==");
 {
-  const { alphaDiversity, distanceMatrix, pcoa, compositionSvg, alphaSvg, pcoaSvg, pieSvg,
-    sampleFacts, eigenvaluesSym } =
+  const { alphaDiversity, distanceMatrix, pcoa, compositionSvg, alphaSvg, pcoaSvg, pcoaLayout,
+    pieSvg, sampleFacts, eigenvaluesSym, colourAt, NAMED_COLOURS } =
     await import("./figures.js");
+  // The palette itself is private; its size is what the ceiling is built from.
+  const PALETTE_SIZE = NAMED_COLOURS / 3;
 
   // Shannon has known values: n equally-abundant taxa give exactly ln(n), and
   // e^H gives n back. Anything else and the index is not the index.
@@ -1475,6 +1477,480 @@ console.log("== the figures compute what they claim to ==");
   check("the taxa past the top N are kept as one named slice, and the shares sum to 100",
     /other taxa \(25\)/.test(wide) && Math.abs(legend.reduce((a, v) => a + v, 0) - 100) < 0.3,
     `${legend.join(" + ")} = ${legend.reduce((a, v) => a + v, 0).toFixed(1)}`);
+
+  // The pie goes in the panel beside the plot, and that panel is a fixed card
+  // like the figure's own. Drawn at 470 x whatever it left a strip of empty card
+  // down one side of a 563 px panel and pushed the neighbour list out of the
+  // bottom of it. Given a box, it fills the box.
+  {
+    const discOf = (svg) => Number(/A ([\d.]+) [\d.]+ 0 /.exec(svg)?.[1] ?? 0);
+    const box = pieSvg(many, "A", { width: 563, height: 300 });
+    check("the pie is drawn to the box it is given",
+      box.includes('width="563"') && box.includes('height="300"') &&
+      box.includes('viewBox="0 0 563 300"'));
+    check("...with a disc sized to that box rather than to a fixed 84 px",
+      discOf(box) > 84 && discOf(pieSvg(many, "A")) === 84,
+      `${discOf(box)} in the box, ${discOf(pieSvg(many, "A"))} by default`);
+    // Nothing may be drawn below the box it was given: the legend rows and the
+    // disc share one height, and a legend that overran it would be clipped by
+    // the viewBox with no sign that anything was missing.
+    const ys = [...box.matchAll(/ y="([\d.]+)"/g)].map((m) => Number(m[1]));
+    check("...and nothing is drawn outside it",
+      Math.max(...ys) <= 300 && discOf(box) * 2 + 44 <= 300,
+      `lowest y ${Math.max(...ys)}, disc ${discOf(box) * 2 + 44}`);
+
+    // A box too small for what was asked names fewer taxa. Squeezing ten rows
+    // into eight rows of space would overlap them; dropping the last two into
+    // "other taxa" is the honest way to lose them, and the slice that says so is
+    // already there.
+    const short = pieSvg(many, "A", { width: 320, height: 170 });
+    const rowsIn = (svg) => (svg.match(/other taxa \((\d+)\)/) ?? [])[1];
+    check("a box too small for the count names fewer instead of overlapping its legend",
+      Number(rowsIn(short)) > Number(rowsIn(box)) &&
+      Math.max(...[...short.matchAll(/ y="([\d.]+)"/g)].map((m) => Number(m[1]))) <= 170,
+      `${rowsIn(short)} others at 320x170, ${rowsIn(box)} at 563x300`);
+
+    // Labels are clipped to the room there is. Clipped to a fixed 28 characters
+    // they were cut mid-word in a panel wide enough for the whole name.
+    const longName = {
+      samples: ["A"],
+      rows: [{ species: "Faecalibacterium prausnitzii_ABCDEFGHIJ", values: [60] },
+             { species: "Roseburia intestinalis_ABCDEFGHIJKLMNO", values: [40] }],
+    };
+    const cut = (svg) => (svg.match(/>([^<>]*…)</g) ?? []).length;
+    check("legend labels are clipped to the room there is, not to a fixed count",
+      cut(pieSvg(longName, "A", { width: 380, height: 300 })) > 0 &&
+      cut(pieSvg(longName, "A", { width: 900, height: 300 })) === 0,
+      `${cut(pieSvg(longName, "A", { width: 380, height: 300 }))} clipped at 380 px, ` +
+      `${cut(pieSvg(longName, "A", { width: 900, height: 300 }))} at 900 px`);
+  }
+
+  // ---- how many taxa are named ------------------------------------------------
+  //
+  // The page carries a slider for it now, so both figures have to take the
+  // number — and "the rest" must never quietly become "the missing": whatever is
+  // not named is kept as one grey slice, at every setting.
+  {
+    const swatches = (svg) => (svg.match(/width="10" height="10"/g) ?? []).length;
+    const deep = {
+      samples: ["A", "B", "C"],
+      rows: Array.from({ length: 30 }, (_, i) => ({
+        species: `Genus species_${i}`, genome: `g${i}`,
+        values: [30 - i, 20 + (i % 7), (i * 3) % 11],
+      })),
+    };
+    let bars = true, why = "";
+    for (const n of [3, 10, 20]) {
+      const svg = compositionSvg(deep, { topN: n, width: 900, height: 520 });
+      // One legend swatch per named taxon, plus the one for "other taxa".
+      if (swatches(svg) !== n + 1 || !svg.includes("other taxa")) {
+        bars = false; why = `${swatches(svg)} swatches and ${svg.includes("other taxa") ? "" : "no "}other at topN=${n}`;
+      }
+    }
+    check("the composition names as many taxa as it is asked for, and keeps the rest", bars, why);
+
+    // Twelve hues, and the slider goes past them: the thirteenth taxon must not
+    // come back in the same teal as the first, in the same figure, with a legend
+    // that then says two different things about one colour.
+    const wheelOfColours = Array.from({ length: NAMED_COLOURS }, (_, i) => colourAt(i));
+    check("every named taxon has a colour of its own, past the twelve hues too",
+      new Set(wheelOfColours).size === NAMED_COLOURS &&
+      wheelOfColours.every((c) => /^#[0-9a-f]{6}$/.test(c)),
+      `${new Set(wheelOfColours).size} distinct of ${NAMED_COLOURS}`);
+    // And that is a ceiling, not a slope: the mix toward white is capped, so the
+    // cycle after the last one repeats it. The slider is what must stay below.
+    check("...and the count says where they run out",
+      colourAt(NAMED_COLOURS) === colourAt(NAMED_COLOURS - PALETTE_SIZE),
+      `${colourAt(NAMED_COLOURS)} vs ${colourAt(NAMED_COLOURS - PALETTE_SIZE)}`);
+
+    // The control on the page is the one that can ask for too many, so it is the
+    // one checked against the figures it drives.
+    const page = readFileSync(here + "index.html", "utf8");
+    const slider = /<input[^>]*id="figTopNRange"[^>]*>/.exec(page)?.[0] ?? "";
+    const attr = (k) => Number(new RegExp(`${k}="(\\d+)"`).exec(slider)?.[1]);
+    check("the taxa slider cannot ask for more taxa than there are colours",
+      slider !== "" && attr("max") >= 10 && attr("max") <= NAMED_COLOURS,
+      `max=${attr("max")}, colours=${NAMED_COLOURS}`);
+    check("...and it starts at ten, where both figures used to be fixed",
+      attr("value") === 10 && attr("min") >= 1 && attr("min") < 10,
+      `min=${attr("min")} value=${attr("value")}`);
+    check("...and the figures take their colours from there",
+      compositionSvg(deep, { topN: 20, width: 900, height: 520 }).includes(colourAt(12)) &&
+      !compositionSvg(deep, { topN: 10, width: 900, height: 520 }).includes(colourAt(12)));
+
+    // The pie is the one drawn into a panel rather than into the whole card, so
+    // it is the one that has to work to honour the slider. One column of rows
+    // ran out at about thirteen names in the panel beside the plot, and every
+    // setting above that drew the same figure — a control that stops doing
+    // anything reads as a panel that is not being redrawn at all.
+    const panel = (n) => pieSvg(many, "A", { topN: n, width: 563, height: 284 });
+    const missed = [3, 10, 13, 16, 20, 30]
+      .map((n) => [n, Number((panel(n).match(/top (\d+) shown/) ?? [])[1])])
+      .filter(([n, shown]) => shown !== n);
+    check("the pie names every taxon the slider asks for, to its maximum",
+      missed.length === 0, missed.map(([n, s]) => `${n}→${s}`).join(" "));
+    // By flowing the legend into a second column, not by overlapping rows: the
+    // whole figure still has to stay inside the box it was given.
+    const wideSet = panel(30);
+    const columns = new Set([...wideSet.matchAll(/<rect x="([\d.]+)" y="[\d.]+" width="([\d.]+)" height="\2"/g)]
+      .map((m) => m[1]));
+    check("...by flowing its legend into columns, and staying inside the box",
+      columns.size === 2 &&
+      Math.max(...[...wideSet.matchAll(/ y="([\d.]+)"/g)].map((m) => Number(m[1]))) <= 284,
+      `${columns.size} legend column(s)`);
+
+    // Where even that is not enough, it names fewer and says how many.
+    const squat = pieSvg(many, "A", { topN: 15, width: 320, height: 170 });
+    check("...and where neither rows nor columns are enough, it says how many it showed",
+      /top 7 shown/.test(squat) && /other taxa \(23\)/.test(squat) &&
+      Math.max(...[...squat.matchAll(/ y="([\d.]+)"/g)].map((m) => Number(m[1]))) <= 170,
+      (squat.match(/top \d+ shown/) ?? [""])[0]);
+  }
+
+  // ---- the ordination, zoomed -------------------------------------------------
+  //
+  // Eighty-five samples in a card are a pile in the middle, and the pile is the
+  // interesting part. Zooming is a window in the ordination's own units, and the
+  // page has to be able to turn a pointer back into those units — so the window
+  // that was actually drawn is published on the figure itself.
+  {
+    const spread = {
+      samples: Array.from({ length: 30 }, (_, i) => `SAMPLE_${i}`),
+      rows: Array.from({ length: 24 }, (_, i) => ({
+        species: `t${i}`, genome: `g${i}`,
+        // Every sample a different profile, so the points do not land on top of
+        // each other and the window really does exclude some of them.
+        values: Array.from({ length: 30 }, (_, j) => ((i * 7 + j * 13) % 23) + (j % 5)),
+      })),
+    };
+    const layout = pcoaLayout(spread);
+    const plotOf = (svg) => {
+      const raw = /data-plot="([^"]+)"/.exec(svg)?.[1];
+      if (!raw) return null;
+      const [x0, x1, y0, y1, L, R, T, B] = raw.split(",").map(Number);
+      return { x0, x1, y0, y1, L, R, T, B };
+    };
+    const marks = (svg) => (svg.match(/data-sample="/g) ?? []).length;
+
+    const full = pcoaSvg(spread, { layout });
+    const p0 = plotOf(full);
+    check("the ordination publishes the window it drew, and the box it drew it in",
+      p0 !== null && p0.x1 > p0.x0 && p0.y1 > p0.y0 && p0.R > p0.L && p0.B > p0.T,
+      JSON.stringify(p0));
+    check("...and unzoomed that window holds every sample",
+      marks(full) === spread.samples.length, `${marks(full)} of ${spread.samples.length}`);
+
+    // Twice the zoom is half the window, in both directions.
+    const mid = { x: (p0.x0 + p0.x1) / 2, y: (p0.y0 + p0.y1) / 2 };
+    const p2 = plotOf(pcoaSvg(spread, { layout, zoom: { ...mid, k: 2 } }));
+    check("zooming by k narrows the window to a kth of the extent",
+      Math.abs((p2.x1 - p2.x0) / (p0.x1 - p0.x0) - 0.5) < 1e-9 &&
+      Math.abs((p2.y1 - p2.y0) / (p0.y1 - p0.y0) - 0.5) < 1e-9,
+      `${((p2.x1 - p2.x0) / (p0.x1 - p0.x0)).toFixed(4)} x ` +
+      `${((p2.y1 - p2.y0) / (p0.y1 - p0.y0)).toFixed(4)}`);
+
+    // A window dragged past the edge of the data is a blank card with axes on
+    // it, so the centre is clamped to keep the window inside the full extent.
+    const far = plotOf(pcoaSvg(spread, { layout, zoom: { x: 1e6, y: -1e6, k: 3 } }));
+    check("...and the window cannot be panned off the data",
+      far.x0 >= p0.x0 - 1e-9 && far.x1 <= p0.x1 + 1e-9 &&
+      far.y0 >= p0.y0 - 1e-9 && far.y1 <= p0.y1 + 1e-9,
+      `[${far.x0}, ${far.x1}] inside [${p0.x0}, ${p0.x1}]`);
+
+    // The samples drawn are exactly the samples in the window — no more, so the
+    // plot does not spill points over its own axes, and no fewer, so nothing in
+    // view is silently missing.
+    const near = layout.points[0];
+    const zoomed = pcoaSvg(spread, { layout, zoom: { x: near.x, y: near.y, k: 4 } });
+    const win = plotOf(zoomed);
+    const inWindow = layout.points.filter((p) =>
+      p.x >= win.x0 && p.x <= win.x1 && p.y >= win.y0 && p.y <= win.y1).length;
+    check("a zoomed plot draws the samples in the window and only those",
+      marks(zoomed) === inWindow && inWindow < spread.samples.length && inWindow > 0,
+      `${marks(zoomed)} drawn, ${inWindow} in the window, ${spread.samples.length} in all`);
+
+    // The payoff for zooming: thirty points are anonymous dots, and the handful
+    // left in a narrow window have room for their names.
+    // Written beside the marker, not in the <title> every point carries: the
+    // title is a native tooltip and thirty of them are thirty things nobody can
+    // see at once.
+    const named = (svg) => (svg.match(/<text[^>]*>SAMPLE_\d+<\/text>/g) ?? []).length;
+    check("...and names them once few enough are left to have room",
+      named(full) === 0 && inWindow <= 20 && named(zoomed) === inWindow,
+      `${named(full)} named of 30, ${named(zoomed)} named of ${inWindow} in the window`);
+    check("...and says on the figure itself that it is a corner of the ordination",
+      /zoom ×4\.0 — \d+ of 30 samples/.test(zoomed) && !/zoom ×/.test(full));
+
+    // The eigenproblem is solved once and the window is moved many times: a
+    // dragged plot redraws by the frame, and each frame must not be an O(n^3)
+    // Jacobi pass. So the drawing must take the layout it is handed.
+    check("a supplied layout is the one drawn, so panning never re-solves it",
+      pcoaSvg(spread, { layout }) === pcoaSvg(spread) &&
+      plotOf(pcoaSvg(spread, {
+        layout: { points: layout.points.map((p) => ({ x: p.x * 3, y: p.y })), explained: [0.5, 0.25] },
+      })).x1 > p0.x1 * 2.5);
+  }
+}
+
+console.log("== enterotypes: a split, and the names that carry it ==");
+{
+  const { enterotypeSplit, enterotypeSvg, ENTEROTYPE_POLES, ENTEROTYPE_GAP,
+    ENTEROTYPE_MIN_MARKERS } = await import("./figures.js");
+  const { fromSession } = await import("./exports.js");
+
+  // The demo, aggregated to genus the way matrixToTable does it at rank "g".
+  const lineage = JSON.parse(readFileSync(here + "db/lineage/human-gut.json", "utf8"));
+  const GEN = lineage.ranks.g, gi = lineage.rankKeys.indexOf("g");
+  const genusOfGenome = new Map(Object.entries(lineage.taxa).map(([g, t]) => [g, GEN[t[gi]]]));
+  const st = fromSession(readFileSync(here + "demo/gut-demo.session.json", "utf8"));
+  const by = new Map();
+  for (const [genome, m] of Object.entries(st.matrix)) {
+    const name = genusOfGenome.get(genome) ?? "unclassified";
+    let e = by.get(name);
+    if (!e) { e = { species: name, values: st.sampleOrder.map(() => 0) }; by.set(name, e); }
+    st.sampleOrder.forEach((s, i) => { e.values[i] += Number(m[s] ?? 0); });
+  }
+  const table = { samples: st.sampleOrder, rows: [...by.values()] };
+  const split = enterotypeSplit(table);
+  const of = (s) => split.find((r) => r.sample === s);
+
+  check("every sample is divided between the three poles, and the shares add to 100",
+    split.length === 15 &&
+    split.every((r) => Math.abs(r.shares.reduce((a, v) => a + v, 0) - 100) < 1e-9));
+
+  // THE MEASUREMENT THIS FEATURE EXISTS FOR. The 2011 marker names applied to a
+  // GTDB catalogue miss the genera that were split out of them, and it is not
+  // academic: subject MQB_086 inverts on Phocaeicola alone.
+  const b2011 = (s) => {
+    const row = table.rows.find((r) => r.species === "Bacteroides");
+    return row.values[table.samples.indexOf(s)];
+  };
+  const p2011 = (s) => {
+    const row = table.rows.find((r) => r.species === "Prevotella");
+    return row.values[table.samples.indexOf(s)];
+  };
+  const bothPoles = (s) => {
+    const r = of(s);
+    return { B: r.sums[0], P: r.sums[1] };
+  };
+  check("a rule written from the 2011 names inverts a real sample; the GTDB names do not",
+    ["ERR14098625", "ERR14098650"].every((s) => {
+      const { B, P } = bothPoles(s);
+      return b2011(s) < p2011(s) && B > P;       // 2011 says Prevotella, GTDB says Bacteroides
+    }),
+    ["ERR14098625", "ERR14098650"].map((s) =>
+      `${s}: 2011 ${b2011(s).toFixed(2)}v${p2011(s).toFixed(2)}, GTDB ` +
+      `${bothPoles(s).B.toFixed(2)}v${bothPoles(s).P.toFixed(2)}`).join(" | "));
+  // Bare `Ruminococcus` is not merely zero here — it has no row at all, its
+  // genomes having been detected in none of the fifteen samples. A rule looking
+  // for that one name would find nothing and could not tell that apart from a
+  // gut with no Ruminococcus in it.
+  const bare = table.rows.find((r) => r.species === "Ruminococcus");
+  check("...and bare Ruminococcus carries nothing, so the suffixed genera are the pole",
+    (bare === undefined || bare.values.every((v) => v === 0)) &&
+    split.every((r) => r.sums[2] > 0),
+    bare === undefined ? "no bare Ruminococcus row at all" : "present but all zero");
+
+  // A name is only printed with more daylight than the page's own noise. The
+  // example ships the measurement: seven samples sequenced twice.
+  const subject = new Map(readFileSync(here + "demo/gut-demo.groups.csv", "utf8")
+    .trim().split(/\r?\n/).slice(1).map((l) => l.split(",").map((c) => c.trim())));
+  const said = (r) => (!r.call ? "none"
+    : r.call === "between" ? `between ${r.pair.join("+")}` : ENTEROTYPE_POLES[r.lead].key);
+  const pairs = new Map();
+  for (const r of split) {
+    const k = subject.get(r.sample);
+    if (!pairs.has(k)) pairs.set(k, []);
+    pairs.get(k).push(said(r));
+  }
+  const disagree = [...pairs].filter(([, v]) => v.length === 2 && v[0] !== v[1]);
+  check("what the page says never changes between two sequencings of one sample",
+    disagree.length === 0,
+    disagree.map(([k, v]) => `${k}: ${v.join(" vs ")}`).join(" | "));
+  // And that is not free: the same rule with no gap at all does flip one.
+  const naive = [...pairs].filter(([, v]) => v.length === 2);
+  check("...which a bare 'whichever pole leads' rule does not manage",
+    split.filter((r) => r.call === "between").length > 0 &&
+    naive.some(([k]) => {
+      const two = split.filter((r) => subject.get(r.sample) === k);
+      return two[0].lead !== two[1].lead;
+    }),
+    "MQB_032 leads on different poles in its two libraries");
+
+  check("the gap that licenses a name is the measured one, not a round number",
+    ENTEROTYPE_GAP > 5 && ENTEROTYPE_GAP < 15 &&
+    split.filter((r) => r.call === "between").every((r) => r.gap < ENTEROTYPE_GAP) &&
+    split.filter((r) => r.call && r.call !== "between").every((r) => r.gap >= ENTEROTYPE_GAP));
+  // The pair is named in pole order, so one finding has one wording.
+  check("...and a sample between two poles names them in a fixed order",
+    split.filter((r) => r.call === "between")
+      .every((r) => r.pair[0] < r.pair[1]));
+
+  // Exact names. /^Bacteroides/ takes Bacteroides_F, which is a LACHNOSPIRACEAE.
+  const trap = {
+    samples: ["X"],
+    rows: [{ species: "Bacteroides", values: [10] }, { species: "Bacteroides_F", values: [30] },
+      { species: "Parabacteroides", values: [40] }, { species: "Phocaeicola", values: [5] },
+      { species: "Prevotella", values: [8] }, { species: "Faecalibacterium", values: [4] }],
+  };
+  const t = enterotypeSplit(trap)[0];
+  check("the poles match genus names exactly — no prefix, no substring",
+    t.sums[0] === 15 && t.sums[1] === 8 && t.sums[2] === 4,
+    `B ${t.sums[0]} (must be 15, not 45 with Bacteroides_F nor 85 with Parabacteroides)`);
+
+  // Not enough marker abundance is not a position.
+  const thin = enterotypeSplit({
+    samples: ["Y"], rows: [{ species: "Bacteroides", values: [1] }, { species: "Blautia", values: [99] }],
+  })[0];
+  check("a sample with almost nothing on these axes gets no name and no point",
+    thin.call === "" && thin.markers < ENTEROTYPE_MIN_MARKERS &&
+    !enterotypeSvg({ samples: ["Y"], rows: [{ species: "Bacteroides", values: [1] }] })
+      .includes('data-sample="Y"'));
+
+  const svg = enterotypeSvg(table, { width: 562, height: 586 });
+  check("the triangle is drawn to its box, names its three corners, and carries every point",
+    svg.includes('width="562"') && svg.includes('height="586"') &&
+    ENTEROTYPE_POLES.every((p) => svg.includes(`>${p.label}</text>`)) &&
+    (svg.match(/data-sample=/g) ?? []).length === 15);
+  // Corner labels hung off the corners ran out of the viewBox: the left one drew
+  // as "acteroides" in the browser. Everything stays inside the box.
+  const xs = [...svg.matchAll(/ x="(-?[\d.]+)"/g)].map((m) => Number(m[1]));
+  const ys = [...svg.matchAll(/ y="(-?[\d.]+)"/g)].map((m) => Number(m[1]));
+  check("...and nothing is anchored outside it",
+    Math.min(...xs) >= 0 && Math.max(...xs) <= 562 &&
+    Math.min(...ys) >= 0 && Math.max(...ys) <= 586,
+    `x ${Math.min(...xs)}..${Math.max(...xs)}, y ${Math.min(...ys)}..${Math.max(...ys)}`);
+}
+
+console.log("== what the archive said about a sample ==");
+{
+  // The ENA answers with more than file URLs, and the page was throwing all of
+  // it away. Every rule below comes from a census of 1,112,796 metagenomic runs
+  // over 31,523 studies: these are the shapes that actually arrive, not the
+  // shapes the schema allows.
+  const { isMissing, usableMeta, metaLines, runFacts, fieldCoverage } =
+    await import("./meta.js");
+  const { ENA_FIELDS, ENA_META_FIELDS, parseRunRow } = await import("./ena.js");
+
+  // A field name the portal does not know answers HTTP 400 for the WHOLE
+  // request — fastq_ftp included — so a typo here does not degrade the page, it
+  // stops it profiling anything. The live bench checks the names against the
+  // API; this checks the shape, which is what a typo usually breaks.
+  const names = ENA_FIELDS.split(",");
+  check("the ENA field list is a clean comma list, no spaces, no duplicates",
+    names.every((n) => /^[a-z_]+$/.test(n)) && new Set(names).size === names.length,
+    names.filter((n) => !/^[a-z_]+$/.test(n)).join(" ") || `${names.length} fields`);
+  check("...and it asks for everything the descriptive half needs",
+    ENA_META_FIELDS.every((f) => names.includes(f)) &&
+    ["run_accession", "fastq_ftp", "fastq_bytes", "read_count", "library_layout"]
+      .every((f) => names.includes(f)),
+    ENA_META_FIELDS.filter((f) => !names.includes(f)).join(" ") || "all present");
+
+  // The fields measured empty across the whole archive must not be asked for:
+  // each one is a permanent column of dashes, and the page's own rule is that
+  // an absent value produces no row rather than an empty one.
+  const DEAD = ["age", "disease", "host_status", "host_phenotype", "host_genotype",
+    "dev_stage", "salinity", "host_body_site", "ph", "first_public"];
+  check("...and does not ask for the fields the census measured empty",
+    DEAD.every((f) => !names.includes(f)), DEAD.filter((f) => names.includes(f)).join(" "));
+
+  // Saying nothing, in the four ways the archive says it.
+  const nothings = ["", "  ", "missing", "Missing", "not applicable", "NOT COLLECTED",
+    "not provided", "restricted access", "N/A", "na", "unknown", "none", "-",
+    "missing: third party data", "missing: data agreement established pre-2023",
+    "not applicable: control sample"];
+  check("every way the archive says nothing is read as nothing",
+    nothings.every(isMissing), nothings.filter((v) => !isMissing(v)).join(" | "));
+  // Whole-cell, never a prefix: a cohort whose subjects are NA1..NA9 must not
+  // disappear because one sentinel is spelled "na".
+  const somethings = ["NA1", "NA12878", "None the wiser", "Missingham", "not-applicable-lab",
+    "2022", "France", "Homo sapiens", "0"];
+  check("...and a real value that merely starts like one is kept",
+    somethings.every((v) => !isMissing(v)), somethings.filter(isMissing).join(" | "));
+
+  const row = {
+    run_accession: "ERR1", library_layout: "SINGLE", read_count: "100",
+    fastq_ftp: "ftp.sra.ebi.ac.uk/vol1/fastq/ERR1/ERR1.fastq.gz", fastq_bytes: "10",
+    sample_accession: "SAMEA1", study_accession: "PRJEB1", study_title: "A study",
+    sample_title: "Metagenome or environmental sample from human gut metagenome",
+    sample_alias: "MQB_014", scientific_name: "human gut metagenome",
+    instrument_model: "Ion GeneStudio S5 Prime", collection_date: "2022",
+    country: "France:Nantes", lat: "47.218", lon: "-1.553",
+    isolation_source: "faeces", host_scientific_name: "Homo sapiens",
+    host_sex: "not provided", library_selection: "RANDOM",
+  };
+  const parsed = parseRunRow(row);
+  check("a resolved run carries what the archive said about its sample",
+    parsed.meta?.sample_alias === "MQB_014" && parsed.meta?.collection_date === "2022" &&
+    parsed.meta?.host_sex === "not provided",
+    JSON.stringify(parsed.meta ?? null).slice(0, 120));
+  check("...raw, so the judging happens in exactly one place",
+    Object.keys(parsed.meta).every((k) => ENA_META_FIELDS.includes(k)) &&
+    !("fastq_ftp" in parsed.meta));
+
+  const clean = usableMeta(parsed.meta);
+  check("the archive-generated title is dropped, the submitter's name is kept",
+    clean.sample_title === undefined && clean.sample_alias === "MQB_014");
+  check("...the sentinel is dropped even though the cell was full",
+    clean.host_sex === undefined && "host_sex" in parsed.meta);
+  check("...the two-level country is split rather than printed with its colon",
+    clean.country === "France" && clean.region === "Nantes");
+  check("...and the coordinates survive as numbers", clean.lat === 47.218 && clean.lon === -1.553);
+
+  // Null Island: 885 samples archive-wide sit at exactly 0/0, 424 of them in one
+  // study that also says France and Germany. A confident dot in the Atlantic.
+  const nullIsland = usableMeta({ ...parsed.meta, lat: "0.0", lon: "0" });
+  check("a sample at exactly 0.0 N 0.0 E has no coordinates, it has a typo",
+    nullIsland.lat === undefined && nullIsland.country === "France");
+  check("...but a real zero on one axis alone is a place",
+    usableMeta({ lat: "0.0", lon: "-51.06" }).lat === 0);
+
+  const model = usableMeta({ instrument_model: "unspecified", scientific_name: "soil metagenome" });
+  check("an instrument of 'unspecified' is not an instrument",
+    model.instrument_model === undefined && model.scientific_name === "soil metagenome");
+  check("a title identical to the taxon says nothing the page does not show",
+    usableMeta({ sample_title: "Human gut metagenome", scientific_name: "human gut metagenome" })
+      .sample_title === undefined);
+
+  // A sample off the user's own disk has no archive row at all, and that is the
+  // common case: the panel must render nothing rather than a table of dashes.
+  check("no metadata gives no lines, not empty ones",
+    metaLines(null).length === 0 && metaLines({}).length === 0 &&
+    metaLines({ collection_date: "not collected", country: "missing" }).length === 0);
+  const lines = metaLines(parsed.meta);
+  check("...and what is shown is ordered, labelled, and free of what was dropped",
+    lines.map((l) => l.key).join(",") === "sample_alias,host_scientific_name," +
+      "isolation_source,collection_date,country,region,coords,instrument_model," +
+      "sample_accession" &&
+    lines.every((l) => l.value !== "") && lines[3].label === "collected",
+    lines.map((l) => l.key).join(","));
+  // RANDOM is what shotgun IS: 96% of runs say it and it never varies. PCR is
+  // the one worth seeing, because it says why a profile might be skewed.
+  check("...a library selection of RANDOM is not news; PCR is",
+    !metaLines({ library_selection: "RANDOM" }).length &&
+    metaLines({ library_selection: "PCR" })[0]?.value === "PCR");
+
+  // The line above the table: only what every sample agrees on. One sample
+  // disagreeing makes it a property of the sample, not of the run.
+  const store = new Map([
+    ["A", { scientific_name: "human gut metagenome", study_title: "S", instrument_model: "NovaSeq" }],
+    ["B", { scientific_name: "human gut metagenome", study_title: "S", instrument_model: "NovaSeq" }],
+  ]);
+  const agreed = runFacts(store, ["A", "B"]).map((f) => f.key);
+  check("the run line carries what every sample agrees on",
+    agreed.includes("scientific_name") && agreed.includes("instrument_model"));
+  store.set("B", { ...store.get("B"), instrument_model: "DNBSEQ-G400" });
+  const split = runFacts(store, ["A", "B"]).map((f) => f.key);
+  check("...and drops a field the moment two samples disagree — that is the batch",
+    !split.includes("instrument_model") && split.includes("scientific_name"),
+    split.join(","));
+  store.set("C", {});
+  check("...and drops it when a sample has no value at all, rather than speaking for it",
+    runFacts(store, ["A", "B", "C"]).length === 0);
+
+  const cover = fieldCoverage(store, ["A", "B", "C"]);
+  check("coverage counts samples, so a field held by two of three is not a grouping",
+    cover.get("scientific_name") === 2 && (cover.get("host_sex") ?? 0) === 0);
 }
 
 console.log("== the worked example is what it claims to be ==");
@@ -1489,6 +1965,34 @@ console.log("== the worked example is what it claims to be ==");
   const demoText = readFileSync(here + "demo/gut-demo.session.json", "utf8");
   const groupsText = readFileSync(here + "demo/gut-demo.groups.csv", "utf8");
   const st = fromSession(demoText);   // throws on anything that is not a session
+
+  // The example is also the only place the metadata feature can be SEEN without
+  // a 433 MB database: it ships what the ENA said about its own fifteen runs, so
+  // the run line above the matrix and the chips in the sample panel have
+  // something to draw. Checked against the runs it claims, because a stale
+  // metadata block would label columns that are not there.
+  {
+    const { usableMeta, runFacts } = await import("./meta.js");
+    const meta = st.sampleMeta ?? new Map();
+    check("the example carries what the archive said about each of its runs",
+      meta.size === st.sampleOrder.length &&
+      st.sampleOrder.every((s) => meta.has(s)),
+      `${meta.size} described of ${st.sampleOrder.length}`);
+    const one = usableMeta(meta.get("ERR14098585"));
+    check("...cleaned, so the archive's own boilerplate never reaches the page",
+      one.sample_alias === "MQB_023" && one.collection_date === "2022" &&
+      one.country === "France" && one.sample_title === undefined &&
+      one.sample_description === undefined,
+      JSON.stringify(one));
+    // The two runs of a subject were sequenced on different machines at
+    // different depths, which is the whole reason the example is what it is —
+    // so the instrument must NOT reach the line that speaks for every sample.
+    const shared = runFacts(meta, st.sampleOrder).map((f) => f.key);
+    check("...and the run line says only what all fifteen agree on",
+      shared.includes("scientific_name") && shared.includes("study_title") &&
+      !shared.includes("instrument_model"),
+      shared.join(",") || "(nothing)");
+  }
 
   check("the example loads through the same reader as any saved session",
     st.sampleOrder.length >= 10 && Object.keys(st.matrix).length > 100,

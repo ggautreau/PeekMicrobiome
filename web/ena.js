@@ -46,9 +46,52 @@ export const ENA_PORTAL_API = "https://www.ebi.ac.uk/ena/portal/api/filereport";
 // empty table — a correct answer that is indistinguishable from a broken one.
 // PRJNA1270378 is the case that surfaced this: AMPLICON / PCR / Nanopore,
 // vaginal metagenome, zero detections and no explanation.
+// The second block is what the run SAYS ABOUT ITSELF: where it came from, when
+// it was collected, what it was taken from. None of it is needed to profile —
+// all of it is needed to read the result, and a column of accessions with no
+// idea what they are is what the results table used to be.
+//
+// It rides along in the same request. Measured on PRJEB83730 (85 runs):
+// 9 fields = 27.7 kB / 0.12 s, 24 fields = 66.4 kB / 0.13 s. One call either way.
+//
+// Chosen from a census of 1,112,796 metagenomic runs across 31,523 studies,
+// counted per study rather than per run. Every name here is filled in a
+// meaningful share of studies; the ones that look useful and are NOT here were
+// measured empty and are listed with their numbers below.
+//
+// NOT ASKED FOR, and why — each is a permanent column of dashes:
+//   age, disease, host_status, host_phenotype, host_genotype, dev_stage
+//     0 of 949,812 samples. They exist in the schema at both levels.
+//   host_body_site  0.8% of studies — the field a microbiome tool wants most.
+//   ph              ≤1%, including 0% of soil studies at any useful threshold.
+//   salinity        0 of 12,009 studies (the portal mapping is broken; the
+//                   sample XML does carry it, which is a separate request).
+//   first_public    100% filled and it is the ARCHIVE's release date. Printed
+//                   next to a sample it reads as when the sample was taken.
+//   host            46%, but free text: "Soil" x4,183, "Water" x803, "9606".
+//                   host_scientific_name is the taxonomy-validated one.
+//
+// ONE BAD NAME KILLS THE WHOLE REQUEST: the portal answers a single unknown
+// field with HTTP 400 and no rows at all — including fastq_ftp, so nothing can
+// be profiled. scripts/ena-test/live.mjs checks every name here against
+// returnFields for exactly that reason.
 export const ENA_FIELDS =
   "run_accession,library_layout,fastq_ftp,fastq_bytes,read_count," +
-  "library_strategy,library_source,instrument_platform,base_count";
+  "library_strategy,library_source,instrument_platform,base_count," +
+  "sample_accession,study_accession,study_title,sample_title,sample_alias," +
+  "sample_description,scientific_name,instrument_model,collection_date," +
+  "country,lat,lon,isolation_source,host_scientific_name,host_sex," +
+  "library_selection";
+
+// The descriptive half of a run row, carried as it arrived. Trimmed, never
+// judged: what counts as a usable value is web/meta.js's job, and doing it here
+// would put the same rules in two places.
+export const ENA_META_FIELDS = [
+  "sample_accession", "study_accession", "study_title", "sample_title",
+  "sample_alias", "sample_description", "scientific_name", "instrument_model",
+  "collection_date", "country", "lat", "lon", "isolation_source",
+  "host_scientific_name", "host_sex", "library_selection",
+];
 
 // An INSDC accession: three to six letters then digits. PRJEB83730, SAMEA…,
 // ERR14098592, SRR…, ERS…, ERX…, ERP… all fit; nothing else is sent to the API.
@@ -250,8 +293,18 @@ export function parseRunRow(row, { allowHosts = ENA_FASTQ_HOSTS } = {}) {
   const strategy = String(row?.library_strategy ?? "").trim();
   const source = String(row?.library_source ?? "").trim();
   const platform = String(row?.instrument_platform ?? "").trim();
+  // Everything the row says about the sample, kept as one object rather than
+  // sixteen properties: it is passed through, stored and rendered as a unit, and
+  // a per-field list here would have to be extended in four files every time a
+  // field is added.
+  const meta = {};
+  for (const f of ENA_META_FIELDS) {
+    const v = String(row?.[f] ?? "").trim();
+    if (v) meta[f] = v;
+  }
+
   const base = {
-    run, declaredLayout, reads, bases, strategy, source, platform,
+    run, declaredLayout, reads, bases, strategy, source, platform, meta,
     // Carried on the run rather than computed at render time: whether a run can
     // be profiled at all is a property of the run, and both the picker and the
     // per-sample row need the same answer.

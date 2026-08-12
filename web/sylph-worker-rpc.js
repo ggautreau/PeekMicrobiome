@@ -157,7 +157,17 @@
 // are taken over the whole spectrum now (a Jacobi eigenvalue pass), and a
 // repeated eigenvalue no longer collapses PCo2 to zero. The neighbour list can
 // also be sorted by Euclidean distance; the stylesheet carries its switch.
-export const WORKER_VERSION = "49";
+// v50: the ordination zooms and pans, how many taxa the figures name is a
+// slider rather than a constant, the pie is drawn to the panel it is in rather
+// than to a width of its own choosing, and a neighbour's bar is how CLOSE it is
+// instead of how far. The ENA lookup also asks for what a run SAYS about itself
+// — 16 descriptive fields in the same request — and the page shows it: what the
+// run shares above the matrix, what one sample is in its own panel. multi.js
+// imports meta.js, which a page on v49 does not have, and the stylesheet
+// carries the chips both are drawn as. A page on v49 pairs the new markup with
+// a stylesheet that has no zoom controls and no slider to style — they would
+// render as bare buttons and an unstyled range input in the tab strip.
+export const WORKER_VERSION = "50";
 
 // ---- memory64 capability probe ----------------------------------------------
 

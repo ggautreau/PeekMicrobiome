@@ -23,7 +23,33 @@ const REPO = path.resolve(HERE, "../..");
 const ACC = process.argv[2] ?? "ERR14098592";
 const MAX_READS = Number(process.argv[3] ?? 20_000_000);
 
-const { resolveAccession, urlSource, readCountVerdict } = await import(path.join(REPO, "web/ena.js"));
+const { resolveAccession, urlSource, readCountVerdict, ENA_FIELDS, ENA_META_FIELDS } =
+  await import(path.join(REPO, "web/ena.js"));
+
+// Every field name, against the API's own list, BEFORE anything else runs.
+//
+// The portal answers one unknown name with `HTTP 400: Invalid fieldName(s)
+// supplied` and no rows at all — so a typo in ENA_FIELDS does not lose a column,
+// it loses fastq_ftp, and the page stops being able to profile anything. Nothing
+// else catches it: node-suite.mjs serves its own fixtures and asserts only
+// accession/result/format on the query, and the field list is the one part of
+// that URL the ENA gets to have an opinion about.
+{
+  const url = "https://www.ebi.ac.uk/ena/portal/api/returnFields?result=read_run&format=json";
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`returnFields: HTTP ${res.status}`);
+  const known = new Set((await res.json()).map((f) => f.columnId));
+  const asked = ENA_FIELDS.split(",");
+  const bad = asked.filter((f) => !known.has(f));
+  if (bad.length) {
+    throw new Error(`ENA_FIELDS names ${bad.length} field(s) the portal does not have: ` +
+      `${bad.join(", ")} — this returns HTTP 400 for the WHOLE request, fastq_ftp included`);
+  }
+  const orphan = ENA_META_FIELDS.filter((f) => !asked.includes(f));
+  if (orphan.length) throw new Error(`ENA_META_FIELDS asks for what ENA_FIELDS never requests: ${orphan.join(", ")}`);
+  console.log(`ENA_FIELDS: ${asked.length} fields, all known to the portal ` +
+    `(${ENA_META_FIELDS.length} of them descriptive)`);
+}
 const { streamTrimMulti, streamTrimPair } = await import(path.join(REPO, "web/fastq-trim.js"));
 const initWasm = (await import(path.join(REPO, "web/sylph-pkg/sylph_wasm.js"))).default;
 const { Profiler } = await import(path.join(REPO, "web/sylph-pkg/sylph_wasm.js"));
