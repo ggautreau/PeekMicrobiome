@@ -167,7 +167,14 @@
 // carries the chips both are drawn as. A page on v49 pairs the new markup with
 // a stylesheet that has no zoom controls and no slider to style — they would
 // render as bare buttons and an unstyled range input in the tab strip.
-export const WORKER_VERSION = "50";
+// v51: the worked example is a different study. PRJEB83730 was the
+// "metaquantibiote" contamination experiment — seven of its fifteen runs were a
+// donor's stool with 0.1% to 10% of another donor's added — and it is replaced
+// by eighteen runs of PRJNA728374, six people sampled three times over eight
+// weeks. THE DATA CHANGING IS WHY THIS NUMBER MOVED: web/demo/*.json is fetched
+// with ?v=WORKER_VERSION, so a visitor who had loaded the old example kept it
+// otherwise, and got the new page's banner over the old study's numbers.
+export const WORKER_VERSION = "51";
 
 // ---- memory64 capability probe ----------------------------------------------
 

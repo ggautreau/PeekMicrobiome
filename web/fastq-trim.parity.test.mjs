@@ -1976,6 +1976,26 @@ console.log("== the worked example is what it claims to be ==");
       shared.join(",") || "(nothing)");
   }
 
+  // The page and the data it ships must name the same study. They are two files
+  // that a change touches separately, and when they disagree the result is not a
+  // broken page but a lying one: after the example was replaced, a returning
+  // visitor got the new banner — "eighteen runs of PRJNA728374, six volunteers in
+  // Singapore" — printed over fifteen cached runs of a French contamination
+  // experiment, because the demo is fetched with ?v=WORKER_VERSION and the
+  // version had not moved with the data.
+  {
+    const page = readFileSync(here + "multi.js", "utf8");
+    const named = /const DEMO_STUDY = "([^"]+)"/.exec(page)?.[1];
+    const shipped = JSON.parse(demoText).demo?.study;
+    check("the page and the example it ships name the same study",
+      named && shipped && named === shipped, `page says ${named}, data says ${shipped}`);
+    // And the count in the file is the count the banner will compute from it.
+    check("...and the same number of runs",
+      /(\d+) public runs/.exec(JSON.parse(demoText).demo?.note ?? "")?.[1] ===
+        String(st.sampleOrder.length),
+      `${st.sampleOrder.length} samples`);
+  }
+
   check("the example loads through the same reader as any saved session",
     st.sampleOrder.length >= 10 && Object.keys(st.matrix).length > 100,
     `${st.sampleOrder.length} samples x ${Object.keys(st.matrix).length} rows`);

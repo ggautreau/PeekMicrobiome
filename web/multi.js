@@ -12,24 +12,24 @@ import {
   sylphWorkerRpc, detectMemory64, chooseWasmBits, WORKER_VERSION,
   readsBudget, readsBudgetNote, readsOverBudgetNote, loadedBuildNote, fmtReads,
   progressFraction, basesForReads, BUDGET_READ_BP,
-} from "./sylph-worker-rpc.js?v=50";
+} from "./sylph-worker-rpc.js?v=51";
 import {
   dbCacheClient, fmtRate, fmtEta, cacheSummary, assertSameDatabase,
-} from "./db-cache.js?v=50";
-import { matePattern, stripFastqExt } from "./sample-naming.js?v=50";
+} from "./db-cache.js?v=51";
+import { matePattern, stripFastqExt } from "./sample-naming.js?v=51";
 import {
   resolveAccession, validateAccession, ASSUMED_BPS,
   downloadEstimate, readCountVerdict, expectedProfiledReads,
-} from "./ena.js?v=50";
-import { normaliseMarkers, screenVerdict, SCREENING_DB, SCREENING_MARKERS } from "./screening.js?v=50";
-import { metaLines, runFacts } from "./meta.js?v=50";
-import { clusterTable, MAX_ROWS as CLUSTER_MAX_ROWS } from "./cluster.js?v=50";
+} from "./ena.js?v=51";
+import { normaliseMarkers, screenVerdict, SCREENING_DB, SCREENING_MARKERS } from "./screening.js?v=51";
+import { metaLines, runFacts } from "./meta.js?v=51";
+import { clusterTable, MAX_ROWS as CLUSTER_MAX_ROWS } from "./cluster.js?v=51";
 import { compositionSvg, alphaSvg, pcoaSvg, pcoaLayout, pieSvg, sampleFacts, METRICS, alphaDiversity,
   enterotypeSvg, enterotypeSplit, ENTEROTYPE_POLES, ENTEROTYPE_GAP, ENTEROTYPE_MIN_MARKERS }
-  from "./figures.js?v=50";
-import { toMetaphlan, toBiom, toSylphTsv, toSession, fromSession } from "./exports.js?v=50";
+  from "./figures.js?v=51";
+import { toMetaphlan, toBiom, toSylphTsv, toSession, fromSession } from "./exports.js?v=51";
 import { currentMode as themeMode, setMode as setThemeMode, applyTheme,
-  loadSchedule, saveSchedule } from "./theme.js?v=50";
+  loadSchedule, saveSchedule } from "./theme.js?v=51";
 import {
   fetchCatalog, fallbackCatalog, renderDbSelect, biomeForUrl, biomeNote,
   mgnifyGenomeUrl,
@@ -37,7 +37,7 @@ import {
   makeDbRef, sameDbRef, refLine, refShort, refCommentLines, refSlug, genomeCountMismatch,
   rememberBiome, recallBiome, catalogueName, LOCAL_VALUE,
   selectionMatchesLoaded, notLoadedNote, refMetaMismatch,
-} from "./biomes.js?v=50";
+} from "./biomes.js?v=51";
 
 const $ = (id) => document.getElementById(id);
 const els = {
