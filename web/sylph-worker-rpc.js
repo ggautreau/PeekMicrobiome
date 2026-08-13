@@ -182,7 +182,10 @@
 // of two; INCOMPLETE is amber, and the status colours clear AA in both themes.
 // index.html and the stylesheet carry both new controls — a page on v51 pairs
 // this markup with a stylesheet that has neither.
-export const WORKER_VERSION = "52";
+// v53: the wheel over the ordination finishes its gesture instead of handing the
+// page back the moment the zoom runs out of room — one flick used to dezoom and
+// then scroll. The cluster note drops its runner-up k.
+export const WORKER_VERSION = "53";
 
 // ---- memory64 capability probe ----------------------------------------------
 

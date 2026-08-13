@@ -212,6 +212,20 @@ console.log("== the ENA read_count is not in the unit the worker reports ==");
     /enaReads:\s*expectedProfiledReads\(/.test(src));
 }
 
+console.log("== the wheel over the ordination finishes its gesture ==");
+{
+  const src = read("web/multi.js");
+  // Handing the wheel back to the page as soon as the zoom cannot move meant one
+  // flick of a trackpad zoomed out to the end of the range and then scrolled the
+  // page with what was left of the same flick: two things from one gesture.
+  check("a wheel that cannot zoom any further is still swallowed mid-gesture",
+    /sameGesture/.test(src) && /const stuck = /.test(src) &&
+    /if \(stuck && !sameGesture\) return;/.test(src));
+  // ...but not for ever: the plot must not be a hole a scroll disappears into.
+  check("...and a fresh gesture at the end of the range belongs to the page",
+    /wheelAt = now;/.test(src) && /now - wheelAt < \d+/.test(src));
+}
+
 console.log("== a saved session can be opened on a page with nothing on it ==");
 {
   const html = read("web/index.html");

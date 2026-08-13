@@ -12,25 +12,25 @@ import {
   sylphWorkerRpc, detectMemory64, chooseWasmBits, WORKER_VERSION,
   readsBudget, readsBudgetNote, readsOverBudgetNote, loadedBuildNote, fmtReads,
   progressFraction, basesForReads, BUDGET_READ_BP,
-} from "./sylph-worker-rpc.js?v=52";
+} from "./sylph-worker-rpc.js?v=53";
 import {
   dbCacheClient, fmtRate, fmtEta, cacheSummary, assertSameDatabase,
-} from "./db-cache.js?v=52";
-import { matePattern, stripFastqExt } from "./sample-naming.js?v=52";
+} from "./db-cache.js?v=53";
+import { matePattern, stripFastqExt } from "./sample-naming.js?v=53";
 import {
   resolveAccession, validateAccession, ASSUMED_BPS,
   downloadEstimate, readCountVerdict, expectedProfiledReads,
-} from "./ena.js?v=52";
-import { normaliseMarkers, screenVerdict, SCREENING_DB, SCREENING_MARKERS } from "./screening.js?v=52";
-import { metaLines, runFacts } from "./meta.js?v=52";
-import { clusterTable, MAX_ROWS as CLUSTER_MAX_ROWS } from "./cluster.js?v=52";
+} from "./ena.js?v=53";
+import { normaliseMarkers, screenVerdict, SCREENING_DB, SCREENING_MARKERS } from "./screening.js?v=53";
+import { metaLines, runFacts } from "./meta.js?v=53";
+import { clusterTable, MAX_ROWS as CLUSTER_MAX_ROWS } from "./cluster.js?v=53";
 import { compositionSvg, alphaSvg, pcoaSvg, pcoaLayout, pieSvg, sampleFacts, METRICS, alphaDiversity,
   enterotypeSvg, enterotypeSplit, ENTEROTYPE_POLES, ENTEROTYPE_GAP, ENTEROTYPE_MIN_MARKERS,
   kmeans, silhouette, autoCluster, PCOA_MIN_ZOOM }
-  from "./figures.js?v=52";
-import { toMetaphlan, toBiom, toSylphTsv, toSession, fromSession } from "./exports.js?v=52";
+  from "./figures.js?v=53";
+import { toMetaphlan, toBiom, toSylphTsv, toSession, fromSession } from "./exports.js?v=53";
 import { currentMode as themeMode, setMode as setThemeMode, applyTheme,
-  loadSchedule, saveSchedule } from "./theme.js?v=52";
+  loadSchedule, saveSchedule } from "./theme.js?v=53";
 import {
   fetchCatalog, fallbackCatalog, renderDbSelect, biomeForUrl, biomeNote,
   mgnifyGenomeUrl,
@@ -38,7 +38,7 @@ import {
   makeDbRef, sameDbRef, refLine, refShort, refCommentLines, refSlug, genomeCountMismatch,
   rememberBiome, recallBiome, catalogueName, LOCAL_VALUE,
   selectionMatchesLoaded, notLoadedNote, refMetaMismatch,
-} from "./biomes.js?v=52";
+} from "./biomes.js?v=53";
 
 const $ = (id) => document.getElementById(id);
 const els = {
@@ -2998,16 +2998,13 @@ function clusterColours(view, mode) {
       return { ...f, score: silhouette(points, f.labels) };
     })();
   const byName = new Map(view.samples.map((s, i) => [s, `cluster ${(fit.labels[i] ?? 0) + 1}`]));
-  const runner = fit.scores
-    ? [...fit.scores].sort((a, b) => b.score - a.score)[1] : null;
   pcoaClusters = {
     key,
     groupOf: (s) => byName.get(s) ?? null,
     // The score travels with the colours, into the downloaded SVG. k-means
     // always returns clusters; this is what says whether they are separated.
     note: `k-means on these two axes · k=${fit.k}` +
-      `${mode === "auto" ? " chosen by silhouette" : ""} · silhouette ` +
-      `${fit.score.toFixed(2)}${runner ? ` (k=${runner.k} scores ${runner.score.toFixed(2)})` : ""}`,
+      `${mode === "auto" ? " chosen by silhouette" : ""} · silhouette ${fit.score.toFixed(2)}`,
   };
   return pcoaClusters;
 }
@@ -3142,21 +3139,34 @@ for (const b of document.querySelectorAll("#figZoom [data-zoom]")) {
   });
 }
 
-// Over the plot, the wheel is the plot's: it zooms, about the point under the
-// pointer, in both directions. Anywhere else on the page it is the page's.
+// Over the plot the wheel zooms, in both directions, between half and sixteen.
+// The page gets it back only at the end of the range AND only on a fresh
+// gesture.
 //
-// The one exception is the wheel that asks to zoom out of the whole ordination,
-// which is not a zoom at all — there is nothing outside the full extent to show.
-// Swallowing it would make the figure a 600 px hole a scroll stops in halfway
-// down a long page, so the page takes that one back.
+// That second condition is the whole rule. Handing over as soon as the zoom
+// cannot move meant one flick of a trackpad zoomed out to the full extent and
+// then scrolled the page with what was left of the same flick — two things from
+// one gesture, and the second one unasked for. A wheel that has been quiet for a
+// quarter of a second is someone starting again; anything faster is the tail of
+// the gesture that was already zooming, and it is swallowed.
+//
+// The plot is still not a hole a scroll disappears into: at the floor, let go
+// and scroll again and the page moves.
+let wheelAt = 0;
 figCanvasEl?.addEventListener("wheel", (e) => {
   if (openFig !== "pcoa") return;
   const g = plotGeom(figCanvasEl.querySelector("svg"));
   if (!g || !g.over(e.clientX, e.clientY)) return;
   // Lines and pages, not just pixels: Firefox reports a wheel in lines.
   const dy = e.deltaMode === 1 ? e.deltaY * 16 : e.deltaMode === 2 ? e.deltaY * 400 : e.deltaY;
-  if (dy > 0 && !((pcoaZoom?.k ?? 1) > 1.001)) return;
+  const k = pcoaZoom?.k ?? 1;
+  const stuck = dy > 0 ? k <= PCOA_MIN_ZOOM + 1e-9 : k >= 16 - 1e-9;
+  const now = e.timeStamp || Date.now();
+  const sameGesture = now - wheelAt < 250;
+  wheelAt = now;
+  if (stuck && !sameGesture) return;      // a new gesture at the end of the range: the page's
   e.preventDefault();
+  if (stuck) return;                      // the tail of a gesture that has run out of zoom
   zoomBy(Math.exp(-dy * 0.0018), g.at(e.clientX, e.clientY));
 }, { passive: false });
 
