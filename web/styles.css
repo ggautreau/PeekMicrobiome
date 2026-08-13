@@ -27,6 +27,15 @@
   --working: #b45309;
   --bg-working-soft: #fdf3e3;
   --danger: #c0392b;
+  /* The same two colours as TEXT. On the dark card the fills stay dark enough to
+     carry white — a tick on a green disc, a red bar — while the same hex as
+     writing lands at 2.97:1 for the red and 3.74:1 for the green, both under AA.
+     Measured on the card this page actually draws, #1a2226. Same split, same
+     reason, as --accent-ink above. */
+  --danger-ink: var(--danger);
+  /* Not var(--success): #2a8a55 as writing on white is 4.32:1, just under AA,
+     while the same hex as a FILL under a white tick is right. */
+  --success-ink: #277c4c;       /* 5.16:1 on white */
   --shadow-sm: 0 1px 2px rgba(39, 86, 98, 0.05);
   --shadow-md: 0 4px 14px rgba(39, 86, 98, 0.07);
   --radius-sm: 4px;
@@ -47,6 +56,8 @@ html[data-theme="dark"] {
   --bg-success-soft: #112a1d;
   --working: #e0a44a;
   --bg-working-soft: #2b2010;
+  --danger-ink: #e8756a;        /* 5.52:1 on the dark card, where #c0392b is 2.97 */
+  --success-ink: #4caf7d;       /* 5.95:1, where #2a8a55 is 3.74 */
   --border: #2a3438;
   --border-soft: #1f262a;
   --border-strong: #3a4347;
@@ -619,13 +630,18 @@ code {
 .files li:last-child { border-bottom: none; }
 .files li.pending { color: var(--ink-muted); }
 .files li.running { color: var(--accent); }
-.files li.done { color: var(--success); }
-.files li.failed { color: var(--danger); }
+.files li.done { color: var(--success-ink); }
+.files li.failed { color: var(--danger-ink); }
 /* Zero species is not a success. It is what the wrong catalogue looks like, what
    an amplicon run looks like, and what a blank looks like — and it was printed
    in the same green as a good run. */
-.files li.empty { color: var(--danger); }
-.files li.incomplete { color: var(--danger); }
+.files li.empty { color: var(--danger-ink); }
+/* INCOMPLETE is a RESULT, not a failure — its rows ARE in the matrix, there are
+   simply fewer reads behind them than the archive says the run holds. Printed in
+   the same red as `failed` it read as a sample that had not been profiled at
+   all, which is the opposite of what happened. Amber: look at this, do not
+   discard it. */
+.files li.incomplete { color: var(--working); }
 .files li button {
   background: none;
   border: none;
@@ -1903,3 +1919,23 @@ html[data-theme="dark"] .notice.biome-warning .notice-icon { color: #e07a63; }
 }
 .pie-call b { color: var(--accent-ink); }
 .pie-call span { color: var(--ink-muted); font-size: 0.78rem; display: block; margin-top: 0.15rem; }
+
+/* The head's two ways to see results without profiling anything: the example,
+   and a session you saved. The second is quiet — it means nothing to a first
+   visitor and everything to a returning one. */
+.head-actions { display: flex; flex-direction: column; gap: 0.45rem; align-items: stretch; }
+.head-alt {
+  padding: 0.4rem 0.7rem;
+  font-size: 0.85rem;
+  color: var(--ink-soft);
+  background: var(--bg-soft);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.head-alt:hover { color: var(--accent-ink); border-color: var(--accent); }
+
+/* Colour-by, beside the zoom controls: both belong to the ordination and both
+   go away with it. */
+.fig-colour { display: inline-flex; align-items: center; gap: 0.35rem; font-size: 0.85rem; color: var(--ink-soft); }
+.fig-colour select { font-size: 0.85rem; padding: 0.15rem 0.3rem; }

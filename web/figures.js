@@ -595,8 +595,129 @@ export function enterotypeSplit(table, { genusOf = null } = {}) {
 /**
  * The ordination itself, without the drawing: computed once, drawn many times.
  */
+// How far out the plot may be pulled. Below 1 the window is WIDER than the data,
+// which is what moves the points out from under the legend in the corner; half
+// is the floor because past it the samples are a knot in the middle of an empty
+// square and the extra room has stopped buying anything.
+export const PCOA_MIN_ZOOM = 0.5;
+
 export function pcoaLayout(table) {
   return pcoa(distanceMatrix(table));
+}
+
+// ---- clusters of the plot ----------------------------------------------------
+//
+// k-means over the ordination's own coordinates — the ones the scatter draws,
+// not the full distance space. That is a deliberate limit: a cluster computed on
+// axes the reader cannot see would put two points that sit on top of each other
+// into different colours, and the figure would look broken while being right.
+// These are clusters OF THE PICTURE, and the picture says in its own axis labels
+// what fraction of the variation it holds.
+//
+// No Math.random anywhere: the same table must give the same colours twice, and
+// a seed that moved between redraws would read as the samples moving. Seeding is
+// farthest-point: the first centre is the point nearest the middle, and each
+// next one is the point furthest from every centre so far.
+
+/** Squared distance, which is all k-means ever needs. */
+const d2 = (a, b) => (a.x - b.x) ** 2 + (a.y - b.y) ** 2;
+
+export function kmeans(points, k, { iters = 60 } = {}) {
+  const n = points.length;
+  if (!(k >= 1) || n === 0) return { labels: points.map(() => 0), centres: [], k: 0 };
+  if (k >= n) return { labels: points.map((_, i) => i), centres: points.map((p) => ({ ...p })), k: n };
+
+  const mean = points.reduce((a, p) => ({ x: a.x + p.x / n, y: a.y + p.y / n }), { x: 0, y: 0 });
+  const centres = [{ ...points.reduce((best, p) => (d2(p, mean) < d2(best, mean) ? p : best), points[0]) }];
+  while (centres.length < k) {
+    let far = points[0], farD = -1;
+    for (const p of points) {
+      let nearest = Infinity;
+      for (const c of centres) nearest = Math.min(nearest, d2(p, c));
+      if (nearest > farD) { farD = nearest; far = p; }
+    }
+    centres.push({ ...far });
+  }
+
+  const labels = new Array(n).fill(0);
+  for (let it = 0; it < iters; it++) {
+    let moved = false;
+    for (let i = 0; i < n; i++) {
+      let best = 0, bestD = Infinity;
+      for (let c = 0; c < centres.length; c++) {
+        const dd = d2(points[i], centres[c]);
+        if (dd < bestD) { bestD = dd; best = c; }
+      }
+      if (labels[i] !== best) { labels[i] = best; moved = true; }
+    }
+    for (let c = 0; c < centres.length; c++) {
+      const mine = points.filter((_, i) => labels[i] === c);
+      // An empty cluster keeps its centre rather than being dropped: k is what
+      // the caller asked for, and silently returning k-1 groups would make the
+      // legend disagree with the control that asked for k.
+      if (!mine.length) continue;
+      centres[c] = {
+        x: mine.reduce((a, p) => a + p.x, 0) / mine.length,
+        y: mine.reduce((a, p) => a + p.y, 0) / mine.length,
+      };
+    }
+    if (!moved && it > 0) break;
+  }
+  return { labels, centres, k };
+}
+
+/**
+ * Mean silhouette: how much better each point fits its own cluster than the
+ * next-best one. 1 is a clean split, 0 is a point on a border, below 0 is a
+ * point in the wrong cluster.
+ *
+ * Reported rather than hidden, because k-means ALWAYS returns clusters. On
+ * fifteen samples with no structure at all this score still averages about 0.3
+ * and can reach 0.67, so the number is the whole difference between "there are
+ * groups here" and "here is a partition".
+ */
+export function silhouette(points, labels) {
+  const n = points.length;
+  const groups = new Map();
+  labels.forEach((l, i) => { if (!groups.has(l)) groups.set(l, []); groups.get(l).push(i); });
+  if (groups.size < 2) return 0;
+  let total = 0;
+  for (let i = 0; i < n; i++) {
+    const own = groups.get(labels[i]);
+    // A cluster of one has no within-distance to speak of; its silhouette is 0
+    // by convention rather than 1, which would reward splitting off singletons.
+    if (own.length < 2) continue;
+    const a = own.reduce((s, j) => (j === i ? s : s + Math.sqrt(d2(points[i], points[j]))), 0) /
+      (own.length - 1);
+    let b = Infinity;
+    for (const [l, idx] of groups) {
+      if (l === labels[i]) continue;
+      const other = idx.reduce((s, j) => s + Math.sqrt(d2(points[i], points[j])), 0) / idx.length;
+      if (other < b) b = other;
+    }
+    total += (b - a) / Math.max(a, b);
+  }
+  return total / n;
+}
+
+/**
+ * The k the data argues for, and every k it was compared against.
+ *
+ * The scores come back with the answer so the page can say what the runner-up
+ * was: "6 at 0.62, 5 at 0.61" is a different message from "6 at 0.62, 5 at
+ * 0.31", and only one of them is a reason to believe six.
+ */
+export function autoCluster(points, { maxK = 8 } = {}) {
+  const top = Math.max(2, Math.min(maxK, points.length - 1));
+  const scores = [];
+  let best = null;
+  for (let k = 2; k <= top; k++) {
+    const fit = kmeans(points, k);
+    const score = silhouette(points, fit.labels);
+    scores.push({ k, score });
+    if (!best || score > best.score) best = { ...fit, score };
+  }
+  return best ? { ...best, scores } : { labels: points.map(() => 0), k: 1, score: 0, scores };
 }
 
 /**
@@ -616,7 +737,7 @@ export function pcoaLayout(table) {
  * whoever has to turn a pointer back into a coordinate.
  */
 export function pcoaSvg(table, {
-  width = 620, height = 520, groupOf = null, layout = null, zoom = null,
+  width = 620, height = 520, groupOf = null, layout = null, zoom = null, legendNote = "",
 } = {}) {
   const { points, explained } = layout ?? pcoa(distanceMatrix(table));
   const pad = 52;
@@ -631,12 +752,18 @@ export function pcoaSvg(table, {
     return [lo - m, hi + m];
   };
   const [fx0, fx1] = spread(xs), [fy0, fy1] = spread(ys);
-  const k = Math.min(24, Math.max(1, zoom?.k ?? 1));
+  const k = Math.min(24, Math.max(PCOA_MIN_ZOOM, zoom?.k ?? 1));
   // The window is a share of the full extent, kept inside it: a plot panned off
   // its own data is a blank card with axes.
   const frame = (lo, hi, c) => {
     const half = (hi - lo) / (2 * k);
-    const mid = Number.isFinite(c) ? Math.min(hi - half, Math.max(lo + half, c)) : (lo + hi) / 2;
+    // Below k=1 the window is wider than the data, and then there is nothing to
+    // clamp a centre against: the arithmetic that keeps a zoomed window inside
+    // the extent inverts — hi - half < lo + half — and would pin the view to one
+    // side. Wider than the data means centred on it.
+    const span = (hi - lo) / 2;
+    const mid = half >= span ? (lo + hi) / 2
+      : Number.isFinite(c) ? Math.min(hi - half, Math.max(lo + half, c)) : (lo + hi) / 2;
     return [mid - half, mid + half];
   };
   const [x0, x1] = frame(fx0, fx1, zoom?.x), [y0, y1] = frame(fy0, fy1, zoom?.y);
@@ -670,9 +797,13 @@ export function pcoaSvg(table, {
     `transform="rotate(-90 14 ${height / 2})">PCo2 — ${(explained[1] * 100).toFixed(1)}%</text>`;
   // A zoomed plot that does not say so is a lie once it is downloaded: the axis
   // fractions are of the whole ordination, and this one is a corner of it.
-  if (k > 1.001) {
+  if (Math.abs(k - 1) > 0.001) {
     out += `<text x="${width - 14}" y="20" text-anchor="end" fill="#5a5550">` +
-      `zoom ×${k.toFixed(1)} — ${shown.length} of ${points.length} samples</text>`;
+      (k < 1
+        // Wider than the data is a framing choice, not a window onto part of it:
+        // every sample is still there, with room around them.
+        ? `zoom ×${k.toFixed(1)} — wider than the samples`
+        : `zoom ×${k.toFixed(1)} — ${shown.length} of ${points.length} samples`) + `</text>`;
     // A window can be dragged onto a patch of the ordination with nothing in it
     // — the points are not spread evenly over their own bounding box — and an
     // empty card with axes on it reads as something having gone wrong.
@@ -705,10 +836,27 @@ export function pcoaSvg(table, {
   });
 
   if (groupOf && groups.length > 1) {
+    // A panel behind it. The legend sits at a fixed corner and the points land
+    // where the data puts them, so the two collide as soon as a sample is up
+    // there — and a legend printed over markers is unreadable exactly when it
+    // matters. Semi-opaque rather than solid: a point under it is still visible
+    // as a point, so nothing is hidden, only quietened.
+    const longest = Math.max(...groups.map((g) => String(g).length),
+      legendNote ? legendNote.length * 0.62 : 0);
+    out += `<rect x="${pad - 6}" y="8" width="${Math.ceil(longest * 6.2) + 30}" ` +
+      `height="${groups.length * 16 + (legendNote ? 18 : 4) + 8}" fill="#ffffff" ` +
+      `fill-opacity="0.82" rx="3"/>`;
     groups.forEach((g, gi) => {
       out += `<rect x="${pad}" y="${16 + gi * 16}" width="10" height="10" fill="${colourAt(gi)}"/>` +
         `<text x="${pad + 15}" y="${25 + gi * 16}" fill="#5a5550">${esc(g)}</text>`;
     });
+    // What the colours ARE, inside the figure. A scatter coloured by something
+    // the page computed, downloaded and pasted into a slide with no caption, is
+    // a claim with nothing behind it — and clusters are the colouring most
+    // likely to be read as a finding.
+    if (legendNote) {
+      out += `<text x="${pad}" y="${25 + groups.length * 16}" fill="#6b7172">${esc(legendNote)}</text>`;
+    }
   }
   return out + "</svg>";
 }

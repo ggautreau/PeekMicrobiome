@@ -174,7 +174,15 @@
 // weeks. THE DATA CHANGING IS WHY THIS NUMBER MOVED: web/demo/*.json is fetched
 // with ?v=WORKER_VERSION, so a visitor who had loaded the old example kept it
 // otherwise, and got the new page's banner over the old study's numbers.
-export const WORKER_VERSION = "51";
+// v52: the ordination can be coloured by clusters this page computes (k-means on
+// the two axes drawn, with the silhouette written into the figure) and framed
+// wider than its own data so the legend stops sitting on the samples. A saved
+// session can be opened from the page head rather than only from inside the
+// results card it was hidden in; the worker count moved to Settings with a floor
+// of two; INCOMPLETE is amber, and the status colours clear AA in both themes.
+// index.html and the stylesheet carry both new controls — a page on v51 pairs
+// this markup with a stylesheet that has neither.
+export const WORKER_VERSION = "52";
 
 // ---- memory64 capability probe ----------------------------------------------
 

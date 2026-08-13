@@ -212,6 +212,24 @@ console.log("== the ENA read_count is not in the unit the worker reports ==");
     /enaReads:\s*expectedProfiledReads\(/.test(src));
 }
 
+console.log("== a saved session can be opened on a page with nothing on it ==");
+{
+  const html = read("web/index.html");
+  const js = read("web/multi.js");
+  // "Save session" writes a file whose only door used to be inside the results
+  // card — which carries `hide` until there ARE results. So the one moment the
+  // door is wanted, a fresh tab, it was not there, and the feature was only
+  // reachable by first producing the results it exists to replace.
+  const head = html.indexOf('id="openSession"');
+  const results = html.indexOf('<section id="results"');
+  check("the head carries a way to open a saved session",
+    head > 0 && results > 0 && head < results,
+    head < 0 ? "no #openSession" : `#openSession at ${head}, #results at ${results}`);
+  check("...and it drives the one file input rather than a second one",
+    /getElementById\("openSession"\)[\s\S]{0,160}getElementById\("loadSession"\)\?\.click\(\)/.test(js) &&
+    (html.match(/id="loadSession"/g) || []).length === 1);
+}
+
 console.log("== the reads control is frozen while a run is going ==");
 {
   const src = read("web/multi.js");
@@ -220,11 +238,19 @@ console.log("== the reads control is frozen while a run is going ==");
   // build switch while the current build is busy.
   check("there is one helper for the controls a run freezes",
     /function setRunControls\(running\)/.test(src));
+  // Written against setDisabled(), which replaced direct `.disabled =` writes:
+  // the assertions below used to name the old shape and had been failing green-
+  // washed ever since, which is how a bench stops being one.
+  const frozen = (name) => new RegExp(`setDisabled\\(els\\.${name}, busy\\)`).test(src);
   check("...and it covers the reads number and the slider",
-    /els\.maxReads\.disabled = running/.test(src) &&
-    /els\.maxReadsSlider\.disabled = running/.test(src));
+    frozen("maxReads") && frozen("maxReadsSlider"));
   check("...and the database and pool controls it replaced",
-    /els\.loadDb\.disabled = running/.test(src) && /els\.poolSize\.disabled = running/.test(src));
+    frozen("loadDb") && frozen("poolSize"));
+  // The pair unit is the read cap in another unit — capFor() halves the cap when
+  // it is ticked — so leaving it live during a run profiles half the samples at
+  // half the cap with nothing on screen saying so.
+  check("...and the pair unit, which is the cap wearing another name",
+    frozen("pairsAsTwo"));
   // The point of the helper: no path can freeze some controls and forget others.
   check("nothing freezes loadDb on its own any more",
     !/els\.loadDb\.disabled = (true|false);/.test(src));

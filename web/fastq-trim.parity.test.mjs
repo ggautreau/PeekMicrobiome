@@ -1649,6 +1649,22 @@ console.log("== the figures compute what they claim to ==");
       `${((p2.x1 - p2.x0) / (p0.x1 - p0.x0)).toFixed(4)} x ` +
       `${((p2.y1 - p2.y0) / (p0.y1 - p0.y0)).toFixed(4)}`);
 
+    // Below 1 the window is WIDER than the data: the way to get the samples out
+    // from under the legend in the corner. Every point stays drawn, and the
+    // window stays centred on the data however the centre is nudged — the clamp
+    // that keeps a zoomed window inside the extent inverts down here, and left
+    // alone it would pin the view to one side.
+    const wide = plotOf(pcoaSvg(spread, { layout, zoom: { k: 0.5 } }));
+    const offset = plotOf(pcoaSvg(spread, { layout, zoom: { k: 0.5, x: 1e6, y: -1e6 } }));
+    check("zooming below 1 frames wider than the data, centred on it",
+      Math.abs((wide.x1 - wide.x0) / (p0.x1 - p0.x0) - 2) < 1e-9 &&
+      Math.abs((wide.x0 + wide.x1) / 2 - (p0.x0 + p0.x1) / 2) < 1e-9 &&
+      Math.abs((offset.x0 + offset.x1) / 2 - (wide.x0 + wide.x1) / 2) < 1e-9,
+      `${((wide.x1 - wide.x0) / (p0.x1 - p0.x0)).toFixed(3)}x wide`);
+    check("...with every sample still drawn, and saying so rather than counting",
+      marks(pcoaSvg(spread, { layout, zoom: { k: 0.5 } })) === spread.samples.length &&
+      /zoom ×0\.5 — wider than the samples/.test(pcoaSvg(spread, { layout, zoom: { k: 0.5 } })));
+
     // A window dragged past the edge of the data is a blank card with axes on
     // it, so the centre is clamped to keep the window inside the full extent.
     const far = plotOf(pcoaSvg(spread, { layout, zoom: { x: 1e6, y: -1e6, k: 3 } }));
@@ -1690,6 +1706,74 @@ console.log("== the figures compute what they claim to ==");
         layout: { points: layout.points.map((p) => ({ x: p.x * 3, y: p.y })), explained: [0.5, 0.25] },
       })).x1 > p0.x1 * 2.5);
   }
+}
+
+console.log("== clusters of the ordination ==");
+{
+  const { kmeans, silhouette, autoCluster, pcoaLayout, pcoaSvg } = await import("./figures.js");
+
+  // Three blobs a person would draw the same way.
+  const blob = (cx, cy, n) => Array.from({ length: n }, (_, i) => ({
+    x: cx + Math.cos(i * 2.1) * 0.05, y: cy + Math.sin(i * 2.1) * 0.05,
+  }));
+  const three = [...blob(0, 0, 6), ...blob(10, 0, 6), ...blob(5, 9, 6)];
+  const fit = kmeans(three, 3);
+  const sameBlob = (a, b) => fit.labels[a] === fit.labels[b];
+  check("k-means recovers blobs that are obviously apart",
+    [0, 1, 2, 3, 4, 5].every((i) => sameBlob(0, i)) &&
+    [6, 7, 8].every((i) => sameBlob(6, i)) && !sameBlob(0, 6) && !sameBlob(6, 12));
+  check("...and gives the same answer twice, with no RNG to drift",
+    kmeans(three, 3).labels.join() === kmeans(three, 3).labels.join() &&
+    kmeans(three, 4).labels.join() === kmeans(three, 4).labels.join());
+  check("...and returns exactly the k it was asked for",
+    new Set(kmeans(three, 5).labels).size === 5 && new Set(kmeans(three, 2).labels).size === 2);
+
+  check("silhouette is near 1 for separated blobs and near 0 for one cloud",
+    silhouette(three, fit.labels) > 0.9 &&
+    Math.abs(silhouette(blob(0, 0, 12), kmeans(blob(0, 0, 12), 2).labels)) < 0.6,
+    `${silhouette(three, fit.labels).toFixed(2)} vs ` +
+    `${silhouette(blob(0, 0, 12), kmeans(blob(0, 0, 12), 2).labels).toFixed(2)}`);
+  check("auto picks the k the blobs argue for, and shows its working",
+    autoCluster(three).k === 3 && autoCluster(three).scores.length >= 6 &&
+    autoCluster(three).scores.every((r) => r.k >= 2 && Number.isFinite(r.score)),
+    `k=${autoCluster(three).k}`);
+
+  // On the shipped example, clustering the plot with no knowledge of the
+  // metadata recovers the people: five clusters at silhouette 0.84, two of the
+  // six sharing one, and NOBODY split across two clusters. That last part is the
+  // claim worth pinning — a person whose three samples land in two clusters
+  // would be the figure contradicting the thing it is there to show.
+  const demo = JSON.parse(readFileSync(here + "demo/gut-demo.session.json", "utf8"));
+  const table = {
+    samples: demo.samples,
+    rows: Object.values(demo.matrix).map((r) => ({
+      species: r.species, values: demo.samples.map((s2) => Number(r[s2] ?? 0)),
+    })),
+  };
+  const subject = new Map(readFileSync(here + "demo/gut-demo.groups.csv", "utf8")
+    .trim().split(/\r?\n/).slice(1).map((l) => l.split(",").map((c) => c.trim())));
+  const auto = autoCluster(pcoaLayout(table).points);
+  const where = new Map();
+  demo.samples.forEach((s2, i) => {
+    const who = subject.get(s2);
+    if (!where.has(who)) where.set(who, new Set());
+    where.get(who).add(auto.labels[i]);
+  });
+  check("clustering the example recovers its people without being told who they are",
+    auto.score > 0.7 && [...where.values()].every((set) => set.size === 1),
+    `k=${auto.k}, silhouette ${auto.score.toFixed(2)}, ` +
+    `${[...where].filter(([, v]) => v.size > 1).length} people split across clusters`);
+
+  // A scatter coloured by something the page computed, downloaded with no
+  // caption, is a claim with nothing behind it.
+  const svg = pcoaSvg(table, {
+    groupOf: (s2) => `cluster ${auto.labels[demo.samples.indexOf(s2)] + 1}`,
+    legendNote: "k-means on these two axes · silhouette 0.84",
+  });
+  check("the colouring says what it is, inside the figure",
+    svg.includes("k-means on these two axes") && svg.includes(">cluster 1<"));
+  check("...and says nothing when the colours came from the user's own file",
+    !pcoaSvg(table, { groupOf: (s2) => subject.get(s2) }).includes("k-means"));
 }
 
 console.log("== enterotypes: a split, and the names that carry it ==");

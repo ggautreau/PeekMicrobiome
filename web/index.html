@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>PeekMicrobiome — upload-free, installation-free metagenomic profiling across biomes</title>
   <link rel="icon" type="image/svg+xml" href="./favicon.svg">
-  <link rel="stylesheet" href="./styles.css?v=51">
+  <link rel="stylesheet" href="./styles.css?v=52">
   <script>
     (function () {
       try {
@@ -95,6 +95,7 @@
            anything at all, which is a long way to walk to find out whether the
            results are worth walking for. Beside the pitch rather than under it:
            it is the alternative to reading the pitch, not a footnote to it. -->
+      <div class="head-actions">
       <button id="demoLoad" class="demo-btn" type="button">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
              stroke-linecap="round" aria-hidden="true">
@@ -104,9 +105,19 @@
         </svg>
         <span class="demo-btn-text">
           <span class="demo-btn-title">Explore example results</span>
-          <span class="demo-btn-sub">15 public gut runs, already profiled — nothing to download</span>
+          <span class="demo-btn-sub">18 public gut runs, already profiled — nothing to download</span>
         </span>
       </button>
+      <!-- The way back in. "Save session" writes a file that could only be
+           reopened from inside the results card — which is hidden until there
+           ARE results, so the one moment you want it, on a fresh tab, it was
+           unreachable. This is the same input, triggered from where a returning
+           visitor actually lands. -->
+      <button id="openSession" class="head-alt" type="button"
+              title="Open a results file you saved earlier with Save session. The reference database is not in it: load the catalogue and the numbers come back.">
+        Open a saved session
+      </button>
+      </div>
     </div>
 
     <div class="privacy-notice" role="note">
@@ -154,14 +165,19 @@
             </optgroup>
           </select>
         </label>
-        <label style="margin-left:.25rem">Threads:
-          <select id="poolSize" style="width:auto">
-            <option value="1">1</option>
-            <option value="2" selected>2</option>
-            <option value="3">3</option>
-            <option value="4">4</option>
-          </select>
-        </label>
+        <!-- The thread count lives in Settings, where the other limits on what
+             this page may use already are. It stays here as the value the pool
+             is actually built from — the Settings field writes into it — so the
+             resize logic, the freeze during a run and the bench that checks that
+             freeze all keep one thing to look at. A hidden input rather than the
+             old select: the select only listed 1 to 4, so a Settings value of 6
+             silently set nothing at all.
+             Minimum two: one worker profiles one sample AND streams it on the
+             same thread, so the download stalls behind every sketch. With two,
+             the next sample is coming down the wire while the first is being
+             sketched, which is where most of the wall time goes on a mid-range
+             machine. -->
+        <input type="hidden" id="poolSize" value="4">
         <button id="loadDb">Load database</button>
         <button id="cancelDb" class="hide">Cancel download</button>
         <input type="file" id="dbFile" accept=".syldb" hidden>
@@ -365,6 +381,22 @@
                appear with it and go away with everything else. The wheel and the
                drag do the same thing without leaving the plot; these are what
                says the plot can be zoomed at all, and what a keyboard uses. -->
+          <!-- What the points are coloured by. Only the ordination has colours to
+               give away, so it appears and goes with the zoom controls. -->
+          <label class="fig-colour hide" id="figColourWrap" title="Colour the points by the groups you loaded, or by clusters this page computes with k-means on the two axes drawn. The silhouette beside the legend says how separated those clusters are: k-means always returns clusters, and on samples with no structure at all the score still averages about 0.3.">
+            Colour
+            <select id="figColour">
+              <option value="groups" selected>by groups</option>
+              <option value="auto">by clusters — auto</option>
+              <option value="2">2 clusters</option>
+              <option value="3">3 clusters</option>
+              <option value="4">4 clusters</option>
+              <option value="5">5 clusters</option>
+              <option value="6">6 clusters</option>
+              <option value="7">7 clusters</option>
+              <option value="8">8 clusters</option>
+            </select>
+          </label>
           <span class="fig-zoom hide" id="figZoom" role="group" aria-label="Zoom the ordination">
             <button type="button" data-zoom="out" aria-label="Zoom out" title="Show more of the ordination (or scroll down over the plot)">−</button>
             <span class="fig-zoom-k" id="figZoomK" aria-live="off">×1.0</span>
@@ -462,8 +494,8 @@
         <!-- Only the things a browser can actually bound. Saying "limit CPU" and
              then not doing it would be worse than not offering it. -->
         <label class="settings-row">Workers
-          <input type="number" id="setWorkers" min="1" max="8" step="1">
-          <span class="info">One CPU core each while profiling. Fewer leaves the machine usable; more finishes sooner.</span>
+          <input type="number" id="setWorkers" min="2" max="8" step="1">
+          <span class="info">One CPU core each while profiling. Fewer leaves the machine usable; more finishes sooner. Two is the floor: a single worker downloads and sketches on one thread, so each sample waits for the one before it.</span>
         </label>
         <label class="settings-row">Reads per sample
           <input type="text" id="setReads" inputmode="numeric">
@@ -506,7 +538,7 @@
        it fixed relative to that ancestor instead of to the window. -->
   <div class="fig-tip hide" id="figTip" role="status" aria-live="polite"></div>
 
-  <script type="module" src="./theme.js?v=51"></script>
-  <script type="module" src="./multi.js?v=51"></script>
+  <script type="module" src="./theme.js?v=52"></script>
+  <script type="module" src="./multi.js?v=52"></script>
 </body>
 </html>

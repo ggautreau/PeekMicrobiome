@@ -12,24 +12,25 @@ import {
   sylphWorkerRpc, detectMemory64, chooseWasmBits, WORKER_VERSION,
   readsBudget, readsBudgetNote, readsOverBudgetNote, loadedBuildNote, fmtReads,
   progressFraction, basesForReads, BUDGET_READ_BP,
-} from "./sylph-worker-rpc.js?v=51";
+} from "./sylph-worker-rpc.js?v=52";
 import {
   dbCacheClient, fmtRate, fmtEta, cacheSummary, assertSameDatabase,
-} from "./db-cache.js?v=51";
-import { matePattern, stripFastqExt } from "./sample-naming.js?v=51";
+} from "./db-cache.js?v=52";
+import { matePattern, stripFastqExt } from "./sample-naming.js?v=52";
 import {
   resolveAccession, validateAccession, ASSUMED_BPS,
   downloadEstimate, readCountVerdict, expectedProfiledReads,
-} from "./ena.js?v=51";
-import { normaliseMarkers, screenVerdict, SCREENING_DB, SCREENING_MARKERS } from "./screening.js?v=51";
-import { metaLines, runFacts } from "./meta.js?v=51";
-import { clusterTable, MAX_ROWS as CLUSTER_MAX_ROWS } from "./cluster.js?v=51";
+} from "./ena.js?v=52";
+import { normaliseMarkers, screenVerdict, SCREENING_DB, SCREENING_MARKERS } from "./screening.js?v=52";
+import { metaLines, runFacts } from "./meta.js?v=52";
+import { clusterTable, MAX_ROWS as CLUSTER_MAX_ROWS } from "./cluster.js?v=52";
 import { compositionSvg, alphaSvg, pcoaSvg, pcoaLayout, pieSvg, sampleFacts, METRICS, alphaDiversity,
-  enterotypeSvg, enterotypeSplit, ENTEROTYPE_POLES, ENTEROTYPE_GAP, ENTEROTYPE_MIN_MARKERS }
-  from "./figures.js?v=51";
-import { toMetaphlan, toBiom, toSylphTsv, toSession, fromSession } from "./exports.js?v=51";
+  enterotypeSvg, enterotypeSplit, ENTEROTYPE_POLES, ENTEROTYPE_GAP, ENTEROTYPE_MIN_MARKERS,
+  kmeans, silhouette, autoCluster, PCOA_MIN_ZOOM }
+  from "./figures.js?v=52";
+import { toMetaphlan, toBiom, toSylphTsv, toSession, fromSession } from "./exports.js?v=52";
 import { currentMode as themeMode, setMode as setThemeMode, applyTheme,
-  loadSchedule, saveSchedule } from "./theme.js?v=51";
+  loadSchedule, saveSchedule } from "./theme.js?v=52";
 import {
   fetchCatalog, fallbackCatalog, renderDbSelect, biomeForUrl, biomeNote,
   mgnifyGenomeUrl,
@@ -37,7 +38,7 @@ import {
   makeDbRef, sameDbRef, refLine, refShort, refCommentLines, refSlug, genomeCountMismatch,
   rememberBiome, recallBiome, catalogueName, LOCAL_VALUE,
   selectionMatchesLoaded, notLoadedNote, refMetaMismatch,
-} from "./biomes.js?v=51";
+} from "./biomes.js?v=52";
 
 const $ = (id) => document.getElementById(id);
 const els = {
@@ -498,6 +499,18 @@ const readsWarnText = readsWarn?.querySelector("span") ?? null;
 // SEQUENCED READS — the unit the ENA publishes. Unticked, they are in PAIRS,
 // the unit sylph counts in: one pair, one number. The two differ by exactly 2x
 // on a paired run, which is enough to make a cap or a shortfall look wrong.
+// One worker both streams a sample and sketches it, so with a pool of one the
+// download stops dead for the whole of every sketch — measured at 3.1 MiB/s
+// against 5.2 on the same file when the sketch was not in the way. Two is the
+// floor because the second worker is what keeps the wire busy.
+const MIN_WORKERS = 2;
+// What a fresh tab starts with. Four is the default because the pool is what
+// keeps the wire busy while a sample is being sketched, and a run of eighteen
+// samples spends most of its wall time waiting for one or the other. It is a
+// starting point, not a claim about the machine: Settings moves it, and the
+// browser reports how many cores it will admit to.
+const DEFAULT_WORKERS = 4;
+
 const pairsCountAsTwo = () => !!els.pairsAsTwo?.checked;
 
 // The cap actually handed to the worker for one sample. The worker always
@@ -917,7 +930,7 @@ async function loadDatabase() {
     // the last moment at which it is free to choose: after this the database
     // sits in the workers' linear memory and swapping builds means reloading it.
     const maxReads = currentReads();
-    const target = Math.max(1, Math.min(8, parseInt(els.poolSize.value, 10) || 1));
+    const target = Math.max(MIN_WORKERS, Math.min(8, parseInt(els.poolSize.value, 10) || MIN_WORKERS));
     if (target !== rpcs.length || poolBits !== plannedBits(maxReads)) {
       els.dbInfo.textContent = `Preparing ${target} ${plannedBits(maxReads)}-bit worker${target === 1 ? "" : "s"}…`;
       await ensurePool(target, maxReads);
@@ -1265,7 +1278,7 @@ els.pairsAsTwo?.addEventListener("change", () => {
 });
 
 els.poolSize?.addEventListener("change", async () => {
-  const target = Math.max(1, Math.min(8, parseInt(els.poolSize.value, 10) || 1));
+  const target = Math.max(MIN_WORKERS, Math.min(8, parseInt(els.poolSize.value, 10) || MIN_WORKERS));
   if (!wasmReady || target === rpcs.length) return;
   const shrinking = target < rpcs.length;
   els.poolSize.disabled = true;
@@ -1898,6 +1911,13 @@ function setRunControls(running) {
   setDisabled(els.poolSize, busy);
   setDisabled(els.maxReads, busy);
   setDisabled(els.maxReadsSlider, busy);
+  // The pair unit IS the read cap, in another unit: capFor() halves the cap for
+  // a paired sample when this is ticked, and the cap is read per sample as the
+  // run walks the list. Toggling it at sample nine would profile the first eight
+  // at three million pairs and the rest at one and a half, and the matrix would
+  // say nothing about it — the exact failure the comment above this function
+  // describes, through the one control that was left out of it.
+  setDisabled(els.pairsAsTwo, busy);
   setDisabled(els.enaResolve, busy);
   setDisabled(els.enaAdd, busy || (enaSelectedRuns().length === 0
     ? "Tick at least one run in the list above to add it."
@@ -2038,7 +2058,12 @@ async function paintSettings() {
   const sched = loadSchedule();
   dlg.querySelector("#darkFrom").value = sched.from;
   dlg.querySelector("#darkTo").value = sched.to;
-  dlg.querySelector("#setWorkers").value = String(rpcs.length || Number(els.poolSize?.value) || 2);
+  // The value that WILL be used, not the pool that happens to exist. At rest the
+  // pool holds one worker — nothing has been profiled yet — and showing that
+  // printed "1" into a field whose own minimum is 2, under a heading that says
+  // what this page is allowed to use.
+  dlg.querySelector("#setWorkers").value = String(Math.max(MIN_WORKERS,
+    Math.min(8, Number(els.poolSize?.value) || DEFAULT_WORKERS)));
   dlg.querySelector("#setReads").value = fmtGrouped(currentReads());
   dlg.querySelector("#setDisk").value = String(settings.diskGb);
   // What is on disk right now, so the cap is set against a number rather than a
@@ -2150,7 +2175,7 @@ document.getElementById("settings")?.addEventListener("change", (e) => {
     if (themeMode() === "schedule") applyTheme("schedule");
   }
   if (t.id === "setWorkers" && els.poolSize) {
-    els.poolSize.value = String(Math.max(1, Math.min(8, Number(t.value) || 1)));
+    els.poolSize.value = String(Math.max(MIN_WORKERS, Math.min(8, Number(t.value) || MIN_WORKERS)));
     els.poolSize.dispatchEvent(new Event("change"));
   }
   if (t.id === "setReads" && els.maxReads) {
@@ -2948,6 +2973,45 @@ let figView = null;       // the view the open figure was drawn from
 const viewKey = (view) =>
   `${view.samples.join("\u0001")}|${view.rows.length}|${view.ref ?? ""}`;
 
+// What the points are coloured by: the groups the user loaded, or clusters this
+// page computes. Kept across redraws, like the neighbour metric — someone who
+// asked for clusters asked for the session, not for one draw.
+let pcoaColour = "groups";
+let pcoaClusters = null;   // { key, mode, groupOf, note }
+
+/**
+ * Colours from k-means over the ordination's own coordinates.
+ *
+ * Cached against the layout AND the mode, because it is recomputed on every
+ * zoom step and every pan frame otherwise — k-means over eight values of k on
+ * eighty-five points, sixty times a second.
+ */
+function clusterColours(view, mode) {
+  const key = `${pcoaFit.key}|${mode}`;
+  if (pcoaClusters?.key === key) return pcoaClusters;
+  const points = pcoaFit.layout.points;
+  const fit = mode === "auto"
+    ? autoCluster(points)
+    : (() => {
+      const k = Math.max(2, Math.min(8, Number(mode) || 2));
+      const f = kmeans(points, k);
+      return { ...f, score: silhouette(points, f.labels) };
+    })();
+  const byName = new Map(view.samples.map((s, i) => [s, `cluster ${(fit.labels[i] ?? 0) + 1}`]));
+  const runner = fit.scores
+    ? [...fit.scores].sort((a, b) => b.score - a.score)[1] : null;
+  pcoaClusters = {
+    key,
+    groupOf: (s) => byName.get(s) ?? null,
+    // The score travels with the colours, into the downloaded SVG. k-means
+    // always returns clusters; this is what says whether they are separated.
+    note: `k-means on these two axes · k=${fit.k}` +
+      `${mode === "auto" ? " chosen by silhouette" : ""} · silhouette ` +
+      `${fit.score.toFixed(2)}${runner ? ` (k=${runner.k} scores ${runner.score.toFixed(2)})` : ""}`,
+  };
+  return pcoaClusters;
+}
+
 function ordinationSvg(view, w, h) {
   const key = viewKey(view);
   if (pcoaFit?.key !== key) {
@@ -2955,11 +3019,22 @@ function ordinationSvg(view, w, h) {
     // remembered across a resize or a recolouring and not across a new run.
     pcoaFit = { key, layout: pcoaLayout(view) };
     pcoaZoom = null;
+    pcoaClusters = null;
   }
+  // Fewer than three samples is not a thing to cluster.
+  const clustered = pcoaColour !== "groups" && view.samples.length >= 3
+    ? clusterColours(view, pcoaColour) : null;
   return pcoaSvg(view, {
-    width: w, height: h, groupOf: metaGroupOf, layout: pcoaFit.layout, zoom: pcoaZoom,
+    width: w, height: h, layout: pcoaFit.layout, zoom: pcoaZoom,
+    groupOf: clustered ? clustered.groupOf : metaGroupOf,
+    legendNote: clustered ? clustered.note : "",
   });
 }
+
+document.getElementById("figColour")?.addEventListener("change", (e) => {
+  pcoaColour = e.target.value;
+  if (openFig === "pcoa") drawFigure("pcoa", { toggle: false });
+});
 
 // Redraw the plot alone, at the size it already has. drawFigure() measures an
 // empty card and repaints the panel beside it; neither can happen on every frame
@@ -2979,11 +3054,12 @@ function paintZoomControls() {
   const box = document.getElementById("figZoom");
   if (!box) return;
   box.classList.toggle("hide", openFig !== "pcoa");
+  document.getElementById("figColourWrap")?.classList.toggle("hide", openFig !== "pcoa");
   const k = pcoaZoom?.k ?? 1;
   const out = document.getElementById("figZoomK");
   if (out) out.textContent = `×${k.toFixed(1)}`;
-  box.querySelector('[data-zoom="reset"]')?.toggleAttribute("disabled", k <= 1.001);
-  box.querySelector('[data-zoom="out"]')?.toggleAttribute("disabled", k <= 1.001);
+  box.querySelector('[data-zoom="reset"]')?.toggleAttribute("disabled", Math.abs(k - 1) < 0.01);
+  box.querySelector('[data-zoom="out"]')?.toggleAttribute("disabled", k <= PCOA_MIN_ZOOM + 1e-9);
   // Only the ordination pans, and only while it is the figure on screen: the
   // zoom survives a trip to the composition tab, and the composition must not
   // come back with a grab cursor and a finger that cannot scroll the page.
@@ -3030,9 +3106,12 @@ function zoomBy(factor, p = null) {
   const g = plotGeom(canvas?.querySelector("svg"));
   if (!g) return;
   const k0 = pcoaZoom?.k ?? 1;
-  const k1 = Math.min(16, Math.max(1, k0 * factor));
+  const k1 = Math.min(16, Math.max(PCOA_MIN_ZOOM, k0 * factor));
   if (Math.abs(k1 - k0) < 1e-6) return;
-  if (k1 <= 1.001) {
+  // Exactly 1 is "the whole thing", which is what no zoom at all means. Below it
+  // the window is wider than the data — the way to get the points out from under
+  // the legend — and that is a state to keep, not to round away.
+  if (Math.abs(k1 - 1) < 0.01) {
     pcoaZoom = null;
   } else {
     const c = g.centre(), at = p ?? c, r = k0 / k1;
@@ -3655,6 +3734,13 @@ function applySession(st) {
   // matrix is two different results under one heading.
   if (openFig) drawFigure(openFig, { toggle: false });
 }
+
+// One input, two ways in: the row inside the results card, and the button in the
+// page head for a tab that has no results yet. Triggering the same hidden input
+// rather than adding a second one keeps the reader and the handler single.
+document.getElementById("openSession")?.addEventListener("click", () => {
+  document.getElementById("loadSession")?.click();
+});
 
 document.getElementById("loadSession")?.addEventListener("change", async (e) => {
   const f = e.target.files?.[0];
