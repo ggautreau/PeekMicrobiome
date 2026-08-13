@@ -3,6 +3,8 @@ name: Deploy web/ to GitHub Pages
 on:
   push:
     branches: [main]
+  pull_request:
+    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -15,7 +17,64 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # The benches, before anything ships. Until this job existed every push
+  # deployed straight to production with nothing run at all: 1,596 assertions,
+  # 173 in the ENA suite and 37 mutations that only ever executed because
+  # somebody remembered to type them.
+  #
+  # Thirteen seconds, and no dependencies to install — these are plain node ESM
+  # files with no package.json, importing nothing but node builtins and the
+  # sources they test. node-suite.mjs stands up its own hostile HTTP server on
+  # localhost; nothing here reaches the network.
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      # A table in, an SVG string out: every figure, every export format, the
+      # trimmer's parity with sylph's own reader, and the shipped example
+      # checked against the study it claims to come from.
+      - name: Parity suite
+        run: node web/fastq-trim.parity.test.mjs
+
+      # What the pages CLAIM against what they ship — a sentence in a banner, a
+      # control that must be frozen during a run, a door that must not be
+      # inside the card it opens.
+      - name: Wiring
+        run: node scripts/ena-test/wiring.mjs
+
+      # web/ena.js against a server that lies: truncated bodies, spliced
+      # responses, holes, hosts outside the allow-list.
+      - name: ENA suite
+        run: node scripts/ena-test/node-suite.mjs
+
+  # "A test that fails if you remove the mechanism" — checked, not claimed. Four
+  # minutes, and deliberately NOT a gate on the deploy: it does not test the
+  # page, it tests whether the benches above still bite. A red run here means a
+  # guard has stopped guarding, which is worth knowing on every push and is not
+  # worth holding the site back for.
+  #
+  # It earns its place: it is what caught two guards that had never worked,
+  # hidden behind assertions that had been failing so long the number was noise.
+  mutations:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Mutation suite
+        run: node scripts/ena-test/mutations.mjs
+
   deploy:
+    # Nothing reaches production that the benches have not read first.
+    needs: test
+    # A pull request runs the benches and stops there: Pages has one live
+    # deployment and a branch must not take it.
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     environment:
       name: github-pages
