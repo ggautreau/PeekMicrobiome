@@ -48,31 +48,60 @@ console.log("== the privacy banner says everything that leaves this tab ==");
 // Zenodo paragraph now sits under the biome picker, the ENA one inside the ENA
 // panel, each next to the button that makes the request.
 //
-// What must not weaken is the reason this bench exists: the banner once named
-// only the ENA download, which by structure read as "the ENA mode is the only
-// exception" when in fact loading a database is REQUIRED before anything can be
-// profiled, including a purely local FASTQ. So the banner must still name BOTH
-// requests — and the detail must exist where the decision is taken. Both halves
-// are checked; dropping either is a failure.
-// The DATABASE CARD, isolated — not the whole file. index.html also carries a
-// fallback <option> whose value is a zenodo.org URL containing "433 MB", so a
-// check against the whole source passes even with the paragraph deleted. That
-// is exactly how this mutation escaped once.
+// SCOPED, and matched on the CLAIM rather than on a word that appears in it.
+//
+// Both halves of that matter, and both were learned the hard way in this file.
+// index.html's database card holds a biome <select> whose options read "Human
+// gut — 4,744 species, 433 MB, downloads from Zenodo", "6 MB, bundled" and
+// "__local__" — so /zenodo\.org/, /433 MB/, /bundled/ and /local/ all match with
+// the prose deleted. Every one of those was a check that could not fail. What is
+// asserted below is the sentence the reader needs, on the tag-stripped text, so
+// a decoy in an attribute or an option label cannot stand in for it.
 const dbCard = (src) => src.match(/<section class="card" id="cardDb">[\s\S]*?<\/section>/)?.[0] ?? "";
-for (const [name, b, src] of [["index.html", indexBanner, dbCard(index)],
-                              ["profile.html", profileBanner, dbCard(profileHtml)]]) {
+const enaPanel = (src) => src.match(/<details class="ena" id="enaPanel">[\s\S]*?<\/details>/)?.[0] ?? "";
+const prose = (html) => html.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ");
+
+// WHERE the detail lives differs between the pages, and this bench used to
+// assume it did not. index.html moved it to the database card in the 2026-08-08
+// change; profile.html has no `id="cardDb"` — its cards are unnamed — and keeps
+// the detail in the banner. `dbCard(src) || b` covers both without naming a
+// file, and keeps working the day profile.html grows a card of its own.
+//
+// `ena` is declared here rather than sniffed from the page: a guard whose
+// precondition is read out of the artefact it audits cannot fail closed. Reword
+// the page to say "EBI" everywhere and a sniffing gate would silently delete the
+// check it is gating.
+for (const [name, b, src, ena] of [["index.html", indexBanner, index, true],
+                                   ["profile.html", profileBanner, profileHtml, false]]) {
+  const detail = prose(dbCard(src) || b);
+  // On failure, name what was looked for — never a near-miss found nearby. A
+  // FAIL line that quotes the decoy ("…433 MB, downloads from Zenodo", from the
+  // option) reads as a false alarm and gets dismissed, which is how a real
+  // deletion survives review.
+  const want = (t) => `expected the sentence: "…${t}…"`;
   check(`${name}: the banner exists at all`, b.length > 200, `${b.length} chars`);
   check(`${name}: your own files never leave, in any mode`,
     /never leave your computer/.test(b));
-  check(`${name}: the banner names BOTH kinds of request, not just the ENA one`,
-    /reference database/i.test(b) && /(ENA|EBI)/.test(b),
-    b.replace(/\s+/g, " ").slice(0, 130));
-  check(`${name}: the Zenodo download is named at the control that makes it`,
-    /zenodo\.org/i.test(src));
-  check(`${name}: ...with its size and who sees the request`,
-    /433 MB/.test(src) && /IP address/.test(src));
+  // The reason this bench exists: the banner once named only the ENA download,
+  // which by structure read as "the ENA mode is the only exception" when loading
+  // a database is REQUIRED before anything can be profiled, including a purely
+  // local FASTQ. So the database download must be named on both pages — and the
+  // ENA one on the page that has an ENA mode. profile.html has none: zero
+  // occurrences of "ENA" or "accession" in the file.
+  check(`${name}: the banner names the database download, which every mode makes`,
+    /reference database/i.test(b), prose(b).slice(0, 130));
+  if (ena) {
+    check(`${name}: ...and the ENA download beside it, on the page that makes it`,
+      /(ENA|EBI)/.test(b), prose(b).slice(0, 130));
+  }
+  check(`${name}: the Zenodo download is named where the decision is taken`,
+    /downloads it from zenodo\.org/i.test(detail), want("downloads it from zenodo.org"));
+  check(`${name}: ...with its size`,
+    /database is 433 MB/i.test(detail), want("database is 433 MB"));
+  check(`${name}: ...and who sees the request`,
+    /zenodo sees your ip address/i.test(detail), want("Zenodo sees your IP address"));
   check(`${name}: ...and the way to avoid it`,
-    /bundled/.test(src) && /(your own disk|local)/.test(src));
+    /downloads nothing at all/i.test(detail), want("downloads nothing at all"));
 }
 check("index.html: the ENA download is named too, with what the EBI learns",
   /EBI/.test(index) && /accessions you looked up/.test(index));
@@ -80,9 +109,13 @@ check("profile.html no longer claims no data is sent to any server",
   !/No data is sent to any server/i.test(profileHtml));
 // The allow-list accepts every host under ebi.ac.uk; naming one host in the
 // banner promised something narrower than the code enforces.
-check("index.html: the banner describes the allow-list the code actually applies",
-  /ebi\.ac\.uk<\/code>\)/.test(indexBanner) || /any host under <code>ebi\.ac\.uk/.test(indexBanner),
-  indexBanner.match(/[^.]*ebi\.ac\.uk[^.]*\./)?.[0]?.slice(0, 140));
+// The host rule moved with the rest of the detail: it is stated at the ENA
+// panel, next to the field that takes an accession. Scoped to that panel and not
+// to the file — the whole-source form is the weakness described above, and it
+// would pass with the sentence moved to the footer.
+check("index.html: the ENA panel describes the allow-list the code applies",
+  /any host under ebi\.ac\.uk/i.test(prose(enaPanel(index))),
+  prose(enaPanel(index)).match(/[^.]*any host under[^.]*\./i)?.[0]?.slice(0, 120) ?? "(sentence absent)");
 check("ena.js says the same thing where the list is defined",
   /every host under ebi\.ac\.uk/i.test(ena));
 
@@ -111,8 +144,15 @@ check("...and shown on the finished sample, with the unit named",
   /\$\{shown\.toLocaleString\(\)\} \$\{unit\} profiled/.test(multi) &&
   /const unit = s\.kind === "pe" && !pairsCountAsTwo\(\) \? "pairs" : "reads"/.test(multi));
 // Compared in the unit the user is reading, not the worker's raw pair count.
+// Written across lines, and with a fourth argument, since this was pinned to one
+// line of source. The claim is the arguments, not their layout.
+// Across lines, but every argument named: `layout` decides whether the
+// spots-convention branch in readCountVerdict can fire at all, and dropping it
+// reports every paired run whose read_count counts spots as INCOMPLETE. Nothing
+// else in any bench asserts this call site.
 check("...and compared with the count the ENA published, in the same unit",
-  /readCountVerdict\(\{ observed: readsShown\(s\), expected: s\.enaReads, maxReads \}\)/.test(multi));
+  /readCountVerdict\(\{\s*observed:\s*readsShown\(s\),\s*expected:\s*s\.enaReads,\s*maxReads,[\s\S]{0,120}?layout:/
+    .test(multi));
 // Carried onto the sample CONVERTED, and the raw figure kept beside it so the
 // conversion can be redone when the unit changes. Asserting `enaReads: r.reads`
 // here — as this check once did — pinned the bug rather than the behaviour.
@@ -124,8 +164,10 @@ check("...with the run's read count carried onto the sample, converted to the un
 check("...and the cap is converted once, where it enters the worker",
   /const cap = capFor\(s, maxReads\)/.test(multi) &&
   !/rpc\.profileFilesPe\(r1Files, r2Files, maxReads/.test(multi));
+// The rule is now written the other way round and carries the "empty" case that
+// was added beside it, so the old spelling matched nothing.
 check("a shortfall becomes a status of its own, not a plain 'done'",
-  /verdict\.ok \? "done" : "incomplete"/.test(multi));
+  /!verdict\.ok \? "incomplete"/.test(multi) && /"empty" : "done"/.test(multi));
 
 console.log("\n== multi.js: the buttons and the counters ==");
 // runAll() has always re-queued failed samples; the only button that reaches it

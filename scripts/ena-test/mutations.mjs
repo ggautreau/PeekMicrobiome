@@ -229,7 +229,11 @@ const MUTATIONS = [
     why: "the page would again present the ENA mode as the only thing that leaves the tab",
     from: `<strong>Loading a reference database downloads it from <code>zenodo.org</code>.</strong>`,
     to: `<strong>Loading a reference database.</strong>`,
-    expect: /Zenodo download is named at the control that makes it/,
+    // Anchored to the PAGE. The loop emits one check of this name per page, the
+    // harness matches FAIL lines by regex, and an unanchored name let a
+    // permanently-red check on the other page stand in for this one — which is
+    // how this very mutation was recorded as caught while nothing tested it.
+    expect: /^FAIL index\.html: the Zenodo download is named where the decision is taken/m,
   },
   {
     name: "README: take the database row out of the network table",
