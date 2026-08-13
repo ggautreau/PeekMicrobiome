@@ -102,6 +102,43 @@ request into `scripts/ena-test/fx/` (git-ignored) and reused afterwards:
 node scripts/ena-test/fixtures.mjs     # ~8 MiB from the EBI, once
 ```
 
+## What you get back
+
+One row per taxon, one column per sample, cells in taxonomic (relative) abundance. Downloadable
+as TSV or CSV, and as the formats other tools read — sylph's own TSV, MetaPhlAn, BIOM 1.0 — plus
+a session file that puts the whole result back on screen later.
+
+Four figures are drawn from whatever is on screen, as inline SVG: no plotting library, no DOM and
+no fetch anywhere in `web/figures.js`, which is what makes every one of them testable in plain
+node and downloadable as a file you can paste into a manuscript.
+
+- **Composition** — stacked bars, the top N taxa plus a grey *other* that is never dropped: a bar
+  stopping at 60 % with no explanation reads as missing data rather than as a legend cut. How many
+  taxa are named is a slider, up to 30 — held under the 36 colours the palette can tell apart, by
+  a test that fails if either number moves without the other.
+- **Diversity** — Shannon as *effective taxa* (e^H) beside observed richness. The order matters:
+  on paired libraries 6× apart in sequencing depth, observed richness moved 110 → 274 while
+  effective taxa moved 63 → 69. One of those two numbers is mostly a depth readout.
+- **PCoA** — classical MDS on Bray-Curtis. The axes say what fraction of the positive eigenvalue
+  total they carry, which on the shipped example is 25.8 % and 22.9 %: the plane shows 49 % of
+  what separates those eighteen samples, and the rest is why the neighbour list can disagree with
+  what the eye reads. Zoom and pan, and colouring either by a metadata field or by k-means
+  clusters — with the silhouette written inside the figure, because k-means always returns
+  clusters and on samples with no structure at all that score still averages about 0.3.
+- **Enterotype** — human gut only, and it refuses on any other catalogue by name. A three-way
+  split between Bacteroides, Prevotella and Ruminococcus drawn as a triangle: the position IS the
+  split, and a sample in the middle is drawn in the middle. The pole names are GTDB's, not 2011's
+  — `Phocaeicola` carries 56 % of the Bacteroides pole on the example, and bare `Ruminococcus` is
+  empty in every sample.
+
+Clicking a point, a bar or a row opens that sample beside the figure: what it is made of, how
+diverse it is, which samples it is really nearest — over every row of the matrix, not the
+two-dimensional shadow of them the ordination draws — and what the archive says it is, when it
+came from one.
+
+Every figure carries the catalogue in its caption, for the same reason the matrix does: these are
+abundances relative to one catalogue and to nothing else.
+
 ## Read ceiling
 
 The FASTQ used to be trimmed, decompressed, concatenated into one `Uint8Array` and handed to
@@ -135,17 +172,20 @@ is the real one and the UI says so rather than failing unexplained.
 | `web/demo/` | The worked example the page loads with one click: a saved session of eighteen public PRJNA728374 runs — six people, three stool samples each over eight weeks — built by `scripts/build_demo_session.py`. |
 | `web/biomes.js` | Builds the picker, freezes which database a result came from. |
 | `web/db-cache.js` | One resumable, cached download per database (OPFS). |
-| `web/ena.js` | Resolves an ENA accession and streams its FASTQs. |
+| `web/ena.js` | Resolves an ENA accession and streams its FASTQs, and asks the portal for what the run says about itself in the same request. |
+| `web/meta.js` | Decides which of that is printable: INSDC sentinels, archive-generated titles and 0.0/0.0 coordinates never reach the screen. |
+| `web/figures.js` | Every figure, as pure functions — a table in, an SVG string out. No DOM, no fetch, no library. |
 | `web/sylph-pkg/` | wasm32 package (committed so the deployed site is self-contained). |
 | `web/sylph-pkg64/` | wasm64 package, same filenames — loaded when a run needs more than 4 GB. |
 | `scripts/build_wasm.sh` | Builds either package: `./scripts/build_wasm.sh 32\|64\|both`. |
 | `scripts/build_biome_dbs.sh` | Builds one `.syldb` per MGnify catalogue (see *Reference databases*). |
 | `scripts/build_gut_db.sh` | The original human-gut-only pipeline, kept as it was. |
-| `scripts/dbcache-test/`, `scripts/ena-test/` | Browser and Node test benches, plus `flaky_server.py`. |
+| `scripts/dbcache-test/`, `scripts/ena-test/` | Browser and Node test benches, plus `flaky_server.py`. 1,595 parity assertions, 173 against a hostile HTTP server, 59 source-level claims, and 37 mutations that check the benches still bite. |
+| `scripts/profile_ena_runs.mjs` | Builds the example's measurements with the code the page runs, at the cap the page defaults to. |
 | `sylph-wasm/` | Fork of upstream sylph with a wasm32 target and JS bindings. |
 | `sylph-survey/` | Notes and porting plan for the sylph → WASM fork. |
 | `docs/` | Design notes, size estimates, deployment notes. |
-| `.github/workflows/pages.yml` | GitHub Pages deploy on push to `main`. |
+| `.github/workflows/pages.yml` | Runs the benches on every push and pull request, and deploys `web/` to Pages only if they pass. |
 
 ## Building the wasm packages
 
