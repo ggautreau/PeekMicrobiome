@@ -7,6 +7,7 @@ pub mod contain;
 pub mod inference;
 pub mod inspect;
 pub mod par;
+pub mod syldb;
 
 // target_family, not target_arch: wasm64-unknown-unknown reports
 // target_arch = "wasm64", and gating on "wasm32" would quietly compile a

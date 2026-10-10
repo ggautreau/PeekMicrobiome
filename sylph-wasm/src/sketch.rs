@@ -60,7 +60,23 @@ pub fn check_vram_and_block(_max_ram: usize, _file: &str) {
     // not available on wasm32.
 }
 
+// Tests only: take the scalar seeding path even on a CPU with AVX2. That path
+// is the one every wasm build takes — wasm has no AVX2 — so it is the only way
+// a native test can check what the browser computes. Per thread, because tests
+// run in parallel. Absent from every non-test build.
+#[cfg(test)]
+thread_local! {
+    pub(crate) static FORCE_SCALAR_SEEDS: std::cell::Cell<bool> = std::cell::Cell::new(false);
+}
+
 pub fn extract_markers(string: &[u8], kmer_vec: &mut Vec<u64>, c: usize, k: usize) {
+    #[cfg(test)]
+    {
+        if FORCE_SCALAR_SEEDS.with(|f| f.get()) {
+            fmh_seeds(string, kmer_vec, c, k);
+            return;
+        }
+    }
     #[cfg(any(target_arch = "x86_64"))]
     {
         if is_x86_feature_detected!("avx2") {
@@ -1072,6 +1088,33 @@ pub fn sketch_sequences_from_bytes(
     no_dedup: bool,
     max_reads: Option<usize>,
 ) -> Option<SequencesSketch> {
+    sketch_sequences_from_bytes_checked(bytes, sample_name, c, k, no_dedup, max_reads)
+        .map(|(sketch, _)| sketch)
+}
+
+/// What a one-shot sketch read, beyond the sketch itself.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct BytesSketchStop {
+    /// Records (single-end) or pairs (paired-end) sketched.
+    pub n_read: usize,
+    /// The parse ended on a malformed record, before the cap and before the end
+    /// of the input: everything after it was never read. The CLI only logs this
+    /// (`warn!` for single-end; a paired R1 error drops the sample); the sketch
+    /// is the records before the bad one, and a caller that returns it as a
+    /// result is returning a profile of part of the file.
+    pub truncated: bool,
+}
+
+/// `sketch_sequences_from_bytes`, and how the parse ended. The loop is the same
+/// one, so the sketch is identical; only the ending is reported.
+pub fn sketch_sequences_from_bytes_checked(
+    bytes: &[u8],
+    sample_name: String,
+    c: usize,
+    k: usize,
+    no_dedup: bool,
+    max_reads: Option<usize>,
+) -> Option<(SequencesSketch, BytesSketchStop)> {
     let cursor = std::io::Cursor::new(bytes);
     let reader_res = needletail::parse_fastx_reader(cursor);
     if reader_res.is_err() {
@@ -1081,6 +1124,7 @@ pub fn sketch_sequences_from_bytes(
     let mut reader = reader_res.unwrap();
 
     let mut state = SingleSketchState::new(c, k, no_dedup);
+    let mut truncated = false;
 
     while let Some(record) = reader.next() {
         if let Some(cap) = max_reads {
@@ -1088,12 +1132,16 @@ pub fn sketch_sequences_from_bytes(
                 break;
             }
         }
-        if let Ok(record) = record {
-            state.push_record(&record.seq());
+        match record {
+            Ok(record) => state.push_record(&record.seq()),
+            // needletail is finished after a record-level error (see the
+            // `StreamSketcher` doc), so the next `next()` ends the loop.
+            Err(_) => truncated = true,
         }
     }
 
-    Some(state.into_sketch(sample_name))
+    let stop = BytesSketchStop { n_read: state.n_read, truncated };
+    Some((state.into_sketch(sample_name), stop))
 }
 
 /// All the mutable state a paired-end sketch accumulates, one pair at a time.
@@ -1198,6 +1246,23 @@ pub fn sketch_pair_sequences_from_bytes(
     no_dedup: bool,
     max_reads: Option<usize>,
 ) -> Option<SequencesSketch> {
+    sketch_pair_sequences_from_bytes_checked(r1_bytes, r2_bytes, sample_name, c, k, no_dedup, max_reads)
+        .map(|(sketch, _)| sketch)
+}
+
+/// `sketch_pair_sequences_from_bytes`, and how the parse ended (see
+/// `BytesSketchStop`). A malformed record on either mate counts: the pair it
+/// belongs to is dropped and that mate's reader is finished, so every later
+/// pair is lost with it.
+pub fn sketch_pair_sequences_from_bytes_checked(
+    r1_bytes: &[u8],
+    r2_bytes: &[u8],
+    sample_name: String,
+    c: usize,
+    k: usize,
+    no_dedup: bool,
+    max_reads: Option<usize>,
+) -> Option<(SequencesSketch, BytesSketchStop)> {
     let r1 = needletail::parse_fastx_reader(std::io::Cursor::new(r1_bytes));
     let r2 = needletail::parse_fastx_reader(std::io::Cursor::new(r2_bytes));
     if r1.is_err() || r2.is_err() {
@@ -1208,6 +1273,7 @@ pub fn sketch_pair_sequences_from_bytes(
     let mut reader2 = r2.unwrap();
 
     let mut state = PairSketchState::new(c, k, no_dedup);
+    let mut truncated = false;
 
     loop {
         if let Some(cap) = max_reads {
@@ -1223,13 +1289,17 @@ pub fn sketch_pair_sequences_from_bytes(
         };
         let (rec1, rec2) = match (rec1_o, rec2_o) {
             (Ok(a), Ok(b)) => (a, b),
-            _ => continue,
+            _ => {
+                truncated = true;
+                continue;
+            }
         };
 
         state.push_pair(&rec1.seq(), &rec2.seq());
     }
 
-    Some(state.into_sketch(sample_name))
+    let stop = BytesSketchStop { n_read: state.n_pairs, truncated };
+    Some((state.into_sketch(sample_name), stop))
 }
 
 // ---------------------------------------------------------------------------
@@ -1274,7 +1344,14 @@ fn record_boundary(buf: &[u8], from: usize, lines: usize) -> (usize, usize) {
 /// to the size of the whole file. That is exactly the single giant buffer this
 /// API exists to remove, only now in wasm linear memory where overflowing it
 /// aborts the worker instead of raising a catchable RangeError. 8 MiB is ~30k
-/// ordinary FASTQ records, so any legitimate FASTQ stream stays far below it.
+/// ordinary FASTQ records.
+///
+/// It is also the longest record this path accepts, and that is a real limit,
+/// not a theoretical one: a record holds its sequence twice over (bases and
+/// qualities), so ONE read longer than about 4.2 Mb never completes inside the
+/// carry, and the whole sample is refused as "not a FASTQ stream". Ultra-long
+/// nanopore runs do contain such reads; native sylph reads them. Raising the
+/// cap moves the limit without removing it, so it stays, and is stated here.
 ///
 /// It is a *memory* guard, not the FASTA guard: a multi-line FASTA has plenty
 /// of newlines and never trips this cap. Non-FASTQ input is rejected by
@@ -3131,6 +3208,191 @@ mod stream_fuzz_tests {
                     String::from_utf8_lossy(&r2)
                 );
             }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// What the browser computes, against upstream's own readers.
+//
+// The equivalence tests above compare the streaming path with the one-shot
+// bytes path, and on a native x86_64 build both take AVX2 seeding. No wasm
+// build ever does: wasm has no AVX2, so the browser seeds with `fmh_seeds`.
+// These tests force that path and compare with upstream's file readers
+// (`sketch_sequences_needle`, `sketch_pair_sequences`) forced the same way —
+// which is the claim "the same sketch as native sylph" in the only form it is
+// true. The last one pins the upstream AVX2 behaviour that makes the claim
+// conditional, so a change upstream shows up here.
+// ---------------------------------------------------------------------------
+#[cfg(test)]
+mod scalar_parity_tests {
+    use super::*;
+
+    const C: usize = 20;
+    const K: usize = 31;
+
+    /// Lengths around every residue of (L - k + 1) mod 4, reads of exactly k
+    /// and k + 1 bases, reads shorter than k, and the usual 100/150/151/250.
+    const LENS: [usize; 12] = [151, 100, 101, 150, 250, 31, 32, 30, 33, 34, 60, 420];
+
+    struct Rng(u64);
+    impl Rng {
+        fn next(&mut self) -> u64 {
+            let mut x = self.0;
+            x ^= x >> 12;
+            x ^= x << 25;
+            x ^= x >> 27;
+            self.0 = x;
+            x.wrapping_mul(0x2545F4914F6CDD1D)
+        }
+    }
+
+    fn fastq(n: usize, seed: u64) -> Vec<u8> {
+        let mut rng = Rng(seed);
+        let mut out = Vec::new();
+        for i in 0..n {
+            let len = LENS[i % LENS.len()];
+            let seq: Vec<u8> = (0..len).map(|_| b"ACGT"[(rng.next() % 4) as usize]).collect();
+            out.extend_from_slice(format!("@r{}\n", i).as_bytes());
+            out.extend_from_slice(&seq);
+            out.extend_from_slice(b"\n+\n");
+            out.extend(std::iter::repeat(b'I').take(len));
+            out.push(b'\n');
+        }
+        out
+    }
+
+    /// A file upstream's readers can open; removed when dropped.
+    struct TempFastq(std::path::PathBuf);
+    impl TempFastq {
+        fn new(tag: &str, bytes: &[u8]) -> TempFastq {
+            let path = std::env::temp_dir().join(format!(
+                "sylph-wasm-scalar-{}-{}-{}.fq",
+                tag,
+                std::process::id(),
+                bytes.len()
+            ));
+            std::fs::write(&path, bytes).expect("write temp fastq");
+            TempFastq(path)
+        }
+        fn path(&self) -> &str {
+            self.0.to_str().unwrap()
+        }
+    }
+    impl Drop for TempFastq {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.0);
+        }
+    }
+
+    fn scalar<T>(f: impl FnOnce() -> T) -> T {
+        FORCE_SCALAR_SEEDS.with(|s| s.set(true));
+        let out = f();
+        FORCE_SCALAR_SEEDS.with(|s| s.set(false));
+        out
+    }
+
+    fn same(label: &str, a: &SequencesSketch, b: &SequencesSketch) {
+        assert_eq!(a.kmer_counts, b.kmer_counts, "{}: kmer_counts", label);
+        assert_eq!(
+            a.mean_read_length.to_bits(),
+            b.mean_read_length.to_bits(),
+            "{}: mean_read_length",
+            label
+        );
+        assert_eq!((a.c, a.k, a.paired), (b.c, b.k, b.paired), "{}: c, k, paired", label);
+    }
+
+    #[test]
+    fn single_end_matches_upstream_needle_reader_on_the_scalar_path() {
+        let bytes = fastq(600, 0x5EED);
+        let file = TempFastq::new("se", &bytes);
+        let upstream = scalar(|| sketch_sequences_needle(file.path(), C, K, None, false))
+            .expect("upstream sketch");
+        let one_shot = scalar(|| {
+            sketch_sequences_from_bytes(&bytes, "browser_sample".to_string(), C, K, false, None)
+        })
+        .expect("one-shot sketch");
+        same("one-shot vs upstream", &upstream, &one_shot);
+        let streamed = scalar(|| {
+            let mut s = StreamSketcher::new("browser_sample".to_string(), C, K, false, None);
+            for chunk in bytes.chunks(997) {
+                s.feed(chunk);
+            }
+            s.finish()
+        })
+        .expect("streamed sketch");
+        same("streaming vs upstream", &upstream, &streamed);
+    }
+
+    #[test]
+    fn paired_end_matches_upstream_exact_dedup_on_the_scalar_path() {
+        let r1 = fastq(400, 0xA11CE);
+        let r2 = fastq(400, 0xB0B);
+        let (f1, f2) = (TempFastq::new("r1", &r1), TempFastq::new("r2", &r2));
+        // dedup_fpr = 0 is upstream's exact path, the only one the browser has.
+        let upstream =
+            scalar(|| sketch_pair_sequences(f1.path(), f2.path(), C, K, None, false, 0.0))
+                .expect("upstream pair sketch");
+        let one_shot = scalar(|| {
+            sketch_pair_sequences_from_bytes(&r1, &r2, "browser_sample".to_string(), C, K, false, None)
+        })
+        .expect("one-shot pair sketch");
+        same("pair one-shot vs upstream", &upstream, &one_shot);
+    }
+
+    #[test]
+    fn upstream_avx2_seeding_drops_the_trailing_kmers() {
+        if !is_x86_feature_detected!("avx2") {
+            return; // nothing to pin on a CPU that never takes that path
+        }
+        // c = 1 keeps every k-mer, so counts are positions.
+        let mut rng = Rng(7);
+        for len in LENS {
+            let seq: Vec<u8> = (0..len).map(|_| b"ACGT"[(rng.next() % 4) as usize]).collect();
+            let mut avx2 = Vec::new();
+            extract_markers(&seq, &mut avx2, 1, K);
+            let mut scalar_seeds = Vec::new();
+            fmh_seeds(&seq, &mut scalar_seeds, 1, K);
+            let positions = (len + 1).saturating_sub(K);
+            assert_eq!(scalar_seeds.len(), positions, "scalar, L = {}", len);
+            let expected_avx2 = if len < K + 1 { 0 } else { 4 * (positions / 4) };
+            assert_eq!(avx2.len(), expected_avx2, "AVX2, L = {}", len);
+            // What it drops is the tail: the four strands it seeds in parallel
+            // cover the first 4 * floor(positions / 4) positions, exactly.
+            let mut kept: Vec<u64> = scalar_seeds[..avx2.len()].to_vec();
+            kept.sort_unstable();
+            avx2.sort_unstable();
+            assert_eq!(avx2, kept, "AVX2 k-mers, L = {}", len);
+        }
+    }
+
+    #[test]
+    fn one_shot_reports_a_parse_that_ended_on_a_malformed_record() {
+        let bytes = fastq(50, 0xBAD);
+        // Clean, capped, and cut short by one quality byte at record 20.
+        let (_, clean) =
+            sketch_sequences_from_bytes_checked(&bytes, "s".into(), C, K, false, None).unwrap();
+        assert_eq!(clean, BytesSketchStop { n_read: 50, truncated: false });
+        let (_, capped) =
+            sketch_sequences_from_bytes_checked(&bytes, "s".into(), C, K, false, Some(10)).unwrap();
+        assert_eq!(capped, BytesSketchStop { n_read: 10, truncated: false });
+        let mut lines: Vec<Vec<u8>> = bytes.split(|b| *b == b'\n').map(|l| l.to_vec()).collect();
+        lines[4 * 20 + 3].pop();
+        let bad = lines.join(&b'\n');
+        let (_, stop) =
+            sketch_sequences_from_bytes_checked(&bad, "s".into(), C, K, false, None).unwrap();
+        assert_eq!(stop, BytesSketchStop { n_read: 20, truncated: true });
+        // The same record on either mate of a pair.
+        let (_, pe_clean) =
+            sketch_pair_sequences_from_bytes_checked(&bytes, &bytes, "s".into(), C, K, false, None)
+                .unwrap();
+        assert_eq!(pe_clean, BytesSketchStop { n_read: 50, truncated: false });
+        for (r1, r2) in [(&bad, &bytes), (&bytes, &bad)] {
+            let (_, pe) =
+                sketch_pair_sequences_from_bytes_checked(r1, r2, "s".into(), C, K, false, None)
+                    .unwrap();
+            assert!(pe.truncated && pe.n_read == 20, "{:?}", pe);
         }
     }
 }

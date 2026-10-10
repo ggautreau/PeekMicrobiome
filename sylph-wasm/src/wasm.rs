@@ -17,10 +17,21 @@ use crate::contain::{
     get_stats, winner_table,
 };
 use crate::sketch::{
-    sketch_pair_sequences_from_bytes, sketch_sequences_from_bytes, PairStreamSketcher,
-    StreamSketcher,
+    sketch_pair_sequences_from_bytes_checked, sketch_sequences_from_bytes_checked,
+    PairStreamSketcher, StreamSketcher,
 };
+use crate::syldb::{check_database, decode_database};
 use crate::types::{AniResult, GenomeSketch};
+
+/// The refusal `profile()`/`profile_pe()` return for a FASTQ that stops at a
+/// malformed record.
+fn truncated_message(n_read: usize, unit: &str) -> String {
+    format!(
+        "the FASTQ stops at a malformed record after {} {}; the rest of the file \
+         was not read, so no profile is returned for part of the sample",
+        n_read, unit
+    )
+}
 
 // ---------------------------------------------------------------------------
 // Panic reporting.
@@ -87,16 +98,25 @@ fn profile_args() -> ContainArgs {
 #[wasm_bindgen]
 pub struct Profiler {
     genome_sketches: Vec<GenomeSketch>,
+    /// The `c` reads are sketched at: the smallest `c` in the database (see
+    /// `check_database`).
+    c: usize,
+    /// The one `k` every genome of the database was sketched with.
+    k: usize,
     /// Streaming single-end sample in progress, if any.
     stream: Option<StreamSketcher>,
     /// Streaming paired-end sample in progress, if any.
     stream_pe: Option<PairStreamSketcher>,
 }
 
+
 #[wasm_bindgen]
 impl Profiler {
     /// Load a sylph database. `syldb` is the raw bytes of a `.syldb` file
     /// (bincode-serialised `Vec<GenomeSketch>`).
+    ///
+    /// A database that is not one sylph can profile against is refused here,
+    /// with the reason, rather than accepted and trapping on the first sample.
     #[wasm_bindgen(constructor)]
     pub fn new(syldb: &[u8]) -> Result<Profiler, JsValue> {
         // Show Rust panics in the browser console (see set_panic_hook above:
@@ -105,19 +125,12 @@ impl Profiler {
         // Route Rust `log::*` to console.* (best effort).
         let _ = console_log::init_with_level(log::Level::Info);
 
-        let cursor = std::io::Cursor::new(syldb);
-        let genome_sketches: Vec<GenomeSketch> = bincode::deserialize_from(cursor)
-            .map_err(|e| JsValue::from_str(&format!("syldb decode failed: {}", e)))?;
-        if genome_sketches.is_empty() {
-            return Err(JsValue::from_str("syldb contained no genome sketches"));
-        }
-        if genome_sketches[0].pseudotax_tracked_nonused_kmers.is_none() {
-            return Err(JsValue::from_str(
-                "syldb was sketched without pseudotax tracking; profile() needs --enable-pseudotax",
-            ));
-        }
+        let genome_sketches = decode_database(syldb).map_err(|e| JsValue::from_str(&e))?;
+        let (c, k) = check_database(&genome_sketches).map_err(|e| JsValue::from_str(&e))?;
         Ok(Profiler {
             genome_sketches,
+            c,
+            k,
             stream: None,
             stream_pe: None,
         })
@@ -129,16 +142,17 @@ impl Profiler {
         self.genome_sketches.len()
     }
 
-    /// Returns the `c` (sub-sampling rate) of the loaded database.
+    /// Returns the `c` (sub-sampling rate) reads are sketched at: the
+    /// database's own, or its smallest when its genomes do not share one.
     #[wasm_bindgen(getter)]
     pub fn c(&self) -> usize {
-        self.genome_sketches[0].c
+        self.c
     }
 
     /// Returns the `k` of the loaded database.
     #[wasm_bindgen(getter)]
     pub fn k(&self) -> usize {
-        self.genome_sketches[0].k
+        self.k
     }
 
     /// Profile a single FASTQ sample against the loaded database.
@@ -148,19 +162,25 @@ impl Profiler {
     ///
     /// Returns a sylph-compatible TSV string (with the same column order
     /// produced by `sylph profile`).
+    ///
+    /// A FASTQ that stops at a malformed record is an error, not a profile:
+    /// the sketch would be of the reads before the bad record only, and a
+    /// table built from part of a file looks exactly like one built from all
+    /// of it. (The streaming path leaves that call to the caller, which reads
+    /// `sample_halted` against `sample_done` and `sample_invalid`.)
     pub fn profile(&self, fastq: &[u8], max_reads: u32) -> Result<String, JsValue> {
         let cap = if max_reads == 0 {
             None
         } else {
             Some(max_reads as usize)
         };
-        let c = self.genome_sketches[0].c;
-        let k = self.genome_sketches[0].k;
+        let c = self.c;
+        let k = self.k;
         // No `.to_vec()` here: the caller's slice already lives in linear
         // memory (wasm-bindgen copied it in), and `Cursor` reads straight from
         // a borrowed slice. Copying it again doubled peak memory for nothing —
         // 2.18 GB of the 2.72 GB peak at 3M reads.
-        let sequence_sketch = sketch_sequences_from_bytes(
+        let (sequence_sketch, stop) = sketch_sequences_from_bytes_checked(
             fastq,
             "browser_sample".to_string(),
             c,
@@ -169,21 +189,25 @@ impl Profiler {
             cap,
         )
         .ok_or_else(|| JsValue::from_str("could not sketch FASTQ — not a valid FASTQ stream"))?;
+        if stop.truncated {
+            return Err(JsValue::from_str(&truncated_message(stop.n_read, "reads")));
+        }
         self.profile_sketch(sequence_sketch)
     }
 
     /// Paired-end equivalent of `profile()`. `r1` and `r2` are the uncompressed
     /// FASTQ bytes for the two mates of one sample. Records are read in lockstep;
-    /// dedup uses an inter-mate k-mer pair to drop PCR duplicates.
+    /// dedup uses an inter-mate k-mer pair to drop PCR duplicates. A malformed
+    /// record in either mate is an error, as in `profile()`.
     pub fn profile_pe(&self, r1: &[u8], r2: &[u8], max_reads: u32) -> Result<String, JsValue> {
         let cap = if max_reads == 0 {
             None
         } else {
             Some(max_reads as usize)
         };
-        let c = self.genome_sketches[0].c;
-        let k = self.genome_sketches[0].k;
-        let sequence_sketch = sketch_pair_sequences_from_bytes(
+        let c = self.c;
+        let k = self.k;
+        let (sequence_sketch, stop) = sketch_pair_sequences_from_bytes_checked(
             r1,
             r2,
             "browser_sample".to_string(),
@@ -193,6 +217,9 @@ impl Profiler {
             cap,
         )
         .ok_or_else(|| JsValue::from_str("could not sketch FASTQ pair — not a valid FASTQ stream"))?;
+        if stop.truncated {
+            return Err(JsValue::from_str(&truncated_message(stop.n_read, "pairs")));
+        }
         self.profile_sketch(sequence_sketch)
     }
 
@@ -222,8 +249,8 @@ impl Profiler {
         } else {
             Some(max_reads as usize)
         };
-        let c = self.genome_sketches[0].c;
-        let k = self.genome_sketches[0].k;
+        let c = self.c;
+        let k = self.k;
         self.stream_pe = None;
         self.stream = Some(StreamSketcher::new(
             "browser_sample".to_string(),
@@ -251,8 +278,8 @@ impl Profiler {
         } else {
             Some(max_reads as usize)
         };
-        let c = self.genome_sketches[0].c;
-        let k = self.genome_sketches[0].k;
+        let c = self.c;
+        let k = self.k;
         self.stream = None;
         self.stream_pe = Some(PairStreamSketcher::new(
             "browser_sample".to_string(),
@@ -422,7 +449,26 @@ impl Profiler {
     }
 
     /// Shared back-half: run sylph's profile inference + reassignment on an
-    /// already-sketched sample and emit a TSV identical to native `sylph profile`.
+    /// already-sketched sample and emit the TSV `sylph profile` writes, with the
+    /// CLI's default parameters.
+    ///
+    /// "The same TSV as native sylph" holds with three qualifications, and they
+    /// belong here because each one is invisible in the output:
+    ///   * the k-mers. wasm has no AVX2, so markers come from the scalar
+    ///     `fmh_seeds`. Native sylph on an x86_64 CPU with AVX2 takes
+    ///     `extract_markers_avx2` (avx2_seeding.rs, upstream code), which seeds
+    ///     4 * floor((L - k + 1) / 4) k-mers per read and none at all for a read
+    ///     of exactly k bases — up to three trailing k-mers per read fewer, which
+    ///     on ordinary 150-bp reads is enough to change every line of the TSV.
+    ///     The TSV is identical to native sylph on the scalar path (any CPU
+    ///     without AVX2, ARM included), not to native sylph on every machine.
+    ///   * paired-end deduplication is exact (`dup_removal_lsh_full_exact`),
+    ///     where the CLI defaults to a cuckoo filter with a 1e-4 false-positive
+    ///     rate: the browser behaves like `sylph sketch --fpr 0`. The difference
+    ///     is a few k-mer counts per million, and only at very high depth.
+    ///   * `Sample_file` is `browser_sample`: there is no path to report.
+    /// The bootstrap behind the ANI / lambda 5-95 percentile columns draws the
+    /// same numbers on wasm32, wasm64 and native (see `bootstrap_interval`).
     fn profile_sketch(&self, sequence_sketch: crate::types::SequencesSketch) -> Result<String, JsValue> {
         let args = profile_args();
 

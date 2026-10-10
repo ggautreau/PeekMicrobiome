@@ -22,25 +22,75 @@
 # matches `sourmash prefetch` normalised the way funcprofiler.py normalises it —
 # 147 KOs both sides, none unique to either, largest abundance difference 0.
 # wasm32 and wasm64 return byte-identical profiles in Chrome 151.
+#
+# Rebuilt 2026-10-10 by this script as it stands (pinned toolchains, the lock in
+# scripts/funprofiler/, wasm-bindgen 0.2.126 instead of the 0.2.127 a caret had
+# let in): functional profiles byte-identical to the previous package on three
+# inputs — 60,000 single-end reads, the same as pairs, and 100,000 real pairs of
+# ERR14098649 (325, 325 and 887 orthologs).
+
+#
+# REPRODUCIBLE, OR IT SAYS WHY NOT — the same rules as scripts/build_wasm.sh:
+# pinned compilers, checked before anything is built; every dependency pinned
+# by scripts/funprofiler/Cargo.lock (the commit pins sourmash, and the edits
+# below change its dependency set, so its own lock no longer applies); and this
+# machine's paths remapped out of the binary.
 
 set -euo pipefail
+export PATH="$HOME/.cargo/bin:$PATH"
 
 WHICH="${1:-both}"
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-WORK="${FUNPROF_WORK:-$HERE/.funprofiler-build}"
+# Outside the repository: a clone inside it is an untracked directory of several
+# hundred MB that `git status` lists and `git add -A` would take.
+WORK="${FUNPROF_WORK:-${XDG_CACHE_HOME:-$HOME/.cache}/peekmicrobiome/funprofiler-build}"
 SOURMASH_REF="${SOURMASH_REF:-38d1f632ccdcbd28db87f528e345b8835634e655}"
 SRC="$WORK/sourmash/src/core"
+LOCK="$HERE/scripts/funprofiler/Cargo.lock"
+OUT32="${OUT32:-$HERE/web/funprofiler-pkg}"
+OUT64="${OUT64:-$HERE/web/funprofiler-pkg64}"
 
-need() { command -v "$1" >/dev/null || { echo "missing: $1" >&2; exit 1; }; }
+# The toolchains the committed package was built with (see build_wasm.sh for
+# how to pin them under another name). ALLOW_TOOLCHAIN_DRIFT=1 builds anyway.
+RUST_STABLE="${RUST_STABLE:-stable}"
+RUST_STABLE_VERSION="1.95.0"
+RUST_NIGHTLY="${RUST_NIGHTLY:-nightly}"
+RUST_NIGHTLY_DATE="2026-08-03"
+
+die() { echo "build_funprofiler_wasm.sh: $*" >&2; exit 1; }
+need() { command -v "$1" >/dev/null || die "missing: $1"; }
 need cargo
 need git
+need rustup
 
-# ---- fetch and patch ---------------------------------------------------------
-if [[ ! -d "$WORK/sourmash" ]]; then
+check_rustc() { # <toolchain> <string its rustc --version must contain>
+  local got
+  got="$(rustup run "$1" rustc --version 2>/dev/null)" || die "rustup has no toolchain named '$1'"
+  [[ "$got" == *"$2"* ]] && return 0
+  if [[ "${ALLOW_TOOLCHAIN_DRIFT:-}" == 1 ]]; then
+    echo "warning: rustc ($1) is '$got', not $2 — the package will not match the committed one" >&2
+    return 0
+  fi
+  die "rustc ($1) is '$got', not $2. Install it, or set ALLOW_TOOLCHAIN_DRIFT=1."
+}
+
+sep=$'\x1f'
+export CARGO_ENCODED_RUSTFLAGS="--remap-path-prefix=${CARGO_HOME:-$HOME/.cargo}=/cargo${sep}--remap-path-prefix=${RUSTUP_HOME:-$HOME/.rustup}=/rustup${sep}--remap-path-prefix=$WORK=/build"
+unset RUSTFLAGS
+
+# ---- fetch and reset ---------------------------------------------------------
+if [[ ! -d "$WORK/sourmash/.git" ]]; then
   mkdir -p "$WORK"
   git clone --filter=blob:none https://github.com/sourmash-bio/sourmash.git "$WORK/sourmash"
 fi
-git -C "$WORK/sourmash" checkout -q "$SOURMASH_REF"
+git -C "$WORK/sourmash" cat-file -e "$SOURMASH_REF^{commit}" 2>/dev/null \
+  || git -C "$WORK/sourmash" fetch -q origin
+# A plain checkout keeps local modifications, and the edits below are made in
+# place: run twice, the second run patched an already-patched tree, and an
+# edited funcprofiler.rs was never appended again. Every build starts from the
+# pinned commit exactly. (`clean` leaves ignored files, so target/ survives.)
+git -C "$WORK/sourmash" checkout -q -f "$SOURMASH_REF"
+git -C "$WORK/sourmash" clean -fdq
 
 # Three edits, each for a reason worth stating.
 #
@@ -58,44 +108,69 @@ sed -i 's/target_arch = "wasm32"/target_family = "wasm"/g' "$SRC/Cargo.toml"
 find "$SRC/src" -name '*.rs' -exec sed -i 's/target_arch = "wasm32"/target_family = "wasm"/g' {} +
 #
 # 3. wasm-bindgen before 0.2.126 cannot describe a 64-bit module: its interpreter
-#    reads pointers as i32 and panics with "non-i32 constant".
-sed -i 's|^wasm-bindgen = "0.2.89"|wasm-bindgen = "0.2.126"|; s|^js-sys = "0.3.72"|js-sys = "0.3.79"|; s|^web-sys = { version = "0.3.72"|web-sys = { version = "0.3.79"|' "$SRC/Cargo.toml"
+#    reads pointers as i32 and panics with "non-i32 constant". Pinned EXACTLY
+#    (`=`): a caret let the resolver take 0.2.127 for the committed package while
+#    the CLI on the machine was 0.2.126, and the glue and the wasm must come from
+#    the same version. 0.2.126 is also the version sylph-wasm's Cargo.lock
+#    resolves to, so the site loads one wasm-bindgen, not two.
+sed -i 's|^wasm-bindgen = "0.2.89"|wasm-bindgen = "=0.2.126"|; s|^js-sys = "0.3.72"|js-sys = "0.3.79"|; s|^web-sys = { version = "0.3.72"|web-sys = { version = "0.3.79"|' "$SRC/Cargo.toml"
+grep -q '^wasm-bindgen = "=0.2.126"' "$SRC/Cargo.toml" \
+  || die "the wasm-bindgen pin did not apply: sourmash's Cargo.toml no longer reads wasm-bindgen = \"0.2.89\""
 
-if ! grep -q "FuncProfiler" "$SRC/src/wasm.rs"; then
-  tail -n +2 "$HERE/scripts/funprofiler/funcprofiler.rs" >> "$SRC/src/wasm.rs"
+# 4. The FuncProfiler itself, appended to the pristine wasm.rs every time.
+tail -n +2 "$HERE/scripts/funprofiler/funcprofiler.rs" >> "$SRC/src/wasm.rs"
+
+# ---- pin every dependency ----------------------------------------------------
+# The edits above change sourmash's dependency set, so the lock it ships does not
+# describe this build. Ours does: copied in and built with --locked. The first
+# build without it resolves once and saves the result here, to be committed.
+if [[ -f "$LOCK" ]]; then
+  cp "$LOCK" "$WORK/sourmash/Cargo.lock"
+  LOCKED=(--locked)
+else
+  echo "note: no $LOCK yet — resolving now, and saving the result there (commit it)." >&2
+  LOCKED=()
 fi
+save_lock() {
+  [[ ${#LOCKED[@]} -eq 0 ]] || return 0
+  cp "$WORK/sourmash/Cargo.lock" "$LOCK"
+  echo "saved $LOCK" >&2
+}
 
 bindgen_version() {
-  ( cd "$SRC" && cargo tree -i wasm-bindgen --target wasm32-unknown-unknown 2>/dev/null \
+  ( cd "$SRC" && cargo tree -i wasm-bindgen --target wasm32-unknown-unknown "${LOCKED[@]}" 2>/dev/null \
       | head -1 | awk '{print $2}' | tr -d 'v' )
 }
 
 emit() { # <target-dir> <out-dir>
   local want have
   want="$(bindgen_version)"
-  have="$(wasm-bindgen --version 2>/dev/null | awk '{print $2}' || true)"
-  if [[ "$have" != "$want" ]]; then
-    echo "wasm-bindgen CLI is ${have:-absent} but the crate resolves to $want." >&2
-    echo "They must match exactly:  cargo install wasm-bindgen-cli --version $want" >&2
-    exit 1
-  fi
+  command -v wasm-bindgen >/dev/null \
+    || die "the wasm-bindgen CLI is not on PATH: cargo install wasm-bindgen-cli --version $want"
+  have="$(wasm-bindgen --version | awk '{print $2}')"
+  [[ "$have" == "$want" ]] \
+    || die "wasm-bindgen CLI is $have but the crate resolves to $want. They must match exactly: cargo install wasm-bindgen-cli --version $want"
   wasm-bindgen --target web --out-dir "$2" --out-name sourmash "$1/sourmash.wasm"
 }
 
 build32() {
-  echo "==> wasm32 -> web/funprofiler-pkg/"
-  ( cd "$SRC" && cargo build --lib --release --target wasm32-unknown-unknown )
-  emit "$WORK/sourmash/target/wasm32-unknown-unknown/release" "$HERE/web/funprofiler-pkg"
+  echo "==> wasm32 -> $OUT32"
+  check_rustc "$RUST_STABLE" "$RUST_STABLE_VERSION"
+  ( cd "$SRC" && rustup run "$RUST_STABLE" cargo build --lib --release "${LOCKED[@]}" \
+      --target wasm32-unknown-unknown )
+  save_lock
+  emit "$WORK/sourmash/target/wasm32-unknown-unknown/release" "$OUT32"
 }
 
 build64() {
-  echo "==> wasm64 -> web/funprofiler-pkg64/"
+  echo "==> wasm64 -> $OUT64"
   # wasm64-unknown-unknown is Tier 3 with no prebuilt std, so nightly + build-std.
-  #   rustup toolchain install nightly
-  #   rustup component add rust-src --toolchain nightly
-  ( cd "$SRC" && rustup run nightly cargo build --lib --release \
+  #   rustup toolchain install nightly-2026-08-03 --component rust-src
+  check_rustc "$RUST_NIGHTLY" "$RUST_NIGHTLY_DATE"
+  ( cd "$SRC" && rustup run "$RUST_NIGHTLY" cargo build --lib --release "${LOCKED[@]}" \
       --target wasm64-unknown-unknown -Z build-std=std,panic_abort )
-  emit "$WORK/sourmash/target/wasm64-unknown-unknown/release" "$HERE/web/funprofiler-pkg64"
+  save_lock
+  emit "$WORK/sourmash/target/wasm64-unknown-unknown/release" "$OUT64"
 }
 
 case "$WHICH" in
@@ -108,5 +183,5 @@ esac
 echo
 echo "Note: a wasm64 module carries a 64-bit table, which node 22 refuses with"
 echo "\"invalid table elements limits flags\" — the same refusal it gives the"
-echo "sylph wasm64 package that works in production. Test the 64-bit build in a"
-echo "browser, never in node."
+echo "sylph wasm64 package that works in production. Node 24 loads both: test the"
+echo "64-bit build there, or in a browser, never in node 22."

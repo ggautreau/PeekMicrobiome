@@ -28,7 +28,8 @@ export class Profiler {
         wasm.profiler_begin_sample_pe(this.__wbg_ptr, max_reads);
     }
     /**
-     * Returns the `c` (sub-sampling rate) of the loaded database.
+     * Returns the `c` (sub-sampling rate) reads are sketched at: the
+     * database's own, or its smallest when its genomes do not share one.
      * @returns {number}
      */
     get c() {
@@ -124,6 +125,9 @@ export class Profiler {
     /**
      * Load a sylph database. `syldb` is the raw bytes of a `.syldb` file
      * (bincode-serialised `Vec<GenomeSketch>`).
+     *
+     * A database that is not one sylph can profile against is refused here,
+     * with the reason, rather than accepted and trapping on the first sample.
      * @param {Uint8Array} syldb
      */
     constructor(syldb) {
@@ -194,6 +198,12 @@ export class Profiler {
      *
      * Returns a sylph-compatible TSV string (with the same column order
      * produced by `sylph profile`).
+     *
+     * A FASTQ that stops at a malformed record is an error, not a profile:
+     * the sketch would be of the reads before the bad record only, and a
+     * table built from part of a file looks exactly like one built from all
+     * of it. (The streaming path leaves that call to the caller, which reads
+     * `sample_halted` against `sample_done` and `sample_invalid`.)
      * @param {Uint8Array} fastq
      * @param {number} max_reads
      * @returns {string}
@@ -221,7 +231,8 @@ export class Profiler {
     /**
      * Paired-end equivalent of `profile()`. `r1` and `r2` are the uncompressed
      * FASTQ bytes for the two mates of one sample. Records are read in lockstep;
-     * dedup uses an inter-mate k-mer pair to drop PCR duplicates.
+     * dedup uses an inter-mate k-mer pair to drop PCR duplicates. A malformed
+     * record in either mate is an error, as in `profile()`.
      * @param {Uint8Array} r1
      * @param {Uint8Array} r2
      * @param {number} max_reads

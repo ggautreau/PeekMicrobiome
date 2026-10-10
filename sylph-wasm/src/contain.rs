@@ -878,7 +878,13 @@ fn bootstrap_interval(
         let mut rand_vec = vec![];
         rand_vec.reserve(num_samp);
         for _ in 0..num_samp {
-            rand_vec.push(covs_full[fastrand::usize(..covs_full.len())]);
+            // u64, not usize: fastrand draws a usize from 32-bit words when
+            // pointers are 32 bits wide and from 64-bit words otherwise, so the
+            // wasm32 build resampled a different bootstrap than wasm64 and the
+            // native CLI, and its ANI/lambda 5-95 percentile columns disagreed
+            // with theirs. Drawing a u64 is bit-for-bit what usize does on a
+            // 64-bit target, so native output is unchanged.
+            rand_vec.push(covs_full[fastrand::u64(..covs_full.len() as u64) as usize]);
         }
         let lambda;
         if args.ratio {
