@@ -76,9 +76,10 @@ add(f"The page caps a run at {CAP // 1_000_000} million reads by default, and §
     "stands in for the whole of it.")
 add("")
 add("Three profilers were run on every rung. **The page**, as native sylph 0.9.0 against the same "
-    "UHGG catalogue the browser downloads: the two builds report the same rows in the same order "
-    "with abundances agreeing to the third decimal (§3.1), so the native binary stands in for the "
-    "browser at the precision reported here and costs hours less. **Native sylph against the whole "
+    "UHGG catalogue the browser downloads: on these 150-bp pairs the two builds report the same "
+    "rows in the same order with abundances within 0.03 percentage points — the residue of native "
+    "sylph's AVX2 seeding, without which they are identical (§3.1) — so the native binary stands "
+    "in for the browser at the precision reported here and costs hours less. **Native sylph against the whole "
     "of GTDB r220** — 113,104 species representatives, a 14 GB database — which is the profile the "
     "page cannot offer, because a browser must download what it uses. And **Meteor2 2.0.18**, "
     "which is not a sketching method at all: it maps reads to a 10.4-million-gene catalogue with "

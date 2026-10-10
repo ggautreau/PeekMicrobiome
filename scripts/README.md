@@ -151,15 +151,6 @@ subsample of the run already in `data/`, so the matrix that comes out is a real 
 (`ERR14098592`, the smallest in PRJEB83730) resolved, streamed, gunzipped, sketched and
 profiled to a TSV against the bundled 6 MB database, reporting the throughput it got.
 
-## `test_downsample.mjs`
-
-Node port of `web/app.js` downsample loop, for sanity-checking the cut logic
-without a browser:
-
-```bash
-node scripts/test_downsample.mjs /tmp/test10k.fastq.gz /tmp/out.fastq 1000
-```
-
 ## `build_screening_db.sh` — the multi-biome screening database
 
 ```bash

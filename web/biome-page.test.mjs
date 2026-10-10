@@ -328,7 +328,8 @@ try {
     const o = [...s.options].find(o => /^Soil/.test(o.textContent));
     return { text: o.textContent, disabled: o.disabled };
   })()`);
-  check("soil is listed with its species count and size", /19,472 species/.test(soilNote.text) && /2.8 GB/.test(soilNote.text), soilNote.text);
+  // 2,963 MB in decimal units — the ones Zenodo and the text under the picker use.
+  check("soil is listed with its species count and size", /19,472 species/.test(soilNote.text) && /3\.0 GB/.test(soilNote.text), soilNote.text);
 
   // The note follows the picker.
   const noteAfter = await cdp.eval(`(() => {
@@ -351,21 +352,27 @@ try {
   // With a sample in the list, automatic mode must name the one it will read.
   // "the first sample" is a rule the user has to apply themselves against an
   // order they did not choose.
-  const autoHint = await cdp.eval(`(() => {
+  const screenState = `(() => {
     document.getElementById("modeAuto").click();
     const t = document.getElementById("screenHint").textContent;
-    const d = document.getElementById("screenBtn").disabled;
+    const b = document.getElementById("screenBtn");
+    const out = { t, d: b.disabled, why: b.title };
     document.getElementById("modeManual").click();
-    return { t, d };
-  })()`);
+    return out;
+  })()`;
+  const autoHint = await cdp.eval(screenState);
   check("automatic mode names the sample it will screen",
     /sampleA/.test(autoHint.t), autoHint.t.slice(0, 90));
   check("...and says the whole batch follows that one catalogue",
     /whole batch/.test(autoHint.t));
-  check("...and the button is live now that there is something to screen",
-    autoHint.d === false);
+  // The load clicked above holds the worker pool, and a screen ends by loading a
+  // database: it waits, and says what for, rather than racing the load.
+  check("...and while a database is loading, the screen waits and says why",
+    autoHint.d === true && /database is loading/.test(autoHint.why), autoHint.why);
 
   const dbLine = await cdp.waitFor(`document.getElementById("dbInfo").textContent`, /Database ready/, 120_000, "#dbInfo");
+  check("...and the button is live once it is, now that there is something to screen",
+    (await cdp.eval(screenState)).d === false);
   check("the database line names the biome that was loaded",
     /Smoke test/.test(dbLine) && /gut_mini\.syldb/.test(dbLine)
     && /MGnify human-gut v2\.0\.2/.test(dbLine), dbLine.slice(0, 170));

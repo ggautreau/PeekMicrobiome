@@ -17,6 +17,29 @@ const MPA_RANKS = [
 ];
 
 /**
+ * Refuse a table these two formats cannot be written from.
+ *
+ * Both are written from the PER-GENOME table, the one row per genome the
+ * matrix is at species rank, because both rebuild the lineage from the genome.
+ * Handed the page's view aggregated to a higher rank, whose rows are "12
+ * genomes" of a genus, they found no lineage for "12 genomes", wrote every
+ * genus as a species of its own with nothing above it, and gave a BIOM whose
+ * observation IDs were "1 genome" over and over — a file biom-format refuses
+ * outright and every other reader takes at face value. An error here is the
+ * difference between no file and a wrong one.
+ */
+function perGenomeRows(table, format) {
+  const rows = table?.rows ?? [];
+  const bad = rows.find((r) => !r?.genome || /^\d+ genomes?$/.test(String(r.genome)));
+  if (bad) {
+    throw new Error(`${format} is written from the per-genome table, at species rank — ` +
+      `this one has a row "${bad.genome ?? bad.species ?? "?"}", aggregated above species or ` +
+      `with no genome`);
+  }
+  return rows;
+}
+
+/**
  * MetaPhlAn-style profile: one row per clade, abundances CUMULATIVE up the
  * lineage, tab separated.
  *
@@ -31,7 +54,8 @@ const MPA_RANKS = [
  * dropped, since a clade string of nothing but separators names no clade.
  */
 export function toMetaphlan(table, { lineageOf, speciesOf, header = [] } = {}) {
-  const { samples, rows } = table;
+  const { samples } = table;
+  const rows = perGenomeRows(table, "A MetaPhlAn profile");
   // clade -> per-sample sums.
   const clades = new Map();
   const add = (clade, values) => {
@@ -40,23 +64,39 @@ export function toMetaphlan(table, { lineageOf, speciesOf, header = [] } = {}) {
     for (let i = 0; i < samples.length; i++) e[i] += values[i] || 0;
   };
 
-  for (const r of rows) {
+  // THE SPECIES LEVEL IS ONE ROW PER GENOME, never a sum of genomes that share
+  // a name. GTDB gives one name to several representative genomes, and the
+  // rank fallbacks give "Collinsella sp." to dozens: summed under one s__, they
+  // became one species with an abundance no organism has — 468 genomes of the
+  // example came out as 453 species. The caller is expected to hand in names
+  // that are already unique (the page's speciesLabel appends the accession to
+  // an ambiguous one); every genome whose clade would still collide with
+  // another's gets its accession appended here, the same way — all of them,
+  // not all but the first, so no one of them reads as the species.
+  const lineages = rows.map((r) => {
     const lin = lineageOf?.(r.genome) ?? {};
     const parts = [];
     for (const [gtdb, mpa] of MPA_RANKS) {
       const v = lin[gtdb];
-      if (!v) continue;
-      parts.push(`${mpa}__${String(v).replace(/\s+/g, "_")}`);
-      // Every prefix of the lineage is a clade, and each carries the total of
-      // what sits beneath it.
-      add(parts.join("|"), r.values);
+      if (v) parts.push(`${mpa}__${String(v).replace(/\s+/g, "_")}`);
     }
     const sp = speciesOf?.(r.genome) || r.species;
-    if (sp) {
-      parts.push(`s__${String(sp).replace(/\s+/g, "_")}`);
-      add(parts.join("|"), r.values);
-    }
-  }
+    const clade = sp ? [...parts, `s__${String(sp).replace(/\s+/g, "_")}`].join("|") : null;
+    return { parts, sp, clade };
+  });
+  const seen = new Map();
+  for (const l of lineages) if (l.clade) seen.set(l.clade, (seen.get(l.clade) ?? 0) + 1);
+
+  rows.forEach((r, i) => {
+    const { parts, sp, clade } = lineages[i];
+    // Every prefix of the lineage is a clade, and each carries the total of
+    // what sits beneath it.
+    for (let k = 1; k <= parts.length; k++) add(parts.slice(0, k).join("|"), r.values);
+    if (!clade) return;
+    add(seen.get(clade) > 1
+      ? [...parts, `s__${String(`${sp} [${r.genome}]`).replace(/\s+/g, "_")}`].join("|")
+      : clade, r.values);
+  });
 
   // Shallow clades first, then alphabetically — the order MetaPhlAn emits, and
   // the one that makes a file readable by eye.
@@ -65,9 +105,14 @@ export function toMetaphlan(table, { lineageOf, speciesOf, header = [] } = {}) {
     return da - db || a.localeCompare(b);
   });
 
+  // The column header is NOT a comment. MetaPhlAn's merged tables write it as a
+  // plain `clade_name` line after their `#` lines, and the usual way to read
+  // these files — pandas.read_csv(comment="#") — drops a `#clade_name` header
+  // with the comments and takes the first clade, k__Archaea, for the column
+  // names.
   const lines = [
     ...header.map((h) => `#${h}`),
-    `#clade_name\t${samples.join("\t")}`,
+    `clade_name\t${samples.join("\t")}`,
   ];
   for (const name of names) {
     lines.push(`${name}\t${[...clades.get(name)].map((v) => v.toFixed(5)).join("\t")}`);
@@ -83,9 +128,22 @@ export function toMetaphlan(table, { lineageOf, speciesOf, header = [] } = {}) {
  * mostly zeros, but a few hundred rows by a few hundred samples is small enough
  * that the sparse form's index arithmetic costs more than it saves.
  */
-export function toBiom(table, { lineageOf, speciesOf, generatedBy = "PeekMicrobiome", date } = {}) {
-  const { samples, rows } = table;
-  return JSON.stringify({
+export function toBiom(table, { lineageOf, speciesOf, generatedBy = "PeekMicrobiome", date,
+  columnMeta = () => null } = {}) {
+  const { samples } = table;
+  const rows = perGenomeRows(table, "A BIOM table");
+  const ids = new Set(rows.map((r) => r.genome));
+  if (ids.size !== rows.length) throw new Error("A BIOM table needs one row per genome; two rows share one");
+  // A float matrix written as floats. JSON.stringify writes 0 and 3 as integers,
+  // and `biom validate-table` refuses integers in a matrix that declares itself
+  // "float" — so the cells are written by hand: six decimals, as before, then
+  // trailing zeros dropped down to one ("0.0", "12.5").
+  const cell = (v) => {
+    const t = (Number.isFinite(v) ? v : 0).toFixed(6).replace(/0+$/, "");
+    return t.endsWith(".") ? `${t}0` : t;
+  };
+  const DATA = "\u0000data\u0000";
+  const text = JSON.stringify({
     id: null,
     format: "1.0.0",
     format_url: "http://biom-format.org",
@@ -94,7 +152,7 @@ export function toBiom(table, { lineageOf, speciesOf, generatedBy = "PeekMicrobi
     // Injected rather than read from the clock, so the same table gives the same
     // file — a diff between two exports should show the numbers, not the second
     // they were written in.
-    date: date ?? new Date(0).toISOString(),
+    date: biomDate(date),
     matrix_type: "dense",
     matrix_element_type: "float",
     shape: [rows.length, samples.length],
@@ -106,11 +164,28 @@ export function toBiom(table, { lineageOf, speciesOf, generatedBy = "PeekMicrobi
       }
       const sp = speciesOf?.(r.genome) || r.species;
       taxonomy.push(sp ? `s__${sp}` : "s__");
-      return { id: r.genome || r.species, metadata: { taxonomy } };
+      return { id: r.genome, metadata: { taxonomy } };
     }),
-    columns: samples.map((s) => ({ id: s, metadata: null })),
-    data: rows.map((r) => samples.map((_, i) => Number((r.values[i] || 0).toFixed(6)))),
+    // A column's metadata is null unless there is something to say about it — so
+    // far, only that it was profiled on fewer reads than its input holds.
+    columns: samples.map((s) => ({ id: s, metadata: columnMeta(s) ?? null })),
+    data: DATA,
   }, null, 1);
+  const data = "[\n" + rows.map((r) => `  [${samples.map((_, i) => cell(r.values[i] || 0)).join(",")}]`)
+    .join(",\n") + "\n ]";
+  return text.replace(JSON.stringify(DATA), data);
+}
+
+/**
+ * The date in the one shape `biom validate-table` accepts: ISO 8601 to the
+ * second, with no fraction and no zone — "2026-10-10T14:08:09". The page hands
+ * in `new Date().toISOString()`, whose milliseconds and "Z" the validator
+ * refused, so it is normalised here, whatever arrives: a Date, a string, or
+ * nothing (the epoch, so the same table gives the same file).
+ */
+function biomDate(date) {
+  const d = date instanceof Date ? date : new Date(date ?? 0);
+  return (Number.isFinite(d.getTime()) ? d : new Date(0)).toISOString().slice(0, 19);
 }
 
 /**
@@ -185,6 +260,10 @@ export function toSession(state) {
     // saved roll-up would freeze the map version the way saving the aggregated
     // matrix would freeze the rank.
     funcProfiles: state.funcProfiles ?? null,
+    // Columns profiled on fewer reads than their input holds: sample -> why.
+    // Optional like the keys above; a session without it opens with no column
+    // flagged, which is what a session saved before it could say.
+    incomplete: state.incomplete?.size ? Object.fromEntries(state.incomplete) : null,
     // The groups the reader made by hand, and nothing else about grouping. A
     // grouping derived from a metadata FIELD is not saved: the field is already
     // in `sampleMeta`, so saving the result would freeze a derivation the way a
@@ -224,6 +303,8 @@ export function fromSession(text) {
     // the Function tab has to tell "this run measured no functions" from "this
     // run measured functions and found none", and those are different answers.
     funcProfiles: (j.funcProfiles && typeof j.funcProfiles === "object") ? j.funcProfiles : null,
+    incomplete: new Map(Object.entries(j.incomplete ?? {})
+      .filter(([, v]) => typeof v === "string" && v.trim())),
     // Groups made by hand, or an empty map. A session written before this key
     // existed opens with no groups, which is what it had.
     groups: new Map(Object.entries(j.groups ?? {})

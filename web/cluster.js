@@ -152,13 +152,38 @@ export function clusterOrder(vectors, distFn) {
 }
 
 /**
+ * Every field that is indexed by sample, and so must move with the columns.
+ *
+ * Named one by one rather than guessed from a length. A GMM row's `steps` or a
+ * pathway's `kos` can happen to have as many entries as there are samples, and
+ * permuting those would corrupt a definition; leaving `coverage` behind, which
+ * is what this function did, put another sample's step coverage under each GMM
+ * cell once the columns were clustered — "0 % of this module's steps were
+ * found" printed above steps marked found.
+ *
+ *   table level  refs (the reference each column was profiled against),
+ *                assigned / unassigned (kegg.js and gmm.js: the share of each
+ *                sample's signal a roll-up can speak for)
+ *   row level    values, coverage (gmm.js: the share of a module's steps seen)
+ *
+ * A table that grows another per-sample field has to add it here; the test in
+ * cluster.test.mjs fails for any array on a row of the shipped tables that has
+ * a sample's length and is not on this list.
+ */
+export const PER_SAMPLE = Object.freeze({
+  table: Object.freeze(["refs", "assigned", "unassigned"]),
+  row: Object.freeze(["values", "coverage"]),
+});
+
+/**
  * Reorder a matrix table in place-ish, returning a new one.
  *
  * `table` is what matrixToTable() produces: { samples, rows, ... } where each
  * row has `values` aligned with `samples`. Returns the same shape with both
- * axes permuted, plus `clustered` saying which axes were actually reordered —
- * the caller says so on screen rather than leaving the user to wonder whether
- * the order means anything.
+ * axes permuted — every field in PER_SAMPLE along with the columns — plus
+ * `clustered` saying which axes were actually reordered, which the caller says
+ * on screen rather than leaving the user to wonder whether the order means
+ * anything.
  */
 export function clusterTable(table, { maxRows = MAX_ROWS } = {}) {
   const { samples, rows } = table;
@@ -178,14 +203,21 @@ export function clusterTable(table, { maxRows = MAX_ROWS } = {}) {
   let rowOrder = rows.map((_, i) => i);
   if (doRows) rowOrder = clusterOrder(rows.map((r) => r.values), correlationDistance);
 
+  // A field is moved only when it really has one entry per sample: anything
+  // else is not what this list says it is, and is left exactly as it came.
+  const permute = (obj, keys) => {
+    const out = {};
+    for (const k of keys) {
+      const v = obj[k];
+      if (Array.isArray(v) && v.length === samples.length) out[k] = sampleOrder.map((c) => v[c]);
+    }
+    return out;
+  };
   return {
     ...table,
+    ...permute(table, PER_SAMPLE.table),
     samples: sampleOrder.map((i) => samples[i]),
-    refs: table.refs ? sampleOrder.map((i) => table.refs[i]) : table.refs,
-    rows: rowOrder.map((i) => {
-      const r = rows[i];
-      return { ...r, values: sampleOrder.map((c) => r.values[c]) };
-    }),
+    rows: rowOrder.map((i) => ({ ...rows[i], ...permute(rows[i], PER_SAMPLE.row) })),
     clustered: { rows: doRows, samples: doCols },
   };
 }

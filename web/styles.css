@@ -1,6 +1,9 @@
 /* sylph-web-gut — INRAE/CroCoDeEL-inspired theme */
 
 :root {
+  /* The sticky header's height, measured by multi.js so the step strip can stick
+     just under it. 57 px is the desktop header, for the moment before it runs. */
+  --header-h: 57px;
   --bg: #faf7f0;
   --bg-card: #ffffff;
   --bg-soft: #f6f7f7;
@@ -200,8 +203,22 @@ html[data-theme="dark"] .beta-bar a:hover { color: #fef3c7; }
   color: var(--accent);
   background: var(--accent-soft);
 }
+/* The link to the one-file page: words on a wide screen, the icon alone on a
+   phone, where "Single sample" wrapped onto two lines and made the header — which
+   stays on screen — twice as tall. */
+.app-nav .nav-link { display: inline-flex; align-items: center; gap: 0.35rem; white-space: nowrap; }
+.app-nav .nav-link svg { display: none; }
+@media (max-width: 480px) {
+  .app-nav .nav-link { padding: 0.4rem 0.45rem; }
+  .app-nav .nav-link svg { display: block; }
+  .app-nav .nav-link .nav-label { display: none; }
+}
 
-.theme-toggle {
+/* `.icon-btn` is the square outline alone; `.theme-toggle` is the light/dark
+   button, which theme.js wires. Two names because one name doing both jobs put
+   the flip on the Settings gear. */
+.theme-toggle,
+.icon-btn {
   background: transparent;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
@@ -215,7 +232,8 @@ html[data-theme="dark"] .beta-bar a:hover { color: #fef3c7; }
   padding: 0;
   transition: border-color 0.15s, color 0.15s;
 }
-.theme-toggle:hover {
+.theme-toggle:hover,
+.icon-btn:hover {
   border-color: var(--accent);
   color: var(--accent);
 }
@@ -507,6 +525,15 @@ html[data-theme="dark"] .privacy-notice {
 html[data-theme="dark"] .privacy-notice strong { color: #dbeafe; }
 html[data-theme="dark"] .privacy-notice .privacy-icon { color: #60a5fa; }
 html[data-theme="dark"] .privacy-notice a { color: #93c5fd; }
+/* The banner's second half, folded after the first visit. The summary is a line
+   of its own under the headline sentence, so it reads as "more of this", not as
+   a second banner. */
+.privacy-more { margin-top: .45rem; }
+.privacy-more > summary { cursor: pointer; list-style: none; font-weight: 500; }
+.privacy-more > summary::-webkit-details-marker { display: none; }
+.privacy-more > summary::after { content: " ▸"; opacity: .6; }
+.privacy-more[open] > summary::after { content: " ▾"; }
+.privacy-more > div { margin-top: .35rem; }
 
 /* ---------- Notice / warning banner ---------- */
 .notice {
@@ -642,6 +669,9 @@ code {
    all, which is the opposite of what happened. Amber: look at this, do not
    discard it. */
 .files li.incomplete { color: var(--working); }
+/* A matrix column profiled on part of its input: said in the column's own header,
+   so a screenshot or a copied range carries it too. */
+.matrix-ref.matrix-incomplete { color: var(--danger-ink); font-weight: 600; }
 .files li button {
   background: none;
   border: none;
@@ -1416,6 +1446,8 @@ details[open] > .ena-summary::before { transform: rotate(90deg); }
   color: var(--ink);
 }
 .pie-near-head .info { font-weight: 400; font-size: 0.74rem; cursor: help; }
+/* What the bar and the number each are: they are not the same quantity. */
+.pie-near-key { margin: -0.15rem 0 0.3rem; font-size: 0.72rem; color: var(--ink-muted); }
 /* Which distance the list is sorted by. Two buttons rather than a dropdown: the
    point is to flip between them and watch the order change. */
 .pie-metric { display: flex; gap: 0.15rem; cursor: help; }
@@ -1707,7 +1739,13 @@ details[open] > .ena-summary::before { transform: rotate(90deg); }
 .demo-fold > div { margin-top: .45rem; }
 
 /* The citation notice, folded. `summary` carries the icon and the one sentence
-   that has to be met even by someone who never opens it. */
+   that has to be met even by someone who never opens it.
+
+   BLOCK, not the flex row `.notice` gives every other banner. Chrome lays a
+   <details> out as a flex container now, so the summary and its body stood side
+   by side — two 150 px columns on a phone — while the rule below was written for
+   the body to sit UNDER the summary, indented past the icon. */
+.notice-fold { display: block; }
 .notice-fold > summary {
   display: flex;
   gap: .6rem;
@@ -1785,6 +1823,17 @@ details[open] > .ena-summary::before { transform: rotate(90deg); }
    affordance. */
 table.matrix thead th.sortable { cursor: pointer; user-select: none; }
 table.matrix thead th.sortable:hover { color: var(--accent); }
+/* The button that makes the header reachable from the keyboard, drawn as the
+   header text it replaces. */
+table.matrix thead th.sortable .th-sort {
+  all: unset;
+  cursor: pointer;
+}
+table.matrix thead th.sortable .th-sort:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
 table.matrix thead th .sort-mark { opacity: 0.85; font-size: 0.85em; margin-left: 0.15rem; }
 
 /* ---- what is inside a matrix cell ------------------------------------------
@@ -1873,10 +1922,19 @@ table.matrix thead th .sort-mark { opacity: 0.85; font-size: 0.85em; margin-left
 
 /* ---------- Step strip ----------
    Sticky, because the question it answers ("what is missing?") is asked from
-   the bottom of the page, where the numbered cards are long gone. */
+   the bottom of the page, where the numbered cards are long gone.
+
+   Stuck BELOW the header, which is sticky too and drawn over it. At `top: 0` the
+   two stacked in the same place and the strip was 10 px of border under a 57 px
+   header — present on every scroll and readable on none. The header's height is
+   measured into --header-h by multi.js, because it changes with the width (the
+   tagline goes, the navigation wraps). */
+/* Where a jump from the strip lands: below the header AND the strip, both of
+   which stay on top — or the card's own heading is under them. */
+#cardDb, #cardSamples, #results { scroll-margin-top: calc(var(--header-h, 57px) + 5.5rem); }
 .stepper {
   position: sticky;
-  top: 0;
+  top: var(--header-h, 0px);
   z-index: 9;
   display: flex;
   gap: 0.5rem;
@@ -1971,11 +2029,17 @@ table.matrix thead th .sort-mark { opacity: 0.85; font-size: 0.85em; margin-left
   .stepper-item.is-running .stepper-mark { animation-duration: 2.4s; }
 }
 @media (max-width: 640px) {
-  .stepper { gap: 0.25rem; padding: 0.4rem 0; }
-  .stepper-item { flex: 1 1 auto; padding: 0.35rem 0.4rem; gap: 0.4rem; }
+  /* ONE row. Wrapped, the strip was three rows — 140 px of a 844 px phone held
+     on screen under the header for the whole page, once it stopped hiding
+     behind that header. A third of the width each, and what does not fit is
+     cut with an ellipsis rather than pushed to another line. */
+  .stepper { gap: 0.25rem; padding: 0.4rem 0; flex-wrap: nowrap; }
+  .stepper-item { flex: 1 1 0; min-width: 0; padding: 0.35rem 0.4rem; gap: 0.4rem; }
   /* Below this width three labels do not fit; the marks and the ACTIVE step's
      state line do, and that is the part that says what to do next. */
-  .stepper-item .stepper-text b { font-size: 0.8rem; }
+  .stepper-item .stepper-text b {
+    font-size: 0.8rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
   .stepper-item:not(.is-now) .stepper-state { display: none; }
 }
 
@@ -2257,8 +2321,12 @@ html[data-theme="dark"] .notice.biome-warning .notice-icon { color: #e07a63; }
 
 /* Colour-by, beside the zoom controls: both belong to the ordination and both
    go away with it. */
-.fig-colour { display: inline-flex; align-items: center; gap: 0.35rem; font-size: 0.85rem; color: var(--ink-soft); }
-.fig-colour select { font-size: 0.85rem; padding: 0.15rem 0.3rem; }
+/* Wrapping, and never wider than its row. The Groups control is a label, a
+   select and a button in one line, 429 px of it — on a 390 px phone that one
+   line made the whole page 462 px wide and scroll sideways. */
+.fig-colour { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 0.35rem;
+  font-size: 0.85rem; color: var(--ink-soft); max-width: 100%; }
+.fig-colour select { font-size: 0.85rem; padding: 0.15rem 0.3rem; max-width: 100%; min-width: 0; }
 
 /* The KEGG acknowledgement. Deliberately not a modal: a modal over the whole
    page would read as a paywall, and this is a question about one tab. */

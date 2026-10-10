@@ -469,6 +469,15 @@ export const PROGRESS_RETRY_MS = 250;
 export const MAX_RANGE_RESTARTS = 3;
 // Only used to scale the request ceiling to the size of the job.
 const CHUNK_HINT = 8 * 1024 * 1024;
+// How long a request may sit with nothing arriving before it is treated as cut.
+// Every guard here watched for a connection that ENDS badly; a connection that
+// stays open and simply stops sending — a dead NAT entry, a proxy that lost the
+// upstream — ends never, and the sample sat at the same byte for ever with the
+// download still "running". A minute of silence from a link that normally
+// delivers megabytes a second is not slowness. The wait is only armed while a
+// read is actually pending, so a mate parked by the pair drift budget, which
+// reads nothing on purpose, cannot trip it.
+export const IDLE_MS = 60_000;
 
 // EVERY request counts against this, not just the failed ones. That distinction
 // is the exact defect that was found in db-cache.js: a server that answers a
@@ -546,6 +555,23 @@ function sleep(ms, signal) {
   });
 }
 
+const fmtSeconds = (ms) => `${ms >= 10_000 ? Math.round(ms / 1000) : (ms / 1000).toFixed(1)} s`;
+
+// Settles like `p`, or rejects with `stalled()` if `ms` pass first — and then
+// calls `onStall`, which aborts the request so the socket is let go. In that
+// order: the abort can reject `p` synchronously, and whichever rejects first is
+// what the race reports — an AbortError would read as the user cancelling. The
+// loser is caught, so a read the abort rejects later is not an unhandled error.
+function withIdle(p, ms, onStall, stalled) {
+  if (!Number.isFinite(ms) || ms <= 0) return p;
+  p.catch(() => {});
+  let timer;
+  const idle = new Promise((_, reject) => {
+    timer = setTimeout(() => { reject(stalled()); onStall(); }, ms);
+  });
+  return Promise.race([p, idle]).finally(() => clearTimeout(timer));
+}
+
 // A fatal error is one where retrying cannot help AND resuming would be a lie:
 // the bytes already delivered belong to a file the server is no longer serving.
 function fatal(message, code) {
@@ -604,7 +630,12 @@ export function urlSource(url, opts = {}) {
     backoff: opts.backoff ?? BACKOFF_MS,
     progressRetryMs: opts.progressRetryMs ?? PROGRESS_RETRY_MS,
     maxRestarts: opts.maxRestarts ?? MAX_RANGE_RESTARTS,
+    idleMs: opts.idleMs ?? IDLE_MS,
   };
+  // Not an abort (that is the user's) and not fatal: a stall is a cut, retried
+  // and resumed like any other.
+  const stalled = () => new Error(
+    `${basenameOf(url)}: nothing arrived for ${fmtSeconds(cfg.idleMs)} — the connection stalled`);
   const declared = Number.isFinite(opts.size) && opts.size > 0 ? opts.size : NaN;
   // Shared across the (single) stream and the slices, so the "is this still the
   // same file" checks span every request made for this source.
@@ -644,9 +675,17 @@ export function urlSource(url, opts = {}) {
           let last = null;
           for (let attempt = 0; attempt < 3; attempt++) {
             if (cfg.signal?.aborted) throw abortError();
+            // Its own controller, following the caller's, so a stall can drop
+            // THIS request without cancelling the whole source.
+            const req = new AbortController();
+            const follow = () => req.abort();
+            cfg.signal?.addEventListener("abort", follow, { once: true });
+            const idle = (p) => withIdle(p, cfg.idleMs, follow, stalled);
             try {
               state.requests++;
-              const resp = await cfg.fetchImpl(url, { headers, signal: cfg.signal, cache: "no-store" });
+              const resp = await idle(cfg.fetchImpl(url, {
+                headers, signal: req.signal, cache: "no-store", redirect: "error",
+              }));
               if (!resp.ok && resp.status !== 206) throw new Error(`HTTP ${resp.status}`);
               // This request is a request for the same file as every other one,
               // so it feeds the same two witnesses: without this the gzip probe
@@ -659,7 +698,7 @@ export function urlSource(url, opts = {}) {
               let have = 0, seen = 0;
               try {
                 while (have < want) {
-                  const { value, done } = await reader.read();
+                  const { value, done } = await idle(reader.read());
                   if (done) break;
                   if (!value?.length) continue;
                   const from = Math.max(0, skip - seen);
@@ -693,6 +732,8 @@ export function urlSource(url, opts = {}) {
               if (e?.name === "AbortError" || cfg.signal?.aborted) throw abortError();
               last = e;
               await sleep(cfg.progressRetryMs * (attempt + 1), cfg.signal);
+            } finally {
+              cfg.signal?.removeEventListener("abort", follow);
             }
           }
           throw new Error(`could not read the start of ${basenameOf(url)}: ${last?.message ?? last}`);
@@ -754,6 +795,15 @@ function resumableStream(url, state, cfg) {
   let emittedAtOpen = 0;       // to tell a retry that progressed from one that did not
   let strikes = 0;
   let finished = false;
+  // The current request's own controller, so a stall can drop that one request
+  // and resume, where aborting `ctrl` would end the whole stream. It follows
+  // `ctrl`, so cancelling the stream still drops whatever is in flight.
+  let req = null;
+  const dropRequest = () => req?.abort();
+  ctrl.signal.addEventListener("abort", dropRequest);
+  const stalled = () => new Error(
+    `nothing arrived for ${fmtSeconds(cfg.idleMs)} — the connection stalled`);
+  const idle = (p) => withIdle(p, cfg.idleMs, dropRequest, stalled);
 
   const cleanup = () => {
     if (finished) return;
@@ -781,7 +831,17 @@ function resumableStream(url, state, cfg) {
     // header that can actually be read cross-origin.
     if (start > 0) headers.Range = `bytes=${start}-`;
 
-    const resp = await cfg.fetchImpl(url, { headers, signal: ctrl.signal, cache: "no-store" });
+    // redirect: "error", on this request and on the slice above. The allow-list
+    // is checked on the URL we ASK for, and fetch() follows a 30x on its own:
+    // an EBI host answering with a redirect to anywhere else would have had
+    // that host contacted with the user's address — the one thing the privacy
+    // notice says cannot happen — with no line here ever seeing the new URL.
+    // The EBI's FASTQ host answers 206 directly (checked over http and https),
+    // so this refuses nothing that works today.
+    req = new AbortController();
+    const resp = await idle(cfg.fetchImpl(url, {
+      headers, signal: req.signal, cache: "no-store", redirect: "error",
+    }));
     // Every error path in this function lets go of the body before it throws.
     // A rejected response whose body is neither read nor cancelled keeps its
     // socket until the garbage collector gets to it, and a run that fails its
@@ -932,7 +992,7 @@ function resumableStream(url, state, cfg) {
         if (ctrl.signal.aborted) { cleanup(); controller.error(abortError()); return; }
         try {
           if (!reader) await openRequest();
-          const { value, done } = await reader.read();
+          const { value, done } = await idle(reader.read());
 
           if (done) {
             reader = null;
@@ -1101,9 +1161,18 @@ export function expectedProfiledReads({ readCount, layout, pairsAsTwo = false } 
  * and gzip checks still see an interrupted download; this one only ever caught
  * a file whose SIZE was honest and whose CONTENT was short.
  */
-export function readCountVerdict({ observed, expected, maxReads, layout } = {}) {
+//
+// `stop` is the worker's own account of why the read ended (see
+// sylph-worker-rpc.js): "reads" or "bases" means a cap ended it, and a sample
+// cut by a cap is short BY DESIGN. Without it the only cap this function could
+// see was the read cap, by comparing counts — and the base cap, on by default
+// for single-end runs, stops 250 bp MiSeq reads at 60 % of the read cap and
+// 10 kb nanopore reads at 1.5 %: every long-read run came back INCOMPLETE,
+// "the download ended early", from a download that was perfect.
+export function readCountVerdict({ observed, expected, maxReads, layout, stop } = {}) {
   if (!Number.isFinite(observed)) return { ok: true, capped: false, missing: NaN, note: "" };
-  const capped = Number.isFinite(maxReads) && observed >= maxReads;
+  const capped = stop === "reads" || stop === "bases"
+    || (Number.isFinite(maxReads) && observed >= maxReads);
   if (capped) return { ok: true, capped: true, missing: NaN, note: "" };
   if (!Number.isFinite(expected) || expected <= 0) {
     return { ok: true, capped: false, missing: NaN, note: "" };

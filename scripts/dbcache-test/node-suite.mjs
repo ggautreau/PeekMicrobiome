@@ -537,9 +537,12 @@ try {
       persisted: true,
       entries: [{ bytes: 433_000_000 }, { bytes: 6_500_000 }],
     });
+    // Decimal units, as fmtBytes writes every size on the page — the same units
+    // Zenodo and the catalogue table use. This check used to expect binary ones
+    // ("1.86 GB of 9.31 GB") and had been failing since fmtBytes changed.
     check("free space is quota minus usage, not the quota",
-      /1\.86 GB still free of 9\.31 GB/.test(line) && !/10\.0/.test(line), line);
-    check("what the cache itself occupies is shown", /419.1 MB used by these databases/.test(line), line);
+      /2\.00 GB still free of 10\.00 GB/.test(line) && !/10\.00 GB still free/.test(line), line);
+    check("what the cache itself occupies is shown", /439\.5 MB used by these databases/.test(line), line);
     check("persistence is whatever it is told, both ways",
       /kept until you delete it/.test(line)
       && /may evict it/.test(cacheSummary({ persisted: false, entries: [] })),
@@ -602,6 +605,52 @@ try {
       check("...with the decompressed file stored byte for byte",
         sha(Buffer.from(bytes)) === sha(raw), `${bytes.length} of ${raw.length} bytes`);
     } finally {
+      await new Promise((r) => srv.close(r));
+    }
+  }
+
+  // ---- S. a connection that goes silent without closing ---------------------
+  //
+  // Every fault above ENDS: a cut, an empty body, a 503. This one does not — the
+  // socket stays open and nothing more arrives. Nothing could see it before:
+  // Load database sat at the same byte, "downloading", for ever.
+  {
+    const http = await import("node:http");
+    const raw = Buffer.from(bodyA);
+    let gets = 0;
+    const sockets = new Set();
+    const srv = http.createServer((req, res) => {
+      res.setHeader("content-type", "application/octet-stream");
+      res.setHeader("last-modified", new Date(0).toUTCString());
+      res.setHeader("accept-ranges", "bytes");
+      if (req.method === "HEAD") {
+        res.setHeader("content-length", String(raw.length));
+        res.writeHead(200); res.end(); return;
+      }
+      gets++;
+      const m = /bytes=(\d+)-(\d+)/.exec(req.headers.range ?? "");
+      const a = m ? +m[1] : 0, b = m ? Math.min(+m[2], raw.length - 1) : raw.length - 1;
+      res.setHeader("content-length", String(b - a + 1));
+      if (m) res.setHeader("content-range", `bytes ${a}-${b}/${raw.length}`);
+      res.writeHead(m ? 206 : 200);
+      // The second request sends half its slice and then nothing, socket open.
+      if (gets === 2) { res.write(raw.subarray(a, a + Math.floor((b - a + 1) / 2))); return; }
+      res.end(raw.subarray(a, b + 1));
+    });
+    srv.on("connection", (s) => { sockets.add(s); s.on("close", () => sockets.delete(s)); });
+    await new Promise((r) => srv.listen(0, "127.0.0.1", r));
+    const url = `http://127.0.0.1:${srv.address().port}/silent.syldb`;
+    try {
+      resetDisk();
+      const got = await ensureWithin(url, { chunkSize: CHUNK, idleMs: 300 }, 30_000);
+      check("a slice that goes silent is dropped and resumed, not waited on for ever",
+        !got.err && got.res?.size === raw.length, got.err?.message ?? `${got.ms} ms`);
+      const bytes = await readCachedBytes(url).catch(() => Buffer.alloc(0));
+      check("...and the database stored is the server's, byte for byte",
+        sha(Buffer.from(bytes)) === sha(raw), `${bytes.length} of ${raw.length} bytes`);
+      check("...within a few idle periods", got.ms < 10_000, `${got.ms} ms`);
+    } finally {
+      for (const s of sockets) s.destroy();
       await new Promise((r) => srv.close(r));
     }
   }

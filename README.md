@@ -15,8 +15,10 @@ Upload-free, installation-free metagenomic profiling across biomes. A WebAssembl
 
 ## What crosses the network
 
-Every request this page makes, and nothing else. All of them are downloads *towards* you: no
-file of yours, no read, no file name and no result is ever uploaded, in any mode.
+Every request this page makes, and nothing else. All but the last are downloads *towards* you:
+no file of yours, no read and no file name is ever uploaded, in any mode. The last row is the one
+exception for results, and it needs a click: a coloured KEGG map is drawn by KEGG's server, so the
+link that opens it has to carry what is to be coloured.
 
 | Step | What crosses the network | What the other side learns |
 |---|---|---|
@@ -25,6 +27,7 @@ file of yours, no read, no file name and no result is ever uploaded, in any mode
 | **Load database** (bundled 6 MB / local `.syldb`) | nothing beyond the site itself | nothing |
 | **Paste an ENA accession** | the accession, then the public FASTQ files coming *down* from the EBI | the EBI sees your IP address and which accessions you asked for |
 | **Open the Gut Metabolic Modules level**, after answering its licence question | 8 KB of definitions coming *down* from `raw.githubusercontent.com` — the Raes lab's own repository, never this one | GitHub sees your IP address and that you asked for that file |
+| **Click a pathway cell** in the Function tab (on either page) | a link to that map on `kegg.jp`, and nothing until you click it | KEGG sees your IP address, the map, and the orthologs detected on it with a colour for each one's abundance in that sample — never the sample's name, never a read |
 
 Loading a database is **required before anything can be profiled**, including a purely local
 FASTQ, so the Zenodo row applies to everyone who does not pick the bundled or a local database —
@@ -40,8 +43,18 @@ their layout, read count and size, and the ones you tick are **streamed straight
 servers into the profiler** — decompressed, sketched and discarded chunk by chunk, never
 permanently saved to disk. FASTQ URLs are only followed on hosts under `ebi.ac.uk` (in practice
 `ftp.sra.ebi.ac.uk`, but the EBI is free to name another of its mirrors and the allow-list says
-`ebi.ac.uk`, not one host). Both modes feed the same sample list, the same worker pool and the
+`ebi.ac.uk`, not one host), and redirects are not followed at all: an allow-list checked on the
+first URL only would let any redirect take the request elsewhere. Both modes feed the same sample list, the same worker pool and the
 same abundance matrix.
+
+### Pairing local files (`web/sample-naming.js`)
+
+Dropped files are paired by name: `_1`/`_2`, `.1`/`.2`, `-1`/`-2` and `R1`/`R2` (Illumina's
+`_R1_001` included) mark the two mates of one sample. An `R1`/`R2` marker wins over a bare digit,
+and among markers of one kind the rightmost wins, so `sample_1_R1` and `sample_2_R1` are the first
+mates of two samples — the earliest-marker rule this replaced paired them with each other and
+profiled two samples as one, without a word. Two files that claim the same mate of the same sample
+are not paired at all: each is profiled on its own, and the page says which files collided.
 
 ### Downloading a run (`web/ena.js`)
 
@@ -54,7 +67,8 @@ not a slow path, it is a broken feature — so `urlSource()` gives the streaming
   (`.size`, `.slice(0,2).arrayBuffer()`, `.stream()`), so multi-member gunzip, the cut on a record
   boundary, the incremental sketcher, the R1/R2 drift budget and cancellation are all reused
   untouched;
-- a cut re-opens with `Range: bytes=<already read>-`, with growing backoff;
+- a cut re-opens with `Range: bytes=<already read>-`, with growing backoff — and so does a
+  connection that stays open but sends nothing for 60 s, which no error would ever end;
 - **every** request counts against a ceiling, not just the failed ones — a server answering a
   handful of bytes per request is "making progress" for ever otherwise (the exact hole that was
   found in `db-cache.js`);
@@ -70,10 +84,19 @@ not a slow path, it is a broken feature — so `urlSource()` gives the streaming
   for the truncated object satisfies every check the server can be asked to make of itself, and
   `fastq_bytes` is the only number that comes from somewhere else;
 - and after all of that, the number of reads that actually came out of the decompressor is
-  compared with the run's `read_count` (unless the *Max reads per sample* cap stopped the read first).
+  compared with the run's `read_count` (unless a cap stopped the read first: the read cap, or the
+  base cap that stands in for it on long reads — the worker says which one did).
   A sample that profiled fewer reads than the ENA lists is reported as **incomplete**, with the
-  shortfall, instead of as a result. It is the only check that can see a truncation both size
-  witnesses agreed on.
+  shortfall. Its column stays in the matrix, flagged in its own header, in every exported file
+  (a comment line, BIOM column metadata) and in a saved session, so it can never be read as a
+  whole run. It is the only check that can see a truncation both size witnesses agreed on.
+
+The same rule holds for a local file, which has no `read_count` to be checked against: a FASTQ that
+stops being FASTQ part-way through (a truncated record, a stray blank line), or R1 and R2 files
+holding different numbers of reads, used to come back as an ordinary profile of the reads before
+the break. The worker now says why it stopped, and such a sample is **incomplete**, flagged the same way.
+Cancelling a sample can no longer finish it either: an uncompressed FASTQ used to take the cancel
+for an end of file and report the reads read so far as a success.
 
 The worker builds the source itself (an object with methods does not survive `postMessage`) and
 handles the URL variants in the *same* branches as the `File` ones, so there is one copy of the
@@ -128,7 +151,9 @@ node and downloadable as a file you can paste into a manuscript.
   what separates those eighteen samples, and the rest is why the neighbour list can disagree with
   what the eye reads. Zoom and pan, and colouring either by a metadata field or by k-means
   clusters — with the silhouette written inside the figure, because k-means always returns
-  clusters and on samples with no structure at all that score still averages about 0.3.
+  clusters and on samples with no structure at all that score still averages about 0.45 when k is
+  chosen by the silhouette itself (0.4 at a fixed k, up to 0.66), measured on 300 structureless
+  clouds of 15 to 30 points.
 - **Enterotype** — human gut only, and it refuses on any other catalogue by name. A three-way
   split between Bacteroides, Prevotella and Ruminococcus drawn as a triangle: the position IS the
   split, and a sample in the middle is drawn in the middle. The pole names are GTDB's, not 2011's
@@ -136,8 +161,11 @@ node and downloadable as a file you can paste into a manuscript.
   empty in every sample.
 
 - **Contrast** — which rows differ between two groups of samples, ranked by the **difference in mean
-  abundance** and tested by a two-sided **Mann-Whitney**, exact by permutation, with
-  **Benjamini-Hochberg** across every row of the table rather than across the ten on screen. Rows
+  abundance** and tested by a two-sided **Mann-Whitney** — exact by permutation within a budget
+  per table, the normal approximation with tie correction beyond it (40 against 45 samples used to
+  freeze the page for seconds), and the figure says which — with **Benjamini-Hochberg** across
+  every row that varies between the two groups rather than across the ten on screen. A row absent
+  from both has p = 1 by construction and is left out of the family instead of inflating it. Rows
   stay ordered by effect, not by p: at nine samples a group a p-value ordering is mostly an ordering
   of how many zeros a row has. Every sample is drawn as its own dot — the spread and the overlap a
   q summarises away — and clicking one opens that sample, as on the ordination.
@@ -218,6 +246,14 @@ in three modules is evidence for all three, so the columns do not add to 100 %),
 therefore computed over the orthologs whatever level is on screen — an entropy over categories that
 share members is not a diversity index.
 
+At the pathway level the composition leaves out KEGG's global and overview maps (map011xx to
+map013xx — *Metabolic pathways*, *Biosynthesis of secondary metabolites*, *Carbon metabolism*…).
+They are unions of the other maps, so they took the seven largest slices of every bar and said
+nothing a reader could use; they stay in the table, where a row is read on its own. The figure and
+the table also apply the same floor now, so the two count the same rows. A pathway cell's link
+carries that map's detected orthologs, coloured by abundance, to kegg.jp — see *What crosses the
+network*.
+
 **A cell can be opened.** At the module and gut-metabolic-module levels, clicking a number says what
 it was measured from: for a KEGG module, the orthologs detected in it and their abundance in *that*
 sample, each linking to KEGG; for a gut metabolic module, its steps — which were found and which were
@@ -240,29 +276,33 @@ Measured on 542 MB of FASTQ: peak wasm memory went from **+572 MB to +45 MB**, s
 byte.
 
 What limits a run now is the sketch state itself, which grows with the *diversity* of the sample
-rather than its size. Measured ceilings on reads that are all distinct (the worst case there is):
+rather than its size, and the database, which lives in the same memory at about twice its file
+size (the `.syldb` and its decoded form). Measured ceilings on reads that are all distinct (the
+worst case there is):
 
 | build | ceiling measured | shipped as safe | why |
 |---|---|---|---|
 | wasm32 (`web/sylph-pkg/`) | 48.75 M reads | 24 M | 4 GB address space |
 | wasm64 (`web/sylph-pkg64/`) | 195.5 M reads | 96 M | V8 caps memory64 at 16 GB |
 
-The site probes for memory64 and loads the 32-bit package unless the requested read count needs
-more. 32-bit stays the default because it is faster — but the cost is **not** in sketching
+The site probes for memory64 and loads the 32-bit package unless the requested read count, or the
+catalogue, needs more: `soil` (3.0 GB) cannot be opened in a 4 GB address space at all and always
+takes the 64-bit package, and `marine` (1.3 GB) moves to it at high read counts. 32-bit stays the default because it is faster — but the cost is **not** in sketching
 (1.017×, i.e. 1.7%); it sits in the inference pass, so it is close to a fixed per-sample cost
 rather than a per-read one. End-to-end that came out at 1.58–1.71× on a 198 k-read sample.
 
 Safari supports memory64 in no version, Technology Preview included, so on Safari the 24 M line
-is the real one and the UI says so rather than failing unexplained.
+is the real one, `soil` cannot be loaded, and the UI says both rather than failing unexplained.
 
 ## Layout
 
 | Path | What it holds |
 |---|---|
-| `web/` | Static site: multi-sample profiler with INRAE-themed UI. |
+| `web/` | Static site: multi-sample profiler (`index.html`) and a single-sample page (`profile.html`, linked from the header), with INRAE-themed UI. |
 | `web/db/biomes.json` | The catalogue of catalogues — one entry per biome, read at load time. |
 | `web/demo/` | The worked example the page loads with one click: a saved session of eighteen public PRJNA728374 runs — six people, three stool samples each over eight weeks — built by `scripts/build_demo_session.py`. |
 | `web/biomes.js` | Builds the picker, freezes which database a result came from. |
+| `web/sample-naming.js` | Pairs dropped files into samples by name, and refuses two files that claim the same mate. |
 | `web/db-cache.js` | One resumable, cached download per database (OPFS). |
 | `web/ena.js` | Resolves an ENA accession and streams its FASTQs, and asks the portal for what the run says about itself in the same request. |
 | `web/meta.js` | Decides which of that is printable: INSDC sentinels, archive-generated titles and 0.0/0.0 coordinates never reach the screen. |
@@ -272,15 +312,15 @@ is the real one and the UI says so rather than failing unexplained.
 | `web/gmm.js` | Gut Metabolic Modules, parsed from the reader's own copy of VIB's definitions. Ships none. |
 | `web/table-view.js` | Searching and sorting a matrix of hundreds of rows: what a search matches, how ties break, and the third click that restores the original order. Pure functions. |
 | `web/groups.js` | Where a sample grouping comes from — a metadata field, the editor, or a CSV — and which fields are worth offering. Pure functions. |
-| `web/stats.js` | The contrast's test: exact Mann-Whitney by permutation, Benjamini-Hochberg, and the smallest p attainable at a given pair of group sizes. Pure functions. |
+| `web/stats.js` | The contrast's test: Mann-Whitney, exact by permutation within a budget and normal beyond it, Benjamini-Hochberg over the rows that vary, and the smallest p attainable at a given pair of group sizes. Pure functions. |
 | `web/db/kegg/` | 13,509 KEGG ortholog sketches (20 MB, Zenodo 10045253, CC BY 4.0) and the KO→module→pathway map. |
 | `web/funprofiler-pkg/` | sourmash compiled to wasm32, for the protein sketch. The build script also writes a wasm64 package to `web/funprofiler-pkg64/`, used only to measure it against this one: the page does not load it and it is not committed. |
 | `web/sylph-pkg/` | wasm32 package (committed so the deployed site is self-contained). |
-| `web/sylph-pkg64/` | wasm64 package, same filenames — loaded when a run needs more than 4 GB. |
+| `web/sylph-pkg64/` | wasm64 package, same filenames — loaded when a run or a catalogue needs more than 4 GB. |
 | `scripts/build_wasm.sh` | Builds either package: `./scripts/build_wasm.sh 32\|64\|both`. |
 | `scripts/build_biome_dbs.sh` | Builds one `.syldb` per MGnify catalogue (see *Reference databases*). |
 | `scripts/build_gut_db.sh` | The original human-gut-only pipeline, kept as it was. |
-| `scripts/dbcache-test/`, `scripts/ena-test/` | Browser and Node test benches, plus `flaky_server.py`. 1,636 parity assertions, 173 against a hostile HTTP server, 172 source-level claims, a real-browser run of both pages, and 48 mutations that check the benches still bite. |
+| `scripts/dbcache-test/`, `scripts/ena-test/` | Browser and Node test benches, plus `flaky_server.py`. 1,683 parity assertions, 185 against a hostile HTTP server, 175 source-level claims, 85 that drive the page's own controller and 52 the worker with the real WebAssembly, a real-browser run of both pages, and 62 mutations that check the benches still bite. |
 | `scripts/funcprofile_ena_runs.mjs` | The functional half of the example, measured offline with the same code the page runs. |
 | `scripts/session_to_matrix.mjs` | The example's matrix back out of the session, in the export format, so the demo can be rebuilt from what is tracked. |
 | `scripts/profile_ena_runs.mjs` | Builds the example's measurements with the code the page runs, at the cap the page defaults to. |
@@ -298,12 +338,23 @@ is the real one and the UI says so rather than failing unexplained.
 The 32-bit build is plain stable Rust through `wasm-pack`. The 64-bit one needs more, because
 `wasm64-unknown-unknown` is a Tier 3 target with no prebuilt `std`:
 
-- `rustup toolchain install nightly` and `rustup component add rust-src --toolchain nightly`
+- `rustup toolchain install nightly-2026-08-03 --component rust-src`
 - the `wasm-bindgen` **CLI at exactly the version the crate resolves to** (`cargo install
-  wasm-bindgen-cli --version <that one>`) — the script checks this and refuses otherwise
+  wasm-bindgen-cli --version <that one>`) — the script checks this and refuses otherwise, with
+  the command to run, instead of failing on a missing binary
 - optionally `WASM_OPT=/path/to/wasm-opt`, **binaryen ≥ 129**. The wasm-opt bundled with
   wasm-pack 0.13.1 is binaryen 117 and dies with `Tables may not be 64-bit`; the script checks
-  the version and skips the size pass rather than destroying the artifact.
+  the version and skips the size pass rather than destroying the artifact. The committed 64-bit
+  package went through binaryen 133.
+
+**Rebuilding gives the same bytes.** The compilers are pinned by version and checked before
+anything is built (rustc 1.95.0, nightly 2026-08-03, wasm-pack 0.13.1 — `ALLOW_TOOLCHAIN_DRIFT=1`
+builds with whatever is installed, knowingly), `Cargo.lock` is honoured with `--locked`, and the
+machine's paths are remapped out of the binaries (panic locations used to embed
+`/home/<user>/.cargo/…`). Rebuilt from another directory with a cold target, both packages come out
+identical byte for byte. `scripts/build_funprofiler_wasm.sh` does the same for sourmash: pinned
+commit, `wasm-bindgen = "=0.2.126"`, the lock file kept in `scripts/funprofiler/Cargo.lock`, a
+clean checkout before every patch, and `FuncProfiler` written in on every build.
 
 `wasm-pack` cannot produce the 64-bit package at all: it hard-codes `--target
 wasm32-unknown-unknown` and never passes `-Z build-std`.
@@ -324,18 +375,18 @@ and listed with their species counts and sizes in `data/biome-dbs/manifest.tsv`:
 
 | | species | `.syldb` | | species | `.syldb` |
 |---|---|---|---|---|---|
-| soil | 19 472 | 2.8 GB | chicken-gut | 1 322 | 115 MB |
-| marine | 13 223 | 1.2 GB | pig-gut | 1 376 | 108 MB |
-| marine-sediment | 6 158 | 674 MB | tomato-rhizosphere | 579 | 91 MB |
-| **human-gut** (UHGG) | 4 744 | 454 MB | human-skin | 579 | 59 MB |
-| mouse-gut | 2 847 | 274 MB | maize-rhizosphere | 336 | 53 MB |
-| cow-rumen | 2 729 | 237 MB | human-oral | 452 | 32 MB |
-| sheep-rumen | 2 172 | 180 MB | human-vaginal | 280 | 18 MB |
+| soil | 19 472 | 3.0 GB | chicken-gut | 1 322 | 121 MB |
+| marine | 13 223 | 1.3 GB | pig-gut | 1 376 | 113 MB |
+| marine-sediment | 6 158 | 707 MB | tomato-rhizosphere | 579 | 96 MB |
+| **human-gut** (UHGG) | 4 744 | 454 MB | human-skin | 579 | 62 MB |
+| mouse-gut | 2 847 | 287 MB | maize-rhizosphere | 336 | 55 MB |
+| cow-rumen | 2 729 | 248 MB | human-oral | 452 | 33 MB |
+| sheep-rumen | 2 172 | 188 MB | human-vaginal | 280 | 19 MB |
 
 plus honeybee-gut, non-model-fish-gut, barley-rhizosphere, zebrafish-fecal and
-marine-eukaryotes, all under 18 MB. A `.syldb` tracks the *size* of the genomes, not their
-number: `soil` costs 145 KB per genome against 91 KB for the gut, and sixteen marine eukaryotes
-weigh 13 MB.
+marine-eukaryotes, all under 18 MB. Sizes are decimal (1 MB = 10⁶ bytes), as on the page and on
+Zenodo. A `.syldb` tracks the *size* of the genomes, not their number: `soil` costs 152 KB per
+genome against 96 KB for the gut, and sixteen marine eukaryotes weigh 13 MB.
 
 **They are not interchangeable, and they must not be merged.** MGnify dereplicates each catalogue
 independently and they overlap — 10 % of the named species are shared between `human-oral` and
@@ -378,9 +429,10 @@ The download cache is keyed by URL, so several biomes coexist in it: the listing
 454,021,440 bytes at a measured 1.48 MB/s is about **five minutes**, so the download is built to survive that:
 
 - **once per database, not once per worker.** The pool used to call `loadDbUrl` on every worker and each one ran its own `fetch()`; with the 4-thread setting that was 1.7 GB of simultaneous downloads fighting for the link. Now `db-cache-worker.js` downloads once and every sylph worker reads the same OPFS file — the bytes never cross `postMessage`.
-- **in 8 MiB slices, with `Range`.** The size comes from the `Content-Length` of a HEAD, and `Range` support is *assumed* rather than probed: the first real slice settles it, and a `200` where a `206` was expected restarts the download from zero without ranges. That is deliberate — probing cost a request and, worse, a single transient `503` on that one request was read as "this host does not do ranges" and silently turned a resumable 454 MB download into an all-or-nothing one. `Accept-Ranges` is not consulted either: Zenodo answers ranges perfectly well and never sends it. A failed slice is retried with growing backoff; an interrupted one costs part of a slice, not the file.
+- **in 8 MiB slices, with `Range`**, and a slice that stalls for 60 s without failing is
+  abandoned and retried rather than waited on for ever. The size comes from the `Content-Length` of a HEAD, and `Range` support is *assumed* rather than probed: the first real slice settles it, and a `200` where a `206` was expected restarts the download from zero without ranges. That is deliberate — probing cost a request and, worse, a single transient `503` on that one request was read as "this host does not do ranges" and silently turned a resumable 454 MB download into an all-or-nothing one. `Accept-Ranges` is not consulted either: Zenodo answers ranges perfectly well and never sends it. A failed slice is retried with growing backoff; an interrupted one costs part of a slice, not the file.
 - **written straight into OPFS as it arrives**, never accumulated in JS, and the resume pointer is persisted every 4 MiB — so closing the tab mid-download and coming back resumes rather than restarts.
-- **validated before use.** Size must match exactly and `Last-Modified` (or `ETag`) must agree, or the entry is discarded and re-fetched. When the host offers neither validator, the length is all there is to compare: that is shown as "checked on its length only", and such an entry is never *resumed* onto, because a tail from another version would splice invisibly onto the prefix. A truncated `.syldb` would otherwise decode into fewer genomes and produce quietly wrong abundances. A returning visitor pays exactly one `HEAD` for this; if the server is unreachable the entry is still used, and the UI says it was not revalidated.
+- **validated before use.** Size must match exactly and `Last-Modified` (or `ETag`) must agree, or the entry is discarded and re-fetched. When the host offers neither validator, the length is all there is to compare: that is shown as "checked on its length only", and such an entry is never *resumed* onto, because a tail from another version would splice invisibly onto the prefix. A truncated `.syldb` does not decode into fewer genomes, as this line used to say: bincode prefixes every vector with its length, so a short file fails to decode at all. The size check is what turns that into a re-download with a reason, instead of an error from deep inside the decoder after the page had called the database ready. A returning visitor pays exactly one `HEAD` for this; if the server is unreachable the entry is still used, and the UI says it was not revalidated.
 - **careful about CORS.** The size comes from `Content-Length` on a `HEAD`, not from `Content-Range` on a `206`: `Content-Range` is not a CORS-safelisted response header and Zenodo does not expose it, so reading the total from there yields `null` in the browser and a database recorded as 1 byte long — while passing every same-origin test.
 - **one writer at a time, across tabs.** The write path runs under a Web Lock keyed on the database, and the state is re-read once the lock is held: the second tab queues instead of failing after 16 s, and instead of acting on a decision it took before the wait — which is how it used to truncate the entry the first tab had just finished.
 - **suspicious of the server, slice by slice.** Nothing is written past the declared size; a short local write is a failure, not a success; a `206` answering a different interval is refused wherever `Content-Range` is readable (same-origin); a `Last-Modified` that changes mid-download throws the partial copy away rather than splicing two releases together; and same-origin requests carry `If-Range`, which a conforming server answers with a clean `200` instead of a slice from a newer file. Cross-origin, `If-Range` is deliberately *not* sent: unlike `Range` it is not CORS-safelisted, so it would preflight every slice and Zenodo would refuse.
@@ -412,11 +464,34 @@ authors under MIT.
 | everything else | this project | **GPL-3.0-or-later**, © 2026 Guillaume Gautreau — `LICENSE` |
 
 `sylph-wasm/` is a **modified** copy of upstream sylph: a `wasm` feature, a wasm-bindgen surface
-(`src/wasm.rs`), a streaming sketcher (`StreamSketcher` in `src/sketch.rs`), and byte-slice
-variants of the sketching entry points. The algorithms and the `.syldb` format are unchanged — a
-database built by upstream `sylph sketch` is read here as-is, and the TSV matches. Bugs you find
-in this port are this repository's, not upstream's; report them here rather than to the sylph
-authors.
+(`src/wasm.rs`), a streaming sketcher (`StreamSketcher` in `src/sketch.rs`), byte-slice variants
+of the sketching entry points, and a validating `.syldb` reader (`src/syldb.rs`). The algorithms
+and the `.syldb` format are unchanged — a database built by upstream `sylph sketch` is read here
+as-is. Bugs you find in this port are this repository's, not upstream's; report them here rather
+than to the sylph authors.
+
+**What "the same TSV" means, exactly.** The page's TSV is identical, every column, to native
+sylph 0.9.0 **on its scalar seeding path**. On x86_64 with AVX2, native sylph seeds through
+`extract_markers_avx2`, which reads 4·⌊(L−k+1)/4⌋ k-mers of a read of length L and so skips up to
+three at its end; WebAssembly has no AVX2 and takes the scalar path, which skips none. Measured on
+`gut.syldb` (UHGG, 4,744 genomes), the full TSV against native sylph:
+
+| input | native AVX2 vs page | native scalar vs page |
+|---|---|---|
+| 60,000 trimmed single-end reads of ERR14098592 (140–146 bp) | 15 rows, none identical; abundance off by up to 0.95 points | identical |
+| 100,000 read pairs of ERR14098649 (150 bp) | 49 rows, none identical; off by up to 0.027 points | identical |
+
+The pairs differ less because 150 − 31 + 1 = 120 is a multiple of four: AVX2 skips 0.046% of the
+k-mer positions there, against 1.40% on the trimmed reads. Two smaller differences, neither of which
+moved a number here: paired-read deduplication is exact (native sylph uses an approximate filter by
+default; the page is `sylph sketch --fpr 0`), and the `Sample_file` column says `browser_sample`.
+The 32-bit and 64-bit packages give the same TSV, confidence-interval columns included: the
+bootstrap used to draw its indices differently depending on pointer width.
+
+A `.syldb` is checked when it is opened — `c ≥ 1`, `k` of 21 or 31 and the same for every genome,
+lengths that fit in the file — and a malformed one is refused with a message instead of crashing
+the worker. A database whose genomes were sketched at different `c` is accepted, the reads being
+sketched at the smallest (sylph only needs the reads' `c` to be no larger than a genome's).
 
 The reference databases are **data, not code**: this licence does not cover them. The nineteen
 `.syldb` files are deposited separately under **CC0**

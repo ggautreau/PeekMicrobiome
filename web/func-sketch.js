@@ -18,7 +18,7 @@
 // forget another. This is one line in each `onChunk`, and everything that could
 // be wrong lives here, where node can test it.
 
-import { parseKoCsv } from "./kegg.js?v=79";
+import { parseKoCsv } from "./kegg.js?v=80";
 
 // sourmash writes a protein ksize as three times the amino-acid k, so k=11 is
 // stored as 33. Not options: they must match the reference archive, and a

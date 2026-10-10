@@ -9,20 +9,21 @@
 import {
   sylphWorkerRpc, detectMemory64, chooseWasmBits, WORKER_VERSION,
   readsBudget, readsBudgetNote, readsOverBudgetNote, loadedBuildNote, fmtReads,
-} from "./sylph-worker-rpc.js?v=79";
-import { dbCacheClient, fmtRate, fmtEta, cacheSummary } from "./db-cache.js?v=79";
+  basesForReads,
+} from "./sylph-worker-rpc.js?v=80";
+import { dbCacheClient, fmtRate, fmtEta, cacheSummary } from "./db-cache.js?v=80";
 import {
   koTable, moduleTable, pathwayRollup, moduleCoverage, pathwayCoverage,
   keggEntryUrl, keggMapUrl, heatHex, floorRows, NO_PATHWAY,
   keggConsent, storeKeggConsent, keggGateHtml, FUNC_METHOD_NOTE,
-} from "./kegg.js?v=79";
+} from "./kegg.js?v=80";
 import {
   fetchCatalog, fallbackCatalog, renderDbSelect, biomeForUrl, biomeNote,
   mgnifyGenomeUrl,
   makeDbRef, refLine, refShort, genomeCountMismatch, rememberBiome, recallBiome,
   catalogueName, LOCAL_VALUE,
   selectionMatchesLoaded, notLoadedNote, refMetaMismatch,
-} from "./biomes.js?v=79";
+} from "./biomes.js?v=80";
 
 const $ = (id) => document.getElementById(id);
 const els = {
@@ -118,11 +119,21 @@ let wasmReady = false;
 let wasmInfo = null;      // { bits, capped, memory64, reason, pkg } from the worker
 let workerBits = null;    // bits the live worker was booted with
 let lastDbLoad = null;    // { label, load } — replayed when the build has to change
+let plannedDbBytes = 0;  // size of the database that is (about to be) loaded
 
-// Which package the current reads setting calls for. 32-bit unless the run does
-// not fit in it AND the browser can do better — see chooseWasmBits().
-function plannedBits(maxReads) {
-  return chooseWasmBits({ maxReads, memory64: has64 }).bits;
+// Which package the current reads setting AND the database call for. 32-bit
+// unless the run or the catalogue does not fit in it and the browser can do
+// better — see chooseWasmBits(). The catalogue counts because the Profiler holds
+// the whole .syldb plus its decoded form: soil (3.0 GB) cannot even be opened in
+// a 4 GB address space, whatever the reads setting says.
+function plannedBits(maxReads, dbBytes = plannedDbBytes) {
+  return chooseWasmBits({ maxReads, memory64: has64, dbBytes }).bits;
+}
+
+// The reason no package can hold this database in this browser (Safari has no
+// memory64 at all), or null.
+function wasmRefusal(maxReads, dbBytes) {
+  return chooseWasmBits({ maxReads, memory64: has64, dbBytes }).refuse ?? null;
 }
 
 // (Re)create the worker for a given reads budget. A module worker has one module
@@ -354,14 +365,30 @@ async function loadDatabase() {
   try {
     while (!wasmReady) await new Promise(r => setTimeout(r, 50));
 
-    // The wasm package is chosen here, from the reads setting: this is the last
-    // moment at which the choice is free. After this the database lives in the
-    // worker's linear memory and changing builds means loading it again.
+    // Which database, read ONCE and FIRST: the status line and the results
+    // header describe the database that is about to be loaded, not whatever the
+    // picker says later — and its size is part of the build choice below.
+    const biome = pickedBiome();
+    const file = url === LOCAL_VALUE ? await pickLocalDb() : null;
+    if (url === LOCAL_VALUE && !file) { els.dbInfo.textContent = "No file selected."; return; }
+    const dbBytes = file ? file.size : (biome?.bytes ?? 0);
+    const refuse = wasmRefusal(currentReads(), dbBytes);
+    if (refuse) {
+      els.dbInfo.textContent = "";
+      showError(refuse);
+      return;
+    }
+    plannedDbBytes = dbBytes;
+
+    // The wasm package is chosen here, from the reads setting and the database:
+    // this is the last moment at which the choice is free. After this the
+    // database lives in the worker's linear memory and changing builds means
+    // loading it again.
     //
     // Only the WORKER is replaced, deliberately not ensureWasmBuildFor(): that
     // function's job is to re-load the database that is currently in use, and
     // here the user is about to replace it. Calling it re-read the OLD database
-    // — up to 433 MB out of OPFS and a full Profiler built in wasm, several
+    // — up to 454 MB out of OPFS and a full Profiler built in wasm, several
     // seconds and ~900 MB of peak — three lines before throwing it away.
     if (workerBits !== plannedBits(currentReads())) {
       els.dbInfo.textContent = `Preparing the ${plannedBits(currentReads())}-bit wasm build…`;
@@ -370,14 +397,8 @@ async function loadDatabase() {
       lastDbLoad = null;
     }
 
-    // Read ONCE, here: the status line and the results header describe the
-    // database that is about to be loaded, not whatever the picker says later.
-    const biome = pickedBiome();
-
     let label;
     if (url === LOCAL_VALUE) {
-      const file = await pickLocalDb();
-      if (!file) { els.dbInfo.textContent = "No file selected."; return; }
       label = file.name;
       dbSource = "file";
       // loadDbFile keeps the read inside the worker, and is replayable by
@@ -456,7 +477,8 @@ async function loadDatabase() {
       dbMeta = null;
       currentRef = null;
       lastDbLoad = null;
-      lineage = {}; ambiguousNames = new Set(); ambiguousNames = new Set();
+      plannedDbBytes = 0;
+      lineage = {}; ambiguousNames = new Set();
       els.run.disabled = true;
       els.results.classList.add("hide");
       els.dbInfo.textContent =
@@ -596,7 +618,7 @@ function updateMemHint(n) {
   const sketchS = n / SKETCH_READS_PER_S;
   const t = sketchS >= 90 ? `${Math.round(sketchS / 60)} min` : `${Math.round(sketchS)} s`;
   els.memHint.textContent =
-    `About ${t} to read ${n.toLocaleString()} reads, plus the profiling pass against the ` +
+    `About ${t} to read ${n.toLocaleString("en-US")} reads, plus the profiling pass against the ` +
     `database (which grows with the number of genomes in it, not with the number of reads). ` +
     `Paired-end reads both mates, so roughly twice that.`;
 }
@@ -665,7 +687,7 @@ async function run() {
         // the multi-sample page uses keeps the two numerically comparable.
         await rpc.loadFuncRefs("./funprofiler-pkg", FUNC_REF_URL,
           (p) => { if (p.progress?.phase === "func_refs") {
-            setStep(`loading the KEGG ortholog reference — ${p.progress.n.toLocaleString()} orthologs…`);
+            setStep(`loading the KEGG ortholog reference — ${p.progress.n.toLocaleString("en-US")} orthologs…`);
           } });
       } catch (e) {
         // The species half is what most readers came for; failing the whole run
@@ -683,7 +705,10 @@ async function run() {
 
     // The worker now does decompression + trim + profile end-to-end. Main
     // thread keeps no read buffer; we just relay progress events to the UI.
-    const { tsv, reads, elapsedMs, func } = await rpc.profileFile(
+    // The base cap as well as the read cap, as on the multi-sample page: a
+    // nanopore file of 3 M reads is 30 Gbases, which no read count stops before
+    // the allocator does.
+    const { tsv, reads, elapsedMs, func, stop, stopDetail } = await rpc.profileFile(
       selectedFile, maxReads,
       (p) => {
         if (p.phase === "profile_start") {
@@ -694,7 +719,7 @@ async function run() {
           const wasmT0 = performance.now();
           wasmTick = setInterval(() => {
             const sec = ((performance.now() - wasmT0) / 1000).toFixed(1);
-            setStep(`sketching + profiling ${p.reads.toLocaleString()} reads in WASM worker (${sec} s)`);
+            setStep(`sketching + profiling ${p.reads.toLocaleString("en-US")} reads in WASM worker (${sec} s)`);
             els.elapsed.textContent = `${((performance.now() - t0) / 1000).toFixed(1)} s`;
           }, 250);
           return;
@@ -704,8 +729,21 @@ async function run() {
         paintProgress(pct, p.bytesIn, p.total, p.reads, maxReads, t0);
         setStep("decompressing in worker, keeping the first N reads…");
       },
+      undefined, basesForReads(maxReads),
     );
     paintProgress(100, selectedFile.size, selectedFile.size, reads ?? lastReadsSeen, maxReads, t0);
+    // A file that stops being FASTQ part-way through used to come back as an
+    // ordinary result built from the reads before the break, with nothing on
+    // screen to say so. A profile of part of a file looks exactly like a profile
+    // of all of it, so it is not shown as one.
+    if (stop === "truncated") {
+      showError(`This file could not be read to the end: ${stopDetail || "it stops at a malformed record"}. ` +
+        `No profile is shown, because one built from part of a file looks exactly like one built from all of it.`);
+      setStep("stopped: the file is not valid FASTQ all the way through");
+      funcProfile = null;
+      renderFunc();
+      return;
+    }
     funcProfile = func?.profile && Object.keys(func.profile).length ? func.profile : null;
     renderResults(tsv);
     if (funcWanted && keggConsent()) await loadKeggMap();
@@ -765,10 +803,10 @@ function renderResults(tsv) {
     const mgnify = mgnifyGenomeUrl(gname);
     return `
       <tr>
-        <td class="num">${fmtPct(r[cols.relAbund])}</td>
-        <td class="num">${fmtPct(r[cols.seqAbund])}</td>
-        <td class="num">${r[cols.ani] ?? ""}</td>
-        <td class="num">${r[cols.cov] ?? ""}</td>
+        <td class="num">${escapeHTML(fmtPct(r[cols.relAbund]))}</td>
+        <td class="num">${escapeHTML(fmtPct(r[cols.seqAbund]))}</td>
+        <td class="num">${escapeHTML(r[cols.ani] ?? "")}</td>
+        <td class="num">${escapeHTML(r[cols.cov] ?? "")}</td>
         <td>${mgnify
           ? `<a href="${escapeHTML(mgnify)}" target="_blank" rel="noopener noreferrer"
                title="Open ${escapeHTML(gname)} on MGnify"><code>${escapeHTML(gname)}</code></a>`
@@ -908,7 +946,9 @@ function renderFunc() {
       <td>${escapeHTML(r.name)}</td>
       <td>${url
         ? `<a href="${escapeHTML(url)}" target="_blank" rel="noopener noreferrer"
-             title="${grain === "pathway" ? "Open this map on KEGG with the orthologs found here coloured in"
+             title="${map ? "Open this map on KEGG with the orthologs found here coloured in. " +
+                 "The link itself sends kegg.jp those orthologs and a colour for each one's " +
+                 "abundance — never the sample's name or its reads"
                : "Open this entry on KEGG"}"><code>${escapeHTML(r.id)}</code></a>`
         : `<code>${escapeHTML(r.id)}</code>`}</td>
       <td class="num" style="background:${bg}">${pct} %</td>
@@ -921,10 +961,10 @@ function renderFunc() {
   const cov = grain === "ko" ? 1
     : grain === "module" ? moduleCoverage(profiles, samples, keggMap)
       : pathwayCoverage(profiles, samples, keggMap);
-  const parts = [`${t.rows.length.toLocaleString()} ${grain === "ko" ? "orthologs"
+  const parts = [`${t.rows.length.toLocaleString("en-US")} ${grain === "ko" ? "orthologs"
     : grain === "module" ? "modules" : "pathways"}`];
   if (grain !== "ko") parts.push(`covering ${(cov * 100).toFixed(1)} % of the measured signal`);
-  if (t.hidden) parts.push(`${t.hidden.toLocaleString()} below ${t.floor} % hidden ` +
+  if (t.hidden) parts.push(`${t.hidden.toLocaleString("en-US")} below ${t.floor} % hidden ` +
     `(${(t.carried * 100).toFixed(2)} % of the total)`);
   els.funcSummary.textContent = parts.join(" · ");
   if (els.funcRef) {
@@ -940,7 +980,7 @@ function showError(s) { els.error.textContent = s; }
 function paintProgress(pct, bytesIn, totalBytes, reads, maxReads, t0) {
   els.bar.style.width = pct.toFixed(1) + "%";
   els.bytesIn.textContent = `${fmtBytes(bytesIn)} / ${fmtBytes(totalBytes)}`;
-  els.reads.textContent = `${reads.toLocaleString()} / ${maxReads.toLocaleString()}`;
+  els.reads.textContent = `${reads.toLocaleString("en-US")} / ${maxReads.toLocaleString("en-US")}`;
   els.elapsed.textContent = `${((performance.now() - t0) / 1000).toFixed(1)} s`;
 }
 

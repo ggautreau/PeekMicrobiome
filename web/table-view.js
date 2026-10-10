@@ -66,8 +66,12 @@ export function arrangeNote(state, unit = "rows") {
   // "specie", and every rule that guesses English plurals gets one of them
   // wrong. The sentence does not need the noun.
   if (!rows.length) return "nothing matches that search";
-  if (!hidden) return `${total.toLocaleString()} ${unit}`;
-  return `${rows.length.toLocaleString()} of ${total.toLocaleString()} ${unit}`;
+  // "en-US", not the reader's locale: the page is written in English and says
+  // "13,509" everywhere else, and a browser set to French printed "4 307" here
+  // beside it.
+  const n = (x) => x.toLocaleString("en-US");
+  if (!hidden) return `${n(total)} ${unit}`;
+  return `${n(rows.length)} of ${n(total)} ${unit}`;
 }
 
 /**

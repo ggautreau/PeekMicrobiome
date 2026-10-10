@@ -45,6 +45,16 @@ const KEGG = "web/kegg.js";
 const FIGURES = "web/figures.js";
 const FUNCSKETCH = "web/func-sketch.js";
 const GMM = "web/gmm.js";
+// Added with the 2026-10-10 review: each guards a result that came out wrong
+// with nothing on screen to say so, and each has a bench that must notice.
+const TRIM = "web/fastq-trim.js";
+const NAMING = "web/sample-naming.js";
+const CLUSTER = "web/cluster.js";
+const EXPORTS = "web/exports.js";
+const THEME = "web/theme.js";
+const RPC = "web/sylph-worker-rpc.js";
+const PAGE_STATE = "../../web/page-state.test.mjs";
+const WORKER_TEST = "../../web/worker.test.mjs";
 
 const SUITE = "node-suite.mjs";
 const WIRING = "wiring.mjs";
@@ -367,12 +377,12 @@ const MUTATIONS = [
     name: "read count: profile it, do not check it",
     file: MULTI, bench: WIRING,
     why: "a run that downloaded 40 % of its file reports 'N species detected' and nothing else",
-    from: `        const verdict = s.origin === "ena"
-          ? readCountVerdict({ observed: readsShown(s), expected: s.enaReads, maxReads,
-              // Paired runs have two possible readings of the ENA's read_count.
-              layout: s.kind === "pe" ? "PAIRED" : "SINGLE" })
-          : { ok: true, note: "" };`,
-    to: `        const verdict = { ok: true, note: "" };`,
+    from: `          : s.origin === "ena"
+            ? readCountVerdict({ observed: readsShown(s), expected: s.enaReads, maxReads,
+                // Paired runs have two possible readings of the ENA's read_count.
+                layout: s.kind === "pe" ? "PAIRED" : "SINGLE", stop })
+            : { ok: true, note: "" };`,
+    to: `          : { ok: true, note: "" };`,
     expect: /compared with the count the ENA published/,
   },
   {
@@ -458,6 +468,129 @@ const MUTATIONS = [
     from: `  if (String(layout).toUpperCase() === "PAIRED" && fits(expected * 2)) {`,
     to: `  if (fits(expected * 2)) {`,
     expect: /single-end run with twice the reads is still caught/,
+  },
+  // ---- the 2026-10-10 review ------------------------------------------------
+  {
+    name: "page: let a second click start a second run",
+    file: MULTI, bench: PAGE_STATE,
+    why: "two runs on one pool interleave their reads: a gut sample came back with no species",
+    from: `  if (busy || !dbMeta) return;
+  claimBusy("run");`,
+    to: `  if (!dbMeta) return;
+  claimBusy("run");`,
+    expect: /a second click during the run starts nothing/,
+  },
+  {
+    name: "page: drop the INCOMPLETE flag from the exported matrix",
+    file: MULTI, bench: PAGE_STATE,
+    why: "a column profiled on part of its input is read, a month later, as a whole run",
+    from: "  const incompleteLines = incompleteNotes(samples).map((l) => `# ${l}`);",
+    to: "  const incompleteLines = [];",
+    expect: /the exported matrix carries the flag/,
+  },
+  {
+    name: "worker: handle messages as they arrive, not one at a time",
+    file: WORKER, bench: WORKER_TEST,
+    why: "one Profiler, two samples fed into it at once — each comes back with a fraction of its reads",
+    from: "  queue = queue.then(() => handle(e.data, ac)).catch(() => { /* handle() replies itself */ });",
+    to: "  handle(e.data, ac).catch(() => { /* handle() replies itself */ });",
+    expect: /two samples sent together are profiled one after the other/,
+  },
+  {
+    name: "worker: fetch the KEGG reference instead of using the bytes the page sent",
+    file: WORKER, bench: WORKER_TEST,
+    why: "eight workers, eight downloads of one 20 MB file, under a line that says once",
+    from: `        pkg, refUrl, bytes,
+        onProgress:`,
+    to: `        pkg, refUrl,
+        onProgress:`,
+    expect: /the worker fetched NOTHING for it/,
+  },
+  {
+    name: "worker: report a sketch that stopped on a malformed record as a whole sample",
+    file: WORKER, bench: WORKER_TEST,
+    why: "a FASTQ damaged at 10 % comes back as a complete sample profiled on a tenth of it",
+    from: "  if (!fallback && profiler?.sample_halted === true && profiler?.sample_invalid !== true) {",
+    to: "  if (false) {",
+    expect: /a malformed record says stop: truncated/,
+  },
+  {
+    name: "trimmer: leave the seam between two files without a newline",
+    file: TRIM, bench: WORKER_TEST,
+    why: "a first file with no final newline swallows the header of the second, and the rest of it",
+    from: "            consumeChunk(Uint8Array.of(0x0A));",
+    to: "            /* the seam left as it is */",
+    expect: /a file with no final newline does not swallow the next one/,
+  },
+  {
+    name: "trimmer: take a cancelled reader's end for the end of the file",
+    file: TRIM, bench: "../../web/fastq-trim.parity.test.mjs",
+    why: "cancelling an uncompressed FASTQ records the reads read so far as a finished sample",
+    from: `          if (signal?.aborted) throw aborted();
+          // Closing the gzip stream`,
+    to: `          // Closing the gzip stream`,
+    expect: /a cancelled .* read rejects with an AbortError/,
+  },
+  {
+    name: "ENA: follow a redirect off the allow-list",
+    file: ENA, bench: SUITE,
+    why: "an EBI host answering with a redirect sends the request, and the IP address, anywhere",
+    edits: [
+      [`headers, signal: req.signal, cache: "no-store", redirect: "error",`,
+       `headers, signal: req.signal, cache: "no-store",`],
+      [`headers, signal: req.signal, cache: "no-store", redirect: "error",`,
+       `headers, signal: req.signal, cache: "no-store",`],
+    ],
+    expect: /the stream fails instead of delivering the redirected body/,
+  },
+  {
+    name: "pairing: let the earliest marker win over R1/R2",
+    file: NAMING, bench: "../../web/fastq-trim.parity.test.mjs",
+    why: "sample_1_R1 and sample_2_R1 are paired with each other: two samples profiled as one",
+    from: "    if (!best || cand.r || !best.r) best = cand;",
+    to: "    if (!best) best = cand;",
+    expect: /sample_1_R1 is mate 1 of sample_1/,
+  },
+  {
+    name: "pairing: pair two files that claim the same mate",
+    file: NAMING, bench: PAGE_STATE,
+    why: "two libraries mixed into one sample in the order the files were dropped",
+    from: "    for (const name of c.names) tags.set(name, null);",
+    to: "    /* both claimants kept */",
+    expect: /neither claimant is paired/,
+  },
+  {
+    name: "clustering: move the values and leave the step coverage behind",
+    file: CLUSTER, bench: "../../web/cluster.test.mjs",
+    why: "a Gut Metabolic Module cell describes another sample's steps",
+    from: `  row: Object.freeze(["values", "coverage"]),`,
+    to: `  row: Object.freeze(["values"]),`,
+    expect: /every GMM value AND its step coverage stay with their sample/,
+  },
+  {
+    name: "exports: write MetaPhlAn and BIOM from an aggregated table",
+    file: EXPORTS, bench: "../../web/exports.test.mjs",
+    why: "136 observations called '1 genome', and genera written as species",
+    from: "  if (bad) {",
+    to: "  if (false) {",
+    expect: /refuses the table aggregated to genus/,
+  },
+  {
+    name: "theme: wire the toggle to the first .theme-toggle on the page",
+    file: THEME, bench: PAGE_STATE,
+    why: "the moon button does nothing and the Settings gear flips the palette",
+    from: `  return doc.getElementById("themeToggle")
+    ?? doc.querySelector('.theme-toggle[aria-label="Toggle theme"]');`,
+    to: `  return doc.querySelector(".theme-toggle");`,
+    expect: /opening Settings leaves it dark|the theme button flips to dark/,
+  },
+  {
+    name: "wasm build: ignore the database's size",
+    file: RPC, bench: WORKER_TEST,
+    why: "soil does not fit in 4 GB: the 32-bit build aborts inside new Profiler, and the worker is lost",
+    from: "  if (need <= room) return null;",
+    to: "  if (true) return null;",
+    expect: /a database that cannot fit the 32-bit build is refused with a sentence/,
   },
 ];
 

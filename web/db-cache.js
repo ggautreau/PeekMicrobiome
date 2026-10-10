@@ -144,6 +144,47 @@ function abortError() {
   return e;
 }
 
+// How long a request may sit with nothing arriving before it counts as cut.
+// Every guard below watches for a connection that ENDS badly — a reset, a short
+// body, a 503. One that stays open and stops sending ended never: Load database
+// sat at the same byte, "downloading", for ever. A minute of silence on a link
+// that normally moves megabytes a second is a dead connection, and the retry
+// policy (resume at the true offset) already knows what to do with one.
+export const IDLE_MS = 60_000;
+
+// Settles like `p`, or rejects with `stalled()` once `ms` pass with `p` still
+// pending — rejecting FIRST, then calling `onStall` (which aborts the request
+// and lets its socket go): the abort can reject `p` synchronously, and an
+// AbortError winning the race would read as the user cancelling.
+function withIdle(p, ms, onStall, stalled) {
+  if (!Number.isFinite(ms) || ms <= 0) return p;
+  p.catch(() => {});
+  let timer;
+  const idle = new Promise((_, reject) => {
+    timer = setTimeout(() => { reject(stalled()); onStall(); }, ms);
+  });
+  return Promise.race([p, idle]).finally(() => clearTimeout(timer));
+}
+
+// A request whose RESPONSE must arrive within the idle period: its own
+// controller, following `signal`, so a stall drops this request only. For the
+// two probes, whose bodies are never read.
+async function idleFetch(url, init, signal, idleMs) {
+  const req = new AbortController();
+  const follow = () => req.abort();
+  if (signal?.aborted) req.abort();
+  else signal?.addEventListener("abort", follow, { once: true });
+  try {
+    return await withIdle(fetch(url, { ...init, signal: req.signal }), idleMs, follow,
+      () => stalledError(idleMs));
+  } finally {
+    signal?.removeEventListener("abort", follow);
+  }
+}
+
+const stalledError = (ms) => new Error(
+  `nothing arrived for ${ms >= 10_000 ? Math.round(ms / 1000) : (ms / 1000).toFixed(1)} s — the connection stalled`);
+
 /**
  * Bytes, in the units the things this page names are published in.
  *
@@ -347,8 +388,8 @@ function parseContentRange(v) {
 // limit headers, not Content-Range. `headers.get("content-range")` returns null
 // in the browser, and the 206's own Content-Length is 1: the slice, not the
 // file. The database would be recorded as one byte long.
-async function probeSize(url, signal) {
-  const head = await fetch(url, { method: "HEAD", signal, cache: "no-store" }).catch((e) => {
+async function probeSize(url, signal, idleMs = IDLE_MS) {
+  const head = await idleFetch(url, { method: "HEAD", cache: "no-store" }, signal, idleMs).catch((e) => {
     if (e?.name === "AbortError") throw e;
     return null;   // some hosts do not answer HEAD; fall through to the range probe
   });
@@ -379,8 +420,8 @@ async function probeSize(url, signal) {
 
 // The 1-byte range request. Also yields the size wherever Content-Range is
 // visible, so a server with no HEAD is still fully handled.
-async function probeRanges(url, signal) {
-  const resp = await fetch(url, { headers: { Range: "bytes=0-0" }, signal, cache: "no-store" });
+async function probeRanges(url, signal, idleMs = IDLE_MS) {
+  const resp = await idleFetch(url, { headers: { Range: "bytes=0-0" }, cache: "no-store" }, signal, idleMs);
   try { await resp.body?.cancel(); } catch { /* fine */ }
   if (!resp.ok && resp.status !== 206) {
     throw new Error(`HTTP ${resp.status} while probing the database`);
@@ -412,11 +453,11 @@ async function probeRanges(url, signal) {
 // a 200 where a 206 was expected is handled in fetchRangeInto (accepted whole at
 // offset 0, and a hard reset mid-download). Optimism costs nothing here and
 // cannot be fooled by a flaky response.
-export async function probe(url, signal) {
-  const bySize = await probeSize(url, signal);
+export async function probe(url, signal, idleMs = IDLE_MS) {
+  const bySize = await probeSize(url, signal, idleMs);
   if (bySize) return { ...bySize, ranges: true };
 
-  const byRange = await probeRanges(url, signal);
+  const byRange = await probeRanges(url, signal, idleMs);
   if (!Number.isFinite(byRange.size) || byRange.size <= 0) {
     throw new Error(
       "the server did not report the database size (no readable Content-Length). " +
@@ -446,10 +487,13 @@ export function validatorKind(meta, remote) {
 // Is a cached entry usable for what the server is offering right now?
 //
 // Deliberately strict: a database that is the wrong size or a different build is
-// not "close enough". sylph will happily decode a truncated .syldb into fewer
-// genomes, or fail in a way that surfaces as a JS error nobody reads, and either
-// way the user gets abundances that are quietly wrong. Re-downloading 433 MB is
-// cheaper than a wrong answer.
+// not "close enough". A different build of the right size decodes perfectly
+// well — into another version of the catalogue than the one the page names, so
+// every abundance is relative to the wrong reference and nothing says so. A
+// TRUNCATED file does not decode at all (bincode prefixes every collection with
+// its length, so a cut .syldb ends in "failed to fill whole buffer"), which is
+// loud but says nothing about why; "truncated on disk" says what to do.
+// Re-downloading 454 MB is cheaper than either.
 export function validateEntry(meta, actualBytes, remote) {
   if (!meta) return { ok: false, why: "no cache entry" };
   if (meta.layout !== CACHE_LAYOUT) return { ok: false, why: "written by an older cache layout" };
@@ -671,7 +715,23 @@ function rateMeter(windowMs = 5000) {
 // `expect` is what the probe learned: { size, lastModified, etag }. It is used
 // to check that this slice belongs to the same file, at the same offset, as
 // every other slice — see the three notes below.
-async function fetchRangeInto(url, start, end, ranges, sink, signal, expect = null) {
+async function fetchRangeInto(url, start, end, ranges, sink, signal, expect = null, idleMs = IDLE_MS) {
+  // This request's own controller, following the download's: a stall drops
+  // this one request — the slice is retried and resumed — where aborting
+  // `signal` would read as the user cancelling the whole download.
+  const req = new AbortController();
+  const follow = () => req.abort();
+  if (signal?.aborted) req.abort();
+  else signal?.addEventListener("abort", follow, { once: true });
+  try {
+    return await fetchRangeOnce(url, start, end, ranges, sink, req.signal, expect,
+      (p) => withIdle(p, idleMs, follow, () => stalledError(idleMs)));
+  } finally {
+    signal?.removeEventListener("abort", follow);
+  }
+}
+
+async function fetchRangeOnce(url, start, end, ranges, sink, signal, expect, idle) {
   const headers = {};
   if (ranges) {
     headers.Range = `bytes=${start}-${end}`;
@@ -689,7 +749,7 @@ async function fetchRangeInto(url, start, end, ranges, sink, signal, expect = nu
     const validator = expect?.etag || expect?.lastModified;
     if (validator && sameOrigin(url)) headers["If-Range"] = validator;
   }
-  const resp = await fetch(url, { headers, signal, cache: "no-store" });
+  const resp = await idle(fetch(url, { headers, signal, cache: "no-store" }));
   if (resp.status === 200 && ranges && start > 0) {
     // The server changed its mind about Range mid-download (or a proxy did).
     // Refusing the body here is important: it is the whole file.
@@ -749,7 +809,7 @@ async function fetchRangeInto(url, start, end, ranges, sink, signal, expect = nu
   let written = 0;
   try {
     for (;;) {
-      const { value, done } = await reader.read();
+      const { value, done } = await idle(reader.read());
       if (done) break;
       if (value?.length) {
         sink(value);
@@ -783,7 +843,7 @@ async function fetchRangeInto(url, start, end, ranges, sink, signal, expect = nu
 //
 // Returns the byte count once the file is complete; throws otherwise, having
 // already flushed and checkpointed whatever did arrive.
-async function pumpDownload(u, remote, { chunkSize, signal, emit, io, expect, from = 0 }) {
+async function pumpDownload(u, remote, { chunkSize, signal, emit, io, expect, from = 0, idleMs = IDLE_MS }) {
   let received = from;
   let ranges = remote.ranges;
   let attempt = 0;          // CONSECUTIVE attempts that moved nothing
@@ -872,7 +932,7 @@ async function pumpDownload(u, remote, { chunkSize, signal, emit, io, expect, fr
     };
 
     try {
-      const got = await fetchRangeInto(u, start, end, ranges, sink, signal, expect);
+      const got = await fetchRangeInto(u, start, end, ranges, sink, signal, expect, idleMs);
       if (got > 0) attempt = 0;
       // A response carrying zero bytes is a failure wearing a success's clothes:
       // it is exactly what a connection cut right after the headers looks like.
@@ -1011,7 +1071,7 @@ function unreachableError(probeError) {
 }
 
 // Everything that WRITES the entry. Runs with the write lock held.
-async function downloadEntry(u, remote, { emit, signal, chunkSize }) {
+async function downloadEntry(u, remote, { emit, signal, chunkSize, idleMs }) {
   const meta0 = await readMeta(u);
   const onDisk = await dataSize(u);
   const metaReceived = Number.isFinite(meta0?.received) ? meta0.received : 0;
@@ -1116,7 +1176,7 @@ async function downloadEntry(u, remote, { emit, signal, chunkSize }) {
           : ""),
     });
 
-    const finalReceived = await pumpDownload(u, remote, { chunkSize, signal, emit, io, expect, from: received });
+    const finalReceived = await pumpDownload(u, remote, { chunkSize, signal, emit, io, expect, from: received, idleMs });
 
     sync.flush();
     const finalSize = sync.getSize();
@@ -1147,7 +1207,7 @@ async function downloadEntry(u, remote, { emit, signal, chunkSize }) {
 // url, bytesFetched }. `onProgress` receives
 // { phase, received, total, bps, etaSec, attempt, note }.
 export async function ensureDb(url, { onProgress, signal, chunkSize = DEFAULT_CHUNK,
-  expectedSize = null } = {}) {
+  expectedSize = null, idleMs = IDLE_MS } = {}) {
   const u = absUrl(url);
   if (!canWriteCache()) throw new Error("OPFS write access is unavailable in this context");
 
@@ -1159,7 +1219,7 @@ export async function ensureDb(url, { onProgress, signal, chunkSize = DEFAULT_CH
   try {
     // One HEAD: is the cached copy still the right file? That is a size and a
     // Last-Modified, nothing more. A returning visitor pays exactly this.
-    remote = await probe(u, signal);
+    remote = await probe(u, signal, idleMs);
   } catch (e) {
     if (e?.name === "AbortError") throw e;
     probeError = e;   // offline? A complete cache entry is still usable.
@@ -1205,7 +1265,7 @@ export async function ensureDb(url, { onProgress, signal, chunkSize = DEFAULT_CH
   return withWriteLock(u, signal, emit, async () => {
     const won = await cacheHitFor(u, remote, emit);
     if (won) return won;
-    return downloadEntry(u, remote, { emit, signal, chunkSize });
+    return downloadEntry(u, remote, { emit, signal, chunkSize, idleMs });
   });
 }
 
@@ -1239,11 +1299,11 @@ export async function readCachedBytes(url) {
 // reimplemented here: it runs the same pumpDownload as the OPFS path, with an
 // `io` that writes into a buffer and has nowhere to checkpoint.
 export async function downloadToMemory(url, { onProgress, signal, chunkSize = DEFAULT_CHUNK,
-  expectedSize = null } = {}) {
+  expectedSize = null, idleMs = IDLE_MS } = {}) {
   const u = absUrl(url);
   const emit = (phase, extra) => { try { onProgress?.({ phase, ...extra }); } catch { /* ignore */ } };
   emit("probe", { note: "asking the server for size (no local cache available)" });
-  let remote = await probe(u, signal);
+  let remote = await probe(u, signal, idleMs);
   // Same reason as in ensureDb(): on a compressing host the headers describe the
   // transfer, and the buffer allocated below would be short by the compression
   // ratio. Without OPFS there is no partial file to notice it either.
@@ -1266,7 +1326,7 @@ export async function downloadToMemory(url, { onProgress, signal, chunkSize = DE
     fatalWrite: () => null,
   };
   const expect = { size: remote.size, lastModified: remote.lastModified, etag: remote.etag };
-  const received = await pumpDownload(u, remote, { chunkSize, signal, emit, io, expect, from: 0 });
+  const received = await pumpDownload(u, remote, { chunkSize, signal, emit, io, expect, from: 0, idleMs });
   if (received !== remote.size) throw new Error(`got ${received} bytes, expected ${remote.size}`);
   emit("done", { received, total: remote.size, source: "network", note: "held in memory (not cached)" });
   return {

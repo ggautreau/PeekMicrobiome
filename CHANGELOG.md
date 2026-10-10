@@ -4,6 +4,100 @@ Figures in this file are measured on the development machine (Chrome 151, Linux,
 not estimated. Where a number replaced an assumption, the assumption is named too — several of
 them were wrong in ways that mattered.
 
+## 2026-10-10
+
+### A review of the page and the code: what came out wrong without saying so
+
+The page driven in headless Chrome at 1366 and 390 px, light and dark, and four read-throughs of
+the code — the page controller, the data path, the analyses and exports, the Rust. Every bench was
+green, and a dozen paths still gave a wrong number with nothing on screen to say so. Each fix below
+came with a test that fails on the code before it.
+
+**Wrong results, silently.**
+
+- *Two runs at once.* `refreshRunButton` re-enabled *Profile all* whenever a sample was pending —
+  and every queued sample of a running run is. Dropping a FASTQ mid-run was enough to start a
+  second run on the same workers, and a worker holding one `Profiler` and no queue interleaved the
+  two: a gut sample came back with 6,757 reads and no species, and the page concluded *wrong
+  biome*. A database loaded mid-run gave a matrix of two catalogues under one label; the pool
+  resized mid-run hung it for good. Now one owner of the pool at a time, claimed before the first
+  `await`; every control that can change a run frozen during it; a message queue in the worker; and
+  RPC calls that reject when their worker dies.
+- *Pairing by name.* The earliest marker won, so `sample_1_R1` and `sample_2_R1` were each other's
+  mates and two samples were profiled as one. `R1`/`R2` now wins over a bare digit, the rightmost
+  marker of a kind wins, and two files claiming the same mate are not paired at all — the page names
+  them.
+- *Cancel.* On an uncompressed FASTQ, cancelling ended the pending read as an end of file, and the
+  reads read so far became a finished sample that the next run skipped.
+- *A file that stops being FASTQ.* A malformed record, a stray blank line, or R1 and R2 of
+  different lengths halted the sketcher, and what came before was profiled as the whole sample. A
+  sample of two files, the first with no final newline, lost the second entirely (29,999 of 60,000
+  reads). The worker now says why it stopped — end of input, read cap, base cap, or truncated — and
+  a truncated sample is flagged INCOMPLETE in its column header, in every export and in a saved
+  session.
+- *Exports.* MetaPhlAn and BIOM were built from the table on screen: at genus rank the BIOM had 136
+  rows called "1 genome", which biom-format refused, and MetaPhlAn wrote genera as species. At
+  species rank, MetaPhlAn summed distinct genomes sharing a GTDB name (468 genomes, 453 clades). The
+  *sylph output* export read the sample list, not the matrix, and mixed two databases after a
+  reload. All of them now come from the per-genome matrix on screen; `biom validate-table` accepts
+  the BIOM, and `pandas.read_csv(comment="#")` keeps the MetaPhlAn header.
+- *Caches keyed on a count.* The contrast's p and q were cached on the number of rows: after *group
+  similar rows*, 129 of the 208 rows of one contrast showed another row's q. The ordination's
+  layout had the same key. Both are keyed on the rows themselves now, and the figure matches
+  statistics to rows by identifier. Clustering permuted `values` and not `coverage`, so a Gut
+  Metabolic Module cell described another sample's steps.
+- *Sessions.* Opening a colleague's session kept the previous one's groups — TREATED against
+  CONTROL, under a picker reading "none".
+- *Distances on the Function tab.* The Euclidean ceiling assumed percentages; the ortholog table is
+  in fractions, so every neighbour read 0.0 beside a full bar.
+
+**Parity with native sylph, made exact.** The README said the TSV matched sylph's. It does, every
+column — on sylph's scalar seeding path. On x86-64 with AVX2, native sylph takes 4·⌊(L−k+1)/4⌋
+k-mers of a read and skips up to three at its end; WebAssembly has no AVX2. On 60,000 trimmed
+reads of ERR14098592 the bioconda binary differs from the page by up to 0.95 points, on 100,000
+pairs of ERR14098649 by 0.027; forced onto its scalar path it is identical. The "exactly zero" of
+the earlier comparison was the fixture's doing: its R2 is R1's reverse complement, which sketches
+every k-mer AVX2 drops. The 32- and 64-bit packages now also agree on the confidence-interval
+columns — the bootstrap's `fastrand::usize` drew differently depending on pointer width.
+
+**Robustness.** A failure loading the KEGG reference left the page on "Loading…" for ever (the
+branch sat outside the worker's `try`), and the 20 MB the page handed every worker was ignored: eight
+workers, eight downloads. FASTQ redirects were followed off the `ebi.ac.uk` allow-list. `soil`
+(3.0 GB) could not be opened by the default 32-bit package — `unreachable` inside `new Profiler`;
+the build is now chosen on the database's size too, and refused with a reason where no build can
+hold it (Safari). A long-read ENA run stopped by the hidden base cap was reported "INCOMPLETE — the
+download ended early". A malformed `.syldb` crashed the worker; it is refused with a message. A
+connection that stays open and sends nothing is abandoned after 60 s and resumed. The exact
+Mann-Whitney ran on the main thread whatever the group sizes — 40 against 45 froze the page for
+seconds; past a per-table budget it uses the normal approximation with tie correction, and the
+figure says which. Benjamini-Hochberg counts only the rows that vary between the two groups.
+
+**Interface.** The moon button did nothing and the Settings gear flipped the theme:
+`querySelector(".theme-toggle")` found the gear first. The sticky step strip sat under the sticky
+header. At 390 px the citation panel came out as two 150 px columns — Chrome now lets `<details>`
+be a flex container — and the group picker widened the page to 462 px. The picker said 433 MB
+(1024-based) above a paragraph saying 454 MB. The contrast caption said "nothing can reach 0.1",
+which is exactly what can be reached. A pathway cell's coloured KEGG map sends that map's detected
+orthologs to kegg.jp, under a banner promising that no result leaves: the banner, the README and
+the link say so now. Numbers followed the browser's locale ("2 251" beside "13,509"). Matrix columns
+came in the order the workers finished. The ordination's legend covered a sample, and labels
+overprinted. KEGG's global maps took the seven largest slices of every pathway bar. `profile.html`
+was linked from nowhere. The tabs gained `aria-selected`, sorting by a column is reachable from the
+keyboard, and the theme follows the system until told otherwise.
+
+**Builds.** Rebuilding the wasm packages gives the same bytes: toolchains pinned and checked before
+anything is built, `--locked`, and the machine's paths remapped out of the binaries, which used to
+carry `/home/<user>/.cargo/…`. sourmash is rebuilt from a clean checkout with its lock file kept;
+its profiles came out identical byte for byte.
+
+**Tests.** New in CI: `web/page-state.test.mjs` (the real `multi.js` with a stand-in DOM and
+workers, 85 checks), `web/worker.test.mjs` (the real worker and wasm, 52), figures (43), clustering
+(9), exports (15), screening (4), and the database-cache suite (48), which existed but never ran
+there. Parity 1,683, ENA 185, wiring 175, all passing in a clean checkout; 62 mutations, fourteen of
+them new, each caught locally — in CI the one on the protein sketch's mate parser still needs the
+FASTQ fixtures the repository does not carry. One had been passing for the wrong reason: the clustering test asked `cluster.js` which
+fields to check, so dropping a field from the module dropped it from the test too.
+
 ## 2026-08-08 (4)
 
 ### Interface review: six bugs, four accessibility failures, half the wall of text

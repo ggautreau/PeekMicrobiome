@@ -41,13 +41,29 @@ export async function detectGzip(file) {
 //              only valid for the duration of the call: copy it if you keep it.
 //   onProgress (bytesIn, reads, totalBytes, fileIndex) => void, throttled 100ms
 //   signal     AbortSignal
-//   shouldStop optional () => boolean, polled after each input chunk; lets the
-//              consumer (e.g. the wasm sketcher saying "I have enough reads")
-//              stop the read early so we never gunzip the rest of the file.
+//   shouldStop optional () => boolean | "peek", polled after each input chunk;
+//              lets the consumer (e.g. the wasm sketcher saying "I have enough
+//              reads") stop the read early so we never gunzip the rest of the
+//              file. "peek" stops DELIVERING but keeps reading just far enough
+//              to learn whether anything was left — up to the first byte that is
+//              not blank, or the end of the input — and reports it as
+//              `peekedMore`. That is the question "was this mate longer than the
+//              other one?", which stopping alone cannot answer.
 //   waitTurn   optional async () => void, awaited before each input chunk;
 //              back-pressure hook (see streamTrimPair).
 //
-// Returns { reads, bytesIn }.
+// Returns { reads, bytesIn, bases, stoppedBy, peekedMore }, where `stoppedBy`
+// says what ended the read: "reads" (the read cap), "bases" (the base cap),
+// "consumer" (shouldStop said so) or null (every file was read to its end). The
+// caller needs it to tell a sample that was CUT from a sample that was SHORT,
+// and the two look identical from the read count alone. `peekedMore` is only
+// ever true after a "peek": something other than blank lines was left unread.
+//
+// Cancellation always throws an AbortError, never returns. A cancelled reader
+// resolves its pending read() with `done: true`, which is exactly what the end
+// of a file looks like — so without the check in that branch an uncompressed
+// FASTQ cancelled half-way came back as a complete, shorter sample, and was
+// profiled and reported as a success.
 async function streamCore(filesList, maxReads, onChunk, onProgress, signal, shouldStop, waitTurn, maxBases = Infinity) {
   const targetNewlines = maxReads * 4;
   const totalBytes = filesList.reduce((a, f) => a + f.size, 0);
@@ -59,6 +75,17 @@ async function streamCore(filesList, maxReads, onChunk, onProgress, signal, shou
   let bytesIn = 0;
   let lastReport = 0;
   let capped = false;
+  let stoppedBy = null;
+  // After shouldStop() said "peek": nothing more is forwarded, and the reading
+  // goes on only until it is known whether anything was left.
+  let peeking = false;
+  let peekedMore = false;
+  // The last byte forwarded from the CURRENT file, or -1 before its first. A
+  // sample split over several files is read as one stream, so a file whose last
+  // line has no newline glues that line onto the first header of the next one —
+  // and the parser, finding "IIII@read1" where a quality line should end, stops
+  // there: every read of every later file silently left out.
+  let fileTail = -1;
 
   // Scan for the cap while forwarding. Identical newline accounting to the
   // pre-streaming version: the cutoff is inclusive of the capping newline, so
@@ -78,6 +105,17 @@ async function streamCore(filesList, maxReads, onChunk, onProgress, signal, shou
   // is never sketched, and headers vary.
   function consumeChunk(value) {
     if (capped || value.length === 0) return;
+    if (peeking) {
+      for (let i = 0; i < value.length; i++) {
+        const b = value[i];
+        if (b !== 0x0A && b !== 0x0D && b !== 0x20 && b !== 0x09) {
+          peekedMore = true;
+          capped = true;
+          return;
+        }
+      }
+      return;
+    }
     let cutoff = -1;
     for (let i = 0; i < value.length; i++) {
       if (value[i] === 0x0A) {
@@ -85,10 +123,12 @@ async function streamCore(filesList, maxReads, onChunk, onProgress, signal, shou
         if (countBases && newlines % 4 === 1) bases += i - lineStart;
         newlines++;
         lineStart = i + 1;
-        if (newlines === targetNewlines) { cutoff = i + 1; break; }
+        if (newlines === targetNewlines) { cutoff = i + 1; stoppedBy = "reads"; break; }
         // Only ever cut on a record boundary: newlines % 4 === 0 means a whole
         // record has just closed. Checking mid-record would truncate one.
-        if (countBases && newlines % 4 === 0 && bases >= maxBases) { cutoff = i + 1; break; }
+        if (countBases && newlines % 4 === 0 && bases >= maxBases) {
+          cutoff = i + 1; stoppedBy = "bases"; break;
+        }
       }
     }
     // Bases seen on the sequence line still open at the end of this chunk. Held
@@ -103,30 +143,51 @@ async function streamCore(filesList, maxReads, onChunk, onProgress, signal, shou
     if (cutoff >= 0) {
       capped = true;
       onChunk(value.subarray(0, cutoff));
+      fileTail = 0x0A;
     } else {
       onChunk(value);
+      fileTail = value[value.length - 1];
     }
   }
 
+  const aborted = () => new DOMException("aborted", "AbortError");
+  // The consumer's verdict. true: stop now. "peek": stop delivering, keep
+  // looking (see shouldStop above) — and from then on only a true stops.
+  const askStop = () => {
+    if (!shouldStop) return false;
+    const s = shouldStop();
+    if (s === "peek") {
+      if (!peeking) { peeking = true; stoppedBy = "consumer"; }
+      return false;
+    }
+    return s === true;
+  };
+
   for (let fi = 0; fi < filesList.length && !capped; fi++) {
-    if (signal?.aborted) throw new DOMException("aborted", "AbortError");
-    if (shouldStop && shouldStop()) break;
+    if (signal?.aborted) throw aborted();
+    if (askStop()) { stoppedBy = "consumer"; break; }
     const f = filesList[fi];
     const isGz = await detectGzip(f);
     const reader = f.stream().getReader();
     const gz = isGz ? new Gunzip((chunk) => consumeChunk(chunk)) : null;
     const onAbort = signal ? () => reader.cancel().catch(() => {}) : null;
     if (onAbort) signal.addEventListener("abort", onAbort);
+    fileTail = -1;
     try {
       while (!capped) {
-        if (signal?.aborted) throw new DOMException("aborted", "AbortError");
+        if (signal?.aborted) throw aborted();
         if (waitTurn) {
           await waitTurn();
-          if (signal?.aborted) throw new DOMException("aborted", "AbortError");
-          if (shouldStop && shouldStop()) break;
+          if (signal?.aborted) throw aborted();
+          if (askStop()) { stoppedBy = "consumer"; break; }
         }
         const { value, done } = await reader.read();
         if (done) {
+          // FIRST: is this the end of the file, or the reader we cancelled on
+          // abort? Both arrive as `done: true`. Asked before the gzip close
+          // below, too, so a cancelled .gz reports the cancellation rather than
+          // fflate's "unexpected EOF" about a stream we cut ourselves.
+          if (signal?.aborted) throw aborted();
           // Closing the gzip stream is where a TRUNCATED .gz shows up: fflate
           // raises on the final push because the deflate stream never ended.
           // Swallowing that (as this line used to) turned an interrupted
@@ -138,7 +199,18 @@ async function streamCore(filesList, maxReads, onChunk, onProgress, signal, shou
           // file was going to be ignored anyway.
           if (gz) {
             try { gz.push(new Uint8Array(0), true); }
-            catch (e) { if (newlines < targetNewlines) throw e; }
+            catch (e) {
+              // While peeking, a remainder that will not even decompress is
+              // still a remainder: something was there.
+              if (peeking) { peekedMore = true; break; }
+              if (newlines < targetNewlines) throw e;
+            }
+          }
+          // The seam between two files of one sample. Only between them: the
+          // LAST file may end without a newline, and the sketcher already reads
+          // a final record out of its carry.
+          if (!capped && !peeking && fi < filesList.length - 1 && fileTail !== -1 && fileTail !== 0x0A) {
+            consumeChunk(Uint8Array.of(0x0A));
           }
           break;
         }
@@ -146,13 +218,18 @@ async function streamCore(filesList, maxReads, onChunk, onProgress, signal, shou
         if (gz) {
           try { gz.push(value, false); }
           catch (e) {
+            if (peeking) { peekedMore = true; break; }
             if (newlines >= targetNewlines) break;
             throw e;
           }
         } else {
           consumeChunk(value);
         }
-        if (shouldStop && shouldStop()) { capped = true; break; }
+        if (askStop()) {
+          if (!capped) stoppedBy = "consumer";
+          capped = true;
+          break;
+        }
         const now = performance.now();
         if (now - lastReport > 100) {
           if (onProgress) onProgress(bytesIn, Math.floor(newlines / 4), totalBytes, fi);
@@ -164,21 +241,30 @@ async function streamCore(filesList, maxReads, onChunk, onProgress, signal, shou
       try { await reader.cancel(); } catch { /* already cancelled or errored */ }
     }
   }
+  // A stop that raced the abort (the consumer said "enough" on the same tick
+  // the user clicked Cancel) is still a cancellation.
+  if (signal?.aborted) throw aborted();
 
-  return { reads: Math.floor(newlines / 4), bytesIn, bases };
+  // A last record with no newline after its quality line is a whole record —
+  // the sketcher reads it out of its carry — but it closes no fourth newline,
+  // so counting newlines alone reported one read short.
+  const tail = !capped && fileTail !== -1 && fileTail !== 0x0A && newlines % 4 === 3 ? 1 : 0;
+  return { reads: Math.floor(newlines / 4) + tail, bytesIn, bases, stoppedBy, peekedMore };
 }
 
 // ---- streaming API (no full materialisation) -------------------------------
 
 // Single file. onProgress is called as (bytesIn, reads, totalBytes) — the file
-// index is dropped, matching the old readAndTrim callback shape.
-export async function streamTrim(file, maxReads, onChunk, onProgress, signal, shouldStop) {
-  const { reads, bytesIn } = await streamCore(
+// index is dropped, matching the old readAndTrim callback shape. `maxBases` is
+// the same second cap streamTrimMulti takes: the single-sample page reads long
+// reads too, and a read cap alone does not bound what they cost.
+export async function streamTrim(file, maxReads, onChunk, onProgress, signal, shouldStop, maxBases = Infinity) {
+  const { reads, bytesIn, stoppedBy } = await streamCore(
     [file], maxReads, onChunk,
     onProgress ? (b, r, t) => onProgress(b, r, t) : null,
-    signal, shouldStop,
+    signal, shouldStop, undefined, maxBases,
   );
-  return { reads, compressedBytesRead: bytesIn };
+  return { reads, compressedBytesRead: bytesIn, stoppedBy };
 }
 
 // Several files treated as one concatenated stream (one sample split over
@@ -220,7 +306,11 @@ export const PAIR_LAG_MAX = 100000;
 // mate can still deliver, decoded ones PLUS the one its carry may still be
 // holding: that is what the cross-stop rule below has to read, because the last
 // record of a file with no trailing newline is only decoded at finish().
-// Returns [r1Result, r2Result] as streamTrimMulti would.
+// Returns [r1Result, r2Result] as streamTrimMulti would, each with one more
+// field, `mismatch`: true when the two mates do NOT hold the same number of
+// reads — so the pairs past the shorter one were never profiled — false when
+// they do, and null when this build cannot tell (no pending getters: then both
+// mates are read to their end and the caller compares the counts).
 export async function streamTrimPair(r1Files, r2Files, maxReads, hooks = {}) {
   const {
     onChunk1, onChunk2, onProgress1, onProgress2,
@@ -271,7 +361,18 @@ export async function streamTrimPair(r1Files, r2Files, maxReads, hooks = {}) {
       // has nothing left to deliver — decoded or still in its carry: only then
       // can no further read on this side ever be paired, and reading on would
       // just burn CPU and memory.
-      () => stop() || (hasPending && done[other] && pending[other]() === 0 && fed[idx] > 0),
+      //
+      // The second is a "peek", not a stop. It says the OTHER mate has nothing
+      // left; it says nothing about this one, which may well have delivered its
+      // last record and simply not read its end-of-file yet — the slow mate of
+      // a download that was cut and resumed. Taken as "this mate was longer",
+      // that made a sample of 2 x 120,000 reads INCOMPLETE. So this side reads
+      // on without delivering, just far enough to see whether anything is left.
+      () => {
+        if (stop()) return true;
+        if (hasPending && done[other] && pending[other]() === 0 && fed[idx] > 0) return "peek";
+        return false;
+      },
       // Back-pressure: park while this side is too far ahead. Safe from
       // deadlock — the sketcher drains one of the two queues on every feed, so
       // only the leading side can be over the budget, and a finished or
@@ -303,7 +404,18 @@ export async function streamTrimPair(r1Files, r2Files, maxReads, hooks = {}) {
   ]);
   if (signal) signal.removeEventListener("abort", onOuterAbort);
   if (firstError) throw firstError;
-  return [settled[0].value, settled[1].value];
+  const [m1, m2] = [settled[0].value, settled[1].value];
+  // Do the two files hold the same number of reads? Two witnesses, either one
+  // enough. A peek that found more than blank lines: a mate had records left
+  // when its partner had none. Or a difference in what is still waiting to be
+  // paired, now that both have stopped — counted by the sketcher, carries
+  // included, so a last record with no newline weighs the same on both sides
+  // and a difference of ONE read is seen (the trimmer's own counts, made of
+  // newlines, cannot see that one).
+  const mismatch = hasPending
+    ? m1.peekedMore || m2.peekedMore || pending[0]() !== pending[1]()
+    : null;
+  return [{ ...m1, mismatch }, { ...m2, mismatch }];
 }
 
 // ---- materialising API (fallback / equivalence reference) ------------------
@@ -333,16 +445,16 @@ function collector() {
 
 export async function readAndTrim(file, maxReads, onProgress, signal) {
   const c = collector();
-  const { reads, compressedBytesRead } = await streamTrim(
+  const { reads, compressedBytesRead, stoppedBy } = await streamTrim(
     file, maxReads, c.onChunk, onProgress, signal,
   );
-  return { bytes: c.join(), reads, compressedBytesRead };
+  return { bytes: c.join(), reads, compressedBytesRead, stoppedBy };
 }
 
 export async function readAndTrimMulti(filesList, maxReads, onProgress, signal) {
   const c = collector();
-  const { reads, bytesIn } = await streamTrimMulti(
+  const { reads, bytesIn, stoppedBy } = await streamTrimMulti(
     filesList, maxReads, c.onChunk, onProgress, signal,
   );
-  return { bytes: c.join(), reads, bytesIn };
+  return { bytes: c.join(), reads, bytesIn, stoppedBy };
 }

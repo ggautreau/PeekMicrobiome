@@ -5,11 +5,12 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>PeekMicrobiome — upload-free, installation-free metagenomic profiling across biomes</title>
   <link rel="icon" type="image/svg+xml" href="./favicon.svg">
-  <link rel="stylesheet" href="./styles.css?v=79">
+  <link rel="stylesheet" href="./styles.css?v=80">
   <script>
     (function () {
       try {
-        var t = localStorage.getItem("sylph-theme") || "light";
+        // Nothing chosen follows the OS — the same default as theme.js.
+        var t = localStorage.getItem("sylph-theme") || "auto";
         if (t === "auto") {
           t = matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
         } else if (t === "schedule") {
@@ -55,10 +56,16 @@
       </div>
     </a>
     <nav class="app-nav">
-      <button class="theme-toggle" id="settingsBtn" type="button" title="Settings — theme, and the limits this page works within" aria-label="Settings" style="margin-left:0">
+      <!-- The one-file page, for a single FASTQ. It was linked from nowhere, so
+           nobody who did not already know its address could reach it. -->
+      <a class="nav-link" href="./profile.html" title="Profile one FASTQ on its own page" aria-label="Single sample — profile one FASTQ on its own page"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/></svg><span class="nav-label">Single sample</span></a>
+      <!-- `icon-btn`, NOT `theme-toggle`: theme.js wires the light/dark flip to
+           the theme button, and this gear borrowing that class for its outline
+           is how the flip ended up on Settings and the moon did nothing. -->
+      <button class="icon-btn" id="settingsBtn" type="button" title="Settings — theme, and the limits this page works within" aria-label="Settings" style="margin-left:0">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9v0a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
       </button>
-      <button class="theme-toggle" type="button" aria-label="Toggle theme">
+      <button class="theme-toggle" id="themeToggle" type="button" aria-label="Toggle theme" title="Light or dark — Settings has the automatic modes">
         <svg class="icon-moon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
         <svg class="icon-sun" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg>
       </button>
@@ -123,8 +130,14 @@
     <div class="privacy-notice" role="note">
       <svg class="privacy-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="m9 12 2 2 4-4"/></svg>
       <div>
-        <div><strong>Your own files never leave your computer.</strong> FASTQs you drop here are read, decompressed and profiled entirely inside this browser tab. Nothing about them — not the reads, not the file names, not the results — is uploaded anywhere. That is true in every mode, whatever else this page does, and it is the reason the tool exists.</div>
-        <div style="margin-top:.45rem">This page does make three kinds of request of its own — downloading a reference database, downloading public ENA reads if you ask for them, and, if you open the Gut Metabolic Modules level and answer its licence question, fetching those definitions from the Raes lab's repository on <code>raw.githubusercontent.com</code>. All three are downloads <em>towards</em> you, and each is explained at the control that makes it. Nothing of yours is ever sent anywhere.</div>
+        <div><strong>Your own files never leave your computer.</strong> FASTQs you drop here are read, decompressed and profiled entirely inside this browser tab. Nothing about them — not the reads, not the file names, not the results — is uploaded anywhere, in any mode; the one exception is a link you choose to follow, a coloured KEGG map, and it is described below. Keeping your data here is the reason the tool exists.</div>
+        <!-- Folded after the first visit, like the citation notice below: the
+             sentence above is the one that must be met every time, and this is
+             the detail behind it — read once, then 100 px of every visit. -->
+        <details class="privacy-more" id="privacyMore">
+          <summary>What this page fetches, and the one link that sends something</summary>
+          <div>This page does make three kinds of request of its own — downloading a reference database, downloading public ENA reads if you ask for them, and, if you open the Gut Metabolic Modules level and answer its licence question, fetching those definitions from the Raes lab's repository on <code>raw.githubusercontent.com</code>. All three are downloads <em>towards</em> you, and each is explained at the control that makes it. The one thing that goes the other way is a link: a pathway cell in the Function tab opens KEGG's map coloured by that sample, and following it sends kegg.jp the orthologs of that map detected in the sample, each with a colour for its abundance — no sample name and no read, and nothing at all unless you click.</div>
+        </details>
       </div>
     </div>
 
@@ -168,7 +181,7 @@
           <select id="dbSelect">
             <optgroup label="Human">
               <option value="https://zenodo.org/api/records/21842023/files/human-gut.syldb/content">Human gut — 4,744 species, 454 MB, downloads from Zenodo</option>
-              <option value="db/gut_mini.syldb">Smoke test — 50 human-gut species, 6 MB, bundled</option>
+              <option value="db/gut_mini.syldb">Smoke test — 50 human-gut species, 6.5 MB, bundled</option>
             </optgroup>
             <optgroup label="Your own file">
               <option value="__local__">Local file… (.syldb on your computer)</option>
@@ -208,7 +221,7 @@
       </div>
       <div class="info hide" id="screenResult" aria-live="polite" aria-atomic="true"></div>
       <div class="info biome-note" id="dbBiomeNote"></div>
-      <div class="info" style="margin-top:.4rem"><strong>Loading a reference database downloads it from <code>zenodo.org</code>.</strong> The human-gut (UHGG) database is 454 MB; the others run from 13 MB (zebrafish-fecal) to 3.0 GB (soil). It is fetched the first time you click <em>Load database</em>, then kept on this computer for later visits. Zenodo sees your IP address and which of these files you asked for. The bundled 6.5 MB smoke-test database, or a <code>.syldb</code> from your own disk, downloads nothing at all.</div>
+      <div class="info" style="margin-top:.4rem"><strong>Loading a reference database downloads it from <code>zenodo.org</code>.</strong> The human-gut (UHGG) database is 454 MB; the others run from 13 MB (zebrafish-fecal) to 3.0 GB (soil). It is fetched the first time you click <em>Load database</em>, then kept on this computer for later visits — unless the browser evicts it to reclaim disk space. Zenodo sees your IP address and which of these files you asked for. The bundled 6.5 MB smoke-test database, or a <code>.syldb</code> from your own disk, downloads nothing at all.</div>
       <div class="info" style="margin-top:.4rem">The catalogues cannot be combined: MGnify dereplicates each one separately and they overlap, so loading two would count the same species twice. The loaded biome is named on the database line, above the matrix, and inside every TSV and CSV you download; that is where a mistake is caught.</div>
       <!-- Why the controls in this card are frozen. Visible rather than only on
            hover: a touch screen has no hover, and a disabled button cannot be
@@ -223,7 +236,7 @@
       <label class="drop" id="drop">
         <input type="file" id="file" multiple accept=".fastq,.fq,.fastq.gz,.fq.gz,.gz">
         <div id="dropLabel"><strong>Drop FASTQs here</strong> or click to browse (multiple files allowed)</div>
-        <div class="hint">.fastq[.gz] / .fq[.gz] — paired mates (<code>_1</code>/<code>_2</code>) auto-group into a single sample.</div>
+        <div class="hint">.fastq[.gz] / .fq[.gz] — paired mates (<code>_1</code>/<code>_2</code>, <code>_R1</code>/<code>_R2</code>) auto-group into a single sample.</div>
       </label>
 
       <div class="ena-or">or</div>
@@ -269,7 +282,10 @@
       <div class="info hide" id="enaPending"></div>
 
       <div class="row reads-row">
-        <label>Max <span id="capUnitWord">reads</span> per sample: <input type="text" id="maxReads" value="3 000 000" inputmode="numeric" autocomplete="off" spellcheck="false" aria-describedby="capEquiv"></label>
+        <!-- The words in ONE span: the label is a flex row, and as three loose
+             text runs around the unit word each gap was a flex gap — "Max  reads
+             per sample" with holes in it. -->
+        <label><span>Max <span id="capUnitWord">reads</span> per sample:</span> <input type="text" id="maxReads" value="3 000 000" inputmode="numeric" autocomplete="off" spellcheck="false" aria-describedby="capEquiv"></label>
         <!-- Only shown when long reads are actually in the list: a control for a
              situation the user is not in is noise. See refreshLongReadUnit(). -->
         <label class="pair-unit hide" id="basesUnit">
@@ -280,6 +296,9 @@
         </label>
         <input type="range" id="maxReadsSlider" class="reads-slider" min="10000" max="60000000" step="10000" value="3000000" aria-label="Max reads per sample (slider)">
       </div>
+      <!-- What was typed and could not be read, and what is used instead. The
+           field used to turn "3.000.000" into 10,000 without a word. -->
+      <div class="err hide" id="readsBad" role="alert"></div>
       <div class="info" style="margin-top:-.35rem">Fewer reads finish sooner; more reads detect species at lower abundance.</div>
       <div class="info cap-equiv hide" id="capEquiv"></div>
       <div class="reads-warn hide" id="readsWarn">
@@ -379,12 +398,12 @@
       <div class="res-tabs" role="tablist">
         <!-- Two tabs, half the bar each: the choice is a fork, not a list, and a
              pair of tabs huddled at the left edge reads as one more toolbar. -->
-        <button class="res-tab is-on" data-res="taxo" role="tab" type="button">
+        <button class="res-tab is-on" data-res="taxo" role="tab" type="button" aria-selected="true" aria-controls="taxoPanel">
           <!-- A two-way split, not the three-leaf dendrogram this started as: at 17 px the
                  third branch merged into the spine and the whole mark read as a smudge. --><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M2.5 12h4"/><path d="M6.5 6.5v11"/><path d="M6.5 6.5h3"/><path d="M6.5 17.5h3"/><circle cx="13" cy="6.5" r="2.6"/><circle cx="13" cy="17.5" r="2.6"/></svg>
           Taxonomy
         </button>
-        <button class="res-tab" data-res="func" role="tab" type="button">
+        <button class="res-tab" data-res="func" role="tab" type="button" aria-selected="false" aria-controls="funcPanel">
           <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="5" cy="6" r="2"/><circle cx="5" cy="18" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19.5" cy="12" r="2"/><path d="M6.6 7.3 10.4 10.7"/><path d="M6.6 16.7 10.4 13.3"/><path d="M14 12h3.5"/></svg>
           Function
         </button>
@@ -428,18 +447,18 @@
       <div class="figures">
         <div class="fig-tabs" role="tablist">
           <div class="fig-switch">
-          <button class="fig-tab" data-fig="composition" role="tab" type="button"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 6h7"/><path d="M4 12h13"/><path d="M4 18h9"/></svg>Composition</button>
-          <button class="fig-tab" data-fig="alpha" role="tab" type="button"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="6" cy="8" r="2.6"/><path d="M17 5.4 20.6 11.4H13.4z"/><rect x="3.4" y="14" width="5.2" height="5.2" rx="1"/><circle cx="17" cy="16.6" r="2.6"/></svg>Diversity</button>
-          <button class="fig-tab" data-fig="pcoa" role="tab" type="button"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="7" cy="8" r="1.8"/><circle cx="16.5" cy="6.5" r="1.8"/><circle cx="12" cy="15" r="1.8"/><circle cx="19" cy="16.5" r="1.8"/></svg>PCoA</button>
-          <!-- Which rows differ, ranked by effect and NOT tested: at this many
-               rows and this few samples a p-value would claim more than the data
-               carries, so the figure shows every sample as a dot and lets the
-               reader see the overlap. Same figure on the functional half. -->
-          <button class="fig-tab" data-fig="contrast" role="tab" type="button"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 8h16"/><circle cx="8.5" cy="8" r="1.6"/><path d="M4 16h16"/><circle cx="15.5" cy="16" r="1.6"/></svg>Contrast</button>
+          <button class="fig-tab" data-fig="composition" role="tab" type="button" aria-selected="false" aria-controls="figCanvas"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 6h7"/><path d="M4 12h13"/><path d="M4 18h9"/></svg>Composition</button>
+          <button class="fig-tab" data-fig="alpha" role="tab" type="button" aria-selected="false" aria-controls="figCanvas"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="6" cy="8" r="2.6"/><path d="M17 5.4 20.6 11.4H13.4z"/><rect x="3.4" y="14" width="5.2" height="5.2" rx="1"/><circle cx="17" cy="16.6" r="2.6"/></svg>Diversity</button>
+          <button class="fig-tab" data-fig="pcoa" role="tab" type="button" aria-selected="false" aria-controls="figCanvas"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="7" cy="8" r="1.8"/><circle cx="16.5" cy="6.5" r="1.8"/><circle cx="12" cy="15" r="1.8"/><circle cx="19" cy="16.5" r="1.8"/></svg>PCoA</button>
+          <!-- Which rows differ between two groups, ranked by effect and tested
+               (Mann-Whitney, Benjamini-Hochberg over every row), with every
+               sample drawn as a dot so the overlap a q summarises away stays in
+               view. Same figure on the functional half. -->
+          <button class="fig-tab" data-fig="contrast" role="tab" type="button" aria-selected="false" aria-controls="figCanvas"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 8h16"/><circle cx="8.5" cy="8" r="1.6"/><path d="M4 16h16"/><circle cx="15.5" cy="16" r="1.6"/></svg>Contrast</button>
           <!-- The only figure that can refuse: its poles are three named genera
                of the adult human gut, so it needs to know it is looking at one.
                The tab is always here; what it says depends on the catalogue. -->
-          <button class="fig-tab" data-fig="enterotype" role="tab" type="button"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4 21 19H3z"/><circle cx="12" cy="14" r="1.4"/></svg>Enterotype</button>
+          <button class="fig-tab" data-fig="enterotype" role="tab" type="button" aria-selected="false" aria-controls="figCanvas"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4 21 19H3z"/><circle cx="12" cy="14" r="1.4"/></svg>Enterotype</button>
           </div>
           <span class="tb-spacer"></span>
           <span class="tb-div" aria-hidden="true"></span>
@@ -487,7 +506,7 @@
           </label>
           <!-- What the points are coloured by. Only the ordination has colours to
                give away, so it appears and goes with the zoom controls. -->
-          <label class="fig-colour hide" id="figColourWrap" title="Colour the points by the groups you loaded, or by clusters this page computes with k-means on the two axes drawn. The silhouette beside the legend says how separated those clusters are: k-means always returns clusters, and on samples with no structure at all the score still averages about 0.3.">
+          <label class="fig-colour hide" id="figColourWrap" title="Colour the points by the groups you loaded, or by clusters this page computes with k-means on the two axes drawn. The silhouette beside the legend says how separated those clusters are: k-means always returns clusters, and on samples with no structure at all the score still averages about 0.45 when the number of clusters is chosen for you — 0.4 at a fixed number.">
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="8"/><circle cx="9" cy="9.5" r="1.2"/><circle cx="14.8" cy="9.5" r="1.2"/><circle cx="12" cy="15.5" r="1.2"/></svg>Colour
             <select id="figColour">
               <option value="groups" selected>by groups</option>
@@ -594,10 +613,10 @@
         <div class="figures">
           <div class="fig-tabs" role="tablist">
             <div class="fig-switch">
-            <button class="func-tab" data-ffig="composition" role="tab" type="button"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 6h7"/><path d="M4 12h13"/><path d="M4 18h9"/></svg>Composition</button>
-            <button class="func-tab" data-ffig="alpha" role="tab" type="button"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="6" cy="8" r="2.6"/><path d="M17 5.4 20.6 11.4H13.4z"/><rect x="3.4" y="14" width="5.2" height="5.2" rx="1"/><circle cx="17" cy="16.6" r="2.6"/></svg>Diversity</button>
-            <button class="func-tab" data-ffig="pcoa" role="tab" type="button"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="7" cy="8" r="1.8"/><circle cx="16.5" cy="6.5" r="1.8"/><circle cx="12" cy="15" r="1.8"/><circle cx="19" cy="16.5" r="1.8"/></svg>PCoA</button>
-            <button class="func-tab" data-ffig="contrast" role="tab" type="button"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 8h16"/><circle cx="8.5" cy="8" r="1.6"/><path d="M4 16h16"/><circle cx="15.5" cy="16" r="1.6"/></svg>Contrast</button>
+            <button class="func-tab" data-ffig="composition" role="tab" type="button" aria-selected="false" aria-controls="funcCanvas"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 6h7"/><path d="M4 12h13"/><path d="M4 18h9"/></svg>Composition</button>
+            <button class="func-tab" data-ffig="alpha" role="tab" type="button" aria-selected="false" aria-controls="funcCanvas"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="6" cy="8" r="2.6"/><path d="M17 5.4 20.6 11.4H13.4z"/><rect x="3.4" y="14" width="5.2" height="5.2" rx="1"/><circle cx="17" cy="16.6" r="2.6"/></svg>Diversity</button>
+            <button class="func-tab" data-ffig="pcoa" role="tab" type="button" aria-selected="false" aria-controls="funcCanvas"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="7" cy="8" r="1.8"/><circle cx="16.5" cy="6.5" r="1.8"/><circle cx="12" cy="15" r="1.8"/><circle cx="19" cy="16.5" r="1.8"/></svg>PCoA</button>
+            <button class="func-tab" data-ffig="contrast" role="tab" type="button" aria-selected="false" aria-controls="funcCanvas"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 8h16"/><circle cx="8.5" cy="8" r="1.6"/><path d="M4 16h16"/><circle cx="15.5" cy="16" r="1.6"/></svg>Contrast</button>
             </div>
             <span class="tb-spacer"></span>
             <span class="tb-div" aria-hidden="true"></span>
@@ -640,7 +659,7 @@
                  page computes; narrow the window. They appear with the PCoA and
                  go away with it, because nothing else here has colours to give
                  away or a window to narrow. -->
-            <label class="fig-colour hide" id="funcColourWrap" title="Colour the points by the groups you loaded, or by clusters this page computes with k-means on the two axes drawn. The silhouette beside the legend says how separated those clusters are: k-means always returns clusters, and on samples with no structure at all the score still averages about 0.3.">
+            <label class="fig-colour hide" id="funcColourWrap" title="Colour the points by the groups you loaded, or by clusters this page computes with k-means on the two axes drawn. The silhouette beside the legend says how separated those clusters are: k-means always returns clusters, and on samples with no structure at all the score still averages about 0.45 when the number of clusters is chosen for you — 0.4 at a fixed number.">
               <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="8"/><circle cx="9" cy="9.5" r="1.2"/><circle cx="14.8" cy="9.5" r="1.2"/><circle cx="12" cy="15.5" r="1.2"/></svg>Colour
               <select id="funcColour">
                 <option value="groups" selected>by groups</option>
@@ -862,7 +881,7 @@
        it fixed relative to that ancestor instead of to the window. -->
   <div class="fig-tip hide" id="figTip" role="status" aria-live="polite"></div>
 
-  <script type="module" src="./theme.js?v=79"></script>
-  <script type="module" src="./multi.js?v=79"></script>
+  <script type="module" src="./theme.js?v=80"></script>
+  <script type="module" src="./multi.js?v=80"></script>
 </body>
 </html>

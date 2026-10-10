@@ -408,19 +408,30 @@ const figs = read("web/figures.js");
 const stats = read("web/stats.js");
 // The figure carried no p-value and said why. It carries one now because it was
 // asked for — and the obligation the refusal came with did not go away.
-check("the contrast is tested, exactly, and corrected across the whole table",
+// The family is every row that CAN differ — a row equal in every sample of both
+// groups has p = 1 whatever the labels, and counting it in only inflated q —
+// and the caption says how many of how many.
+check("the contrast is tested, and corrected across every row that can differ",
   /export function mannWhitney/.test(stats) && /export function benjaminiHochberg/.test(stats) &&
-  /benjaminiHochberg\(ps\)/.test(figs) && /Benjamini-Hochberg over \$\{rows\.length\} rows/.test(figs));
+  /benjaminiHochberg\(ps\)/.test(figs) && /x\.varies \? mannWhitney/.test(figs) &&
+  /over the \$\{tested\} of \$\{rows\} rows that vary/.test(figs));
 // THE FLOOR. At three samples a group the smallest attainable two-sided p is
 // 0.1: no row can reach 0.05 however cleanly the groups separate, and a column
-// of q near 1 is arithmetic rather than a failure of the data.
+// of q near 1 is arithmetic rather than a failure of the data. Said the right
+// way round — 0.1 itself IS reached, by a perfect split.
 check("...and says what the test cannot do at the group sizes in front of it",
   /export function minAttainableP/.test(stats) &&
-  /nothing can reach \$\{fmtP\(floorP\)\}/.test(figs));
-// Exact, not approximate: 468 rows of the example take 64 ms, so there is no
-// reason to reach for the normal approximation at these sizes.
-check("...exactly, by permutation, rather than by a normal approximation",
-  /exact permutation null/.test(stats) && /exact: true/.test(stats));
+  /smallest attainable p at \$\{nA\} v \$\{nB\} is \$\{fmtP\(floorP\)\}, so nothing reaches 0\.05/.test(figs) &&
+  !/nothing can reach \$\{fmtP\(floorP\)\}/.test(figs));
+// Exact wherever a table's tests fit the budget — 468 rows of the example at
+// 9 v 9 take 60 ms — and the normal approximation past it, because the exact
+// null costs the fourth power of the group size: forty a side froze the page
+// for thirteen seconds. The figure says which, so an approximation is never
+// read as the permutation p.
+check("...exactly, by permutation, wherever the table's budget allows it, and says when not",
+  /exact permutation null/.test(stats) && /method: "exact"/.test(stats) &&
+  /export const EXACT_TABLE_WORK/.test(stats) && /<= budget \? "exact" : "normal"/.test(figs) &&
+  /normal approximation, tie-corrected/.test(figs));
 // Ranked by EFFECT still. A p-value ordering at nine samples a group is mostly
 // an ordering of how many zeros a row has.
 check("...while the rows are still ordered by difference, not by p",
@@ -533,8 +544,11 @@ check("the worker pool is sized from the machine, not from a constant",
 // Every worker holds its own copy of the catalogue — 1.85 GB apiece for the
 // 454 MB human-gut database, measured — so the pool has to be bounded by the
 // size of the catalogue about to be loaded, not by a fixed number.
+// The size is the catalogue's own or, for a .syldb off the disk, the file's —
+// picked before the pool is built, so it can size it.
 check("...and bounded by the size of the catalogue it is about to load",
-  /suggestedWorkers\(bytes\)/.test(multi) &&
+  /suggestedWorkers\(dbBytes\)/.test(multi) &&
+  /const dbBytes = localFile \? localFile\.size : Number\(biome\?\.bytes\)/.test(multi) &&
   /GB_PER_WORKER_PER_BYTE = 1\.85 \/ 454_021_440/.test(multi));
 // A number the page chose must say why, or the reader has no basis for moving
 // it — and it must stop choosing once they have.
@@ -572,12 +586,14 @@ check("the profiled read count is kept from the RPC answer",
 // the reads, two sketches — so a sample cannot end up with species from one run
 // and functions from another.
 check("...and so is the functional profile, from the same reply",
-  /\(\{ tsv, reads, func \} = s\.origin === "ena"/.test(multi) &&
+  /\(\{ tsv, reads, func(, [^}]*)? \} = s\.origin === "ena"/.test(multi) &&
   /funcProfiles = \{ \.\.\.\(funcProfiles \?\? \{\}\), \[s\.sampleName\]: func\.profile \}/.test(multi));
 // Shown WITH ITS UNIT: "3,000,000" alone is ambiguous between three million
 // pairs and three million sequenced reads, and the two differ by 2x.
+// In en-US, whatever the browser's locale: "60 000 pairs" beside "13,509" was
+// the page writing one number two ways.
 check("...and shown on the finished sample, with the unit named",
-  /\$\{shown\.toLocaleString\(\)\} \$\{unit\} profiled/.test(multi) &&
+  /\$\{shown\.toLocaleString\("en-US"\)\} \$\{unit\} profiled/.test(multi) &&
   /const unit = s\.kind === "pe" && !pairsCountAsTwo\(\) \? "pairs" : "reads"/.test(multi));
 // Compared in the unit the user is reading, not the worker's raw pair count.
 // Written across lines, and with a fourth argument, since this was pinned to one
@@ -666,7 +682,10 @@ check("every element enaLookup touches is optional",
   /els\.enaCancelLookup\?\.classList\.add\("hide"\)/.test(multi)
   && !/els\.enaCancelLookup\.classList/.test(multi)
   && /els\.enaResult\?\.classList\.add\("hide"\)/.test(multi)
-  && /if \(els\.enaResolve\) els\.enaResolve\.disabled = false;/.test(multi));
+  // setDisabled() returns on a missing element, and puts the button back to
+  // what the page state says rather than to "enabled".
+  && /setDisabled\(els\.enaResolve, busy === "run" \? BUSY_WHY\.run : ""\)/.test(multi)
+  && /function setDisabled\(el, why\) \{\s*if \(!el\) return;/.test(multi));
 
 console.log("== the ENA read_count is not in the unit the worker reports ==");
 {
@@ -722,38 +741,55 @@ console.log("== a saved session can be opened on a page with nothing on it ==");
     (html.match(/id="loadSession"/g) || []).length === 1);
 }
 
-console.log("== the reads control is frozen while a run is going ==");
+console.log("== the pool has one owner at a time, and the run freezes what it reads ==");
 {
   const src = read("web/multi.js");
+  // A run, a database load, the biome screen and a resize all reach into the
+  // worker pool, and the worker does not queue. Each used to guard only itself:
+  // a file dropped mid-run put Profile all back, Load database stayed live
+  // under a run, Settings resized the pool under it. One owner, claimed and
+  // released in one place — web/page-state.test.mjs drives each of those
+  // through the real page; these hold the shape it relies on.
+  check("there is one owner of the pool, claimed and released by two helpers",
+    /let busy = null;/.test(src) && /function claimBusy\(what\)/.test(src) &&
+    /function releaseBusy\(what\)/.test(src));
+  // Claimed BEFORE the first await: the permission prompt is awaited at the
+  // start of a run, and a second click in that window started a second run.
+  const runAll = src.match(/async function runAll\(\) \{[\s\S]*?\n\}/)?.[0] ?? "";
+  check("runAll claims the pool before anything is awaited",
+    runAll.includes('claimBusy("run")') && runAll.indexOf('claimBusy("run")') < runAll.indexOf("await "),
+    runAll.slice(0, 160));
+  check("...and so does every other way into the pool",
+    /claimBusy\("db"\)/.test(src) && /claimBusy\("screen"\)/.test(src) && /claimBusy\("resize"\)/.test(src));
+  check("...and each lets go in a finally",
+    ["run", "db", "screen", "resize"].every((w) =>
+      new RegExp(`finally \\{[\\s\\S]{0,240}?releaseBusy\\("${w}"\\)`).test(src)));
+  check("Profile all never comes back while the pool is held",
+    /els\.run\.disabled = !!busy \|\|/.test(src));
   // maxReads is read once, when the run starts. A live slider during a run
   // shows a number that is not the one being used, and can ask for a 32/64-bit
-  // build switch while the current build is busy.
-  check("there is one helper for the controls a run freezes",
-    /function setRunControls\(running\)/.test(src));
-  // Written against setDisabled(), which replaced direct `.disabled =` writes:
-  // the assertions below used to name the old shape and had been failing green-
-  // washed ever since, which is how a bench stops being one.
-  const frozen = (name) => new RegExp(`setDisabled\\(els\\.${name}, busy\\)`).test(src);
-  check("...and it covers the reads number and the slider",
-    frozen("maxReads") && frozen("maxReadsSlider"));
-  check("...and the database and pool controls it replaced",
-    frozen("loadDb") && frozen("poolSize"));
+  // build switch while the current build is busy. Frozen for a RUN only: a
+  // database download does not read it, and the build is chosen again when the
+  // run starts.
+  const frozenForRun = (name) => new RegExp(`setDisabled\\(els\\.${name}, runWhy\\)`).test(src);
+  check("a run freezes the reads number and the slider",
+    frozenForRun("maxReads") && frozenForRun("maxReadsSlider"));
   // The pair unit is the read cap in another unit — capFor() halves the cap when
-  // it is ticked — so leaving it live during a run profiles half the samples at
-  // half the cap with nothing on screen saying so.
-  check("...and the pair unit, which is the cap wearing another name",
-    frozen("pairsAsTwo"));
+  // it is ticked — and the base cap is read per sample too.
+  check("...and the pair unit and the base cap, which are the cap in other units",
+    frozenForRun("pairsAsTwo") && frozenForRun("capInBases"));
   // The functional reference goes into the workers once, before the first
   // sample. Ticked mid-run it would leave the earlier samples without a
   // functional profile and the later ones with one.
   check("...and the functional opt-in, which is read once at the start",
-    frozen("funcOn"));
-  // The point of the helper: no path can freeze some controls and forget others.
+    frozenForRun("funcOn"));
+  // Anything that holds the pool freezes the database, its picker and the pool.
+  const frozenWhileHeld = (name) => new RegExp(`setDisabled\\(els\\.${name}, why\\)`).test(src);
+  check("anything holding the pool freezes the database, its picker and the pool size",
+    frozenWhileHeld("loadDb") && frozenWhileHeld("dbSelect") && frozenWhileHeld("poolSize") &&
+    /setDisabled\(document\.getElementById\("setWorkers"\), why\)/.test(src));
   check("nothing freezes loadDb on its own any more",
     !/els\.loadDb\.disabled = (true|false);/.test(src));
-  check("the helper is called on entry and on every exit",
-    (src.match(/setRunControls\(true\)/g) || []).length >= 2 &&
-    (src.match(/setRunControls\(false\)/g) || []).length >= 3);
 }
 
 // ---- KEGG is asked about before it is shown ----------------------------------

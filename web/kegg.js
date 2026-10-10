@@ -128,13 +128,20 @@ export function heatHex(value, max) {
  * multi_query=…` returns the map with the argument silently ignored — a page
  * that looks like a success and highlights nothing.
  *
- * ONE COLOUR, NOT A SCALE. Per-ortholog colours are possible and would encode
- * abundance, but they cost 19 characters each against a request-target ceiling
- * measured at 2,023 bytes — 2,024 is a 403 — which caps them near 90 orthologs,
- * where `default=` reaches about 281. A map cut off at 90 of its 300 boxes is a
- * worse answer than a complete map that says "these were detected", and a
- * quantitative colouring would imply per-reaction evidence a sketch profile does
- * not have. So: found, or not found.
+ * A COLOUR PER ORTHOLOG, on the sample's own log scale (heatHex). This said
+ * "one colour, not a scale" for as long as the code below has done the
+ * opposite. Each colour costs 19 characters against a request-target ceiling
+ * measured at 2,023 bytes — 2,024 is a 403 — so the most abundant orthologs get
+ * theirs, the ones that do not fit are still marked with the palest step
+ * (`default=`), and only past that are any dropped: a box left out reads as "not
+ * found", which is a different and false statement.
+ *
+ * WHAT THE LINK CARRIES. It is the reader's data in a URL: the orthologs of this
+ * map detected in one sample, each with a colour that encodes its abundance —
+ * no sample name, no read, nothing else — and it reaches kegg.jp only when the
+ * reader follows it. The pages say so where the link is offered, and in the
+ * privacy notice, rather than leaving "nothing of yours is sent" untrue by one
+ * click.
  *
  * Returns null when there is nothing to colour, and truncates — most abundant
  * first — when the list does not fit, so the caller can say it did.
@@ -296,6 +303,20 @@ function greyMapUrl(mapId, kos, max, maxBytes) {
  * checked — a magic string in two files is a magic string that will disagree.
  */
 export const NO_PATHWAY = "_none";
+
+/**
+ * KEGG's "global and overview maps": map011xx (Metabolic pathways and the two
+ * other global maps), map012xx (carbon, amino-acid, cofactor… metabolism) and
+ * map013xx (the nitrogen and sulfur cycles). Thirteen maps, and none of them is
+ * a pathway of its own — each is drawn from the orthologs of the specific maps,
+ * so it carries their signal a second time.
+ *
+ * That is fine in a table, where a row is read on its own. It is not fine in a
+ * composition, where rows are shares of one bar: on the shipped example the
+ * seven largest slices were all overview maps, map01100 alone a fifth of every
+ * bar, and the specific pathways a reader came to compare were pushed into grey.
+ */
+export const isOverviewMap = (id) => /^map01[123]\d\d$/.test(String(id ?? ""));
 
 /** Rows the profiler produced, named and sorted. `map` is web/db/kegg/ko-map.json. */
 /**

@@ -150,12 +150,37 @@ export const METRICS = {
   //
   // Euclidean is the straight-line distance between the two abundance vectors.
   // It is dominated by the few most abundant taxa — a sample differing by 30
-  // points of Prevotella outweighs a hundred rare species — and its ceiling for
-  // percentages is sqrt(2) x 100.
+  // points of Prevotella outweighs a hundred rare species — and it is in the
+  // TABLE's unit, so its ceiling is too: sqrt(2) x 100 for the taxonomic
+  // percentages, sqrt(2) for the functional fractions. `max` here is the
+  // percentage one; sampleFacts returns the ceiling of the table it was given,
+  // which is the one to draw against. A fixed sqrt(2) x 100 with one decimal
+  // printed every functional distance — 0.0086 to 0.011 — as "0.0", beside a
+  // bar 99.99 % full.
   bray: { label: "Bray-Curtis", max: 1, digits: 3 },
   euclid: { label: "Euclidean", max: Math.SQRT2 * 100, digits: 1 },
 };
 
+/**
+ * A distance in three significant digits: "0.241", "0.00863", "12.4". Fixed
+ * decimals cannot serve a table in percentages and one in fractions at once —
+ * one decimal turned every functional distance into "0.0".
+ */
+export function fmtDistance(d) {
+  if (!Number.isFinite(d)) return "—";
+  if (d === 0) return "0";
+  const decimals = 2 - Math.floor(Math.log10(Math.abs(d)));
+  return d.toFixed(Math.max(0, Math.min(8, decimals)));
+}
+
+/**
+ * What one sample is, beyond its composition — see METRICS for the distances.
+ *
+ * Returns, with the diversity, `max` — the largest distance the metric can take
+ * on THIS table — and for each neighbour its `distance`, `closeness` (1 at an
+ * identical profile, 0 at the ceiling) and `text`, the distance as it should be
+ * printed.
+ */
 export function sampleFacts(table, sample, { neighbours = 4, metric = "bray" } = {}) {
   const c = typeof sample === "number" ? sample : table.samples.indexOf(sample);
   if (c < 0 || table.samples[c] === undefined) return null;
@@ -187,6 +212,25 @@ export function sampleFacts(table, sample, { neighbours = 4, metric = "bray" } =
     };
   }).filter(Boolean).sort((a, b) => a.distance - b.distance).slice(0, neighbours);
 
+  // The ceiling of THIS table. Two profiles with nothing in common, each
+  // concentrated on one row, are sqrt(Ta^2 + Tb^2) apart in Euclidean terms —
+  // sqrt(2) times the column total when the totals agree, as they do in a
+  // composition — and Bray-Curtis is bounded by 1 whatever the unit.
+  let max = 1;
+  if (how === "euclid") {
+    let top = 0;
+    for (let j = 0; j < table.samples.length; j++) {
+      let t = 0;
+      for (const r of table.rows) t += r.values[j] || 0;
+      if (t > top) top = t;
+    }
+    max = top > 0 ? Math.SQRT2 * top : 1;
+  }
+  for (const n of near) {
+    n.closeness = Math.max(0, Math.min(1, 1 - n.distance / max));
+    n.text = fmtDistance(n.distance);
+  }
+
   return {
     sample: table.samples[c],
     richness: mine.richness,
@@ -198,6 +242,7 @@ export function sampleFacts(table, sample, { neighbours = 4, metric = "bray" } =
     rank,
     of: table.samples.length,
     metric: how,
+    max,
     nearest: near,
   };
 }
@@ -260,18 +305,96 @@ export function eigenvaluesSym(M, { sweeps = 24, tol = 1e-10 } = {}) {
 }
 
 /**
+ * Every eigenvalue AND eigenvector of a symmetric matrix, by the same cyclic
+ * Jacobi rotations, accumulated. Sorted by eigenvalue, largest first;
+ * `vectors[k]` goes with `values[k]`.
+ *
+ * Converged to the matrix's own scale rather than to a fixed 1e-10: the
+ * eigenvalues have to be good enough to tell a REPEATED one from two distinct
+ * ones, which is what deciding an ordination's second axis comes down to on a
+ * symmetric configuration. Jacobi converges quadratically, so the extra sweeps
+ * that buys are few.
+ */
+export function eigenSym(M, { sweeps = 60 } = {}) {
+  const n = M.length;
+  const a = Array.from({ length: n }, (_, i) => Float64Array.from(M[i]));
+  const V = Array.from({ length: n }, (_, i) => {
+    const row = new Float64Array(n);
+    row[i] = 1;
+    return row;
+  });
+  let frob = 0;
+  for (let i = 0; i < n; i++) for (let j = 0; j < n; j++) frob += a[i][j] * a[i][j];
+  const tol = 1e-26 * frob;
+  for (let sweep = 0; sweep < sweeps; sweep++) {
+    let off = 0;
+    for (let i = 0; i < n; i++) for (let j = i + 1; j < n; j++) off += a[i][j] * a[i][j];
+    if (!(off > tol)) break;
+    for (let p = 0; p < n; p++) {
+      for (let q = p + 1; q < n; q++) {
+        if (a[p][q] === 0) continue;
+        const theta = (a[q][q] - a[p][p]) / (2 * a[p][q]);
+        const t = Math.sign(theta || 1) / (Math.abs(theta) + Math.sqrt(theta * theta + 1));
+        const c = 1 / Math.sqrt(t * t + 1), s2 = t * c;
+        for (let k = 0; k < n; k++) {
+          const akp = a[k][p], akq = a[k][q];
+          a[k][p] = c * akp - s2 * akq;
+          a[k][q] = s2 * akp + c * akq;
+        }
+        for (let k = 0; k < n; k++) {
+          const apk = a[p][k], aqk = a[q][k];
+          a[p][k] = c * apk - s2 * aqk;
+          a[q][k] = s2 * apk + c * aqk;
+        }
+        // The same rotation on the columns of V: at convergence A = V D V^T,
+        // and column j of V is the eigenvector of the j-th diagonal entry.
+        for (let k = 0; k < n; k++) {
+          const vkp = V[k][p], vkq = V[k][q];
+          V[k][p] = c * vkp - s2 * vkq;
+          V[k][q] = s2 * vkp + c * vkq;
+        }
+      }
+    }
+  }
+  const order = Array.from({ length: n }, (_, i) => i).sort((x, y) => a[y][y] - a[x][x]);
+  return {
+    values: order.map((j) => a[j][j]),
+    vectors: order.map((j) => Float64Array.from({ length: n }, (_, k) => V[k][j])),
+  };
+}
+
+/**
  * Principal coordinates analysis on a distance matrix.
  *
- * Classical MDS: double-centre -0.5 * D^2, then take the leading eigenvectors.
- * Power iteration with deflation rather than a full eigendecomposition — two
- * axes are all a scatter plot uses, and pulling in a linear-algebra library for
- * the other n-2 would be the largest dependency in the project.
+ * Classical MDS: double-centre -0.5 * D^2, then take the eigenvectors of the
+ * largest POSITIVE eigenvalues, from the full decomposition of eigenSym.
+ *
+ * Not power iteration any more, which is what this was until it was found
+ * wanting on three counts. It ran a fixed 200 iterations with no test of
+ * convergence, so two close eigenvalues — 13.6 % and 13.3 % on a random table —
+ * could come out in the wrong order, PCo2 above PCo1. And it converges to the
+ * eigenvalue of largest MAGNITUDE: Bray-Curtis is not Euclidean, its centred
+ * matrix has negative eigenvalues, and when one of those outweighed the second
+ * positive one the deflated iteration took it as PCo2 and reported its
+ * magnitude as variance shown. The full spectrum was being computed anyway, for
+ * the axis labels; now the axes come from the same decomposition.
+ *
+ * Two things are kept from the power iteration, because they were right. The
+ * plot is deterministic — the same matrix gives the same picture twice, signs
+ * included, since a sign flip between redraws reads as the points moving. And
+ * a REPEATED eigenvalue gives a definite axis: inside a degenerate eigenspace
+ * any direction is an eigenvector, and the one taken is the projection of a
+ * fixed start vector onto it — the vector power iteration converged to, so a
+ * plot that was right before is drawn the same way now, the same way up. Eight
+ * points at the corners of a cube are the case: three equal eigenvalues, and an
+ * arbitrary basis could leave points on an axis of zero for no reason in the
+ * data.
  *
  * Returns { points: [{x, y}], explained: [f1, f2] } where the fractions are of
  * the positive eigenvalue total. Bray-Curtis is not Euclidean, so negative
  * eigenvalues are normal and are excluded from that total rather than hidden.
  */
-export function pcoa(D, { dims = 2, iters = 200 } = {}) {
+export function pcoa(D, { dims = 2 } = {}) {
   const n = D.length;
   if (n < 3) return { points: D.map(() => ({ x: 0, y: 0 })), explained: [0, 0] };
 
@@ -284,81 +407,66 @@ export function pcoa(D, { dims = 2, iters = 200 } = {}) {
     for (let j = 0; j < n; j++) A[i][j] = A[i][j] - rowMean[i] - rowMean[j] + grand;
   }
 
-  const mul = (v) => {
-    const out = new Float64Array(n);
-    for (let i = 0; i < n; i++) {
-      let s = 0;
-      for (let j = 0; j < n; j++) s += A[i][j] * v[j];
-      out[i] = s;
-    }
-    return out;
+  const { values, vectors } = eigenSym(A);
+  const top = Math.max(0, ...values.map(Math.abs));
+  // Equal within this is one eigenspace. Far below any difference a reader
+  // could see in an axis label, far above what the decomposition leaves.
+  const same = 1e-7 * top;
+  const dot = (x, y) => { let t = 0; for (let i = 0; i < n; i++) t += x[i] * y[i]; return t; };
+  const without = (w, axes) => {
+    for (const v of axes) { const d = dot(w, v); for (let i = 0; i < n; i++) w[i] -= d * v[i]; }
+    return w;
   };
 
-  // Deflate a vector against the axes already taken, in place.
-  const orth = (w) => {
-    for (let k = 0; k < vecs.length; k++) {
-      let dot = 0;
-      for (let i = 0; i < n; i++) dot += w[i] * vecs[k][i];
-      for (let i = 0; i < n; i++) w[i] -= dot * vecs[k][i];
-    }
-    return Math.hypot(...w);
-  };
-
-  const vecs = [], vals = [];
+  const axes = [], lambdas = [];
   for (let d = 0; d < dims; d++) {
-    let v = null, lambda = 0;
-    // Fixed starts, not random ones: the same matrix must give the same plot
-    // twice, and a sign flip between redraws reads as the points moving. Several
-    // of them, because ONE fixed start is a trap — where an eigenvalue is
-    // repeated, the iteration converges to the projection of its start vector
-    // onto that eigenspace, and if the next start projects onto the same
-    // direction, deflation leaves nothing and the axis collapses to zero. Eight
-    // points at the corners of a cube did exactly that: three equal eigenvalues,
-    // PCo2 reported as 0, every sample drawn on one horizontal line.
-    for (let k = 0; k < 4 && !(lambda > 1e-9); k++) {
-      let u = Float64Array.from({ length: n },
+    const lambda = values[d] ?? 0;
+    // Only a positive eigenvalue is variance a plane can show: a negative one is
+    // never an axis, and the axis it would have been is left at zero.
+    if (!(lambda > same) || !(lambda > 0)) { axes.push(new Float64Array(n)); lambdas.push(0); continue; }
+    const space = vectors.filter((_, k) => Math.abs(values[k] - lambda) <= same);
+    let v = null;
+    // Fixed starts, several of them: where the eigenspace is orthogonal to one
+    // start, the next one is used — the case that collapsed PCo2 to zero on the
+    // cube before the power iteration learnt to try more than one.
+    for (let k = 0; k < 4 && !v; k++) {
+      const u = Float64Array.from({ length: n },
         (_, i) => Math.sin((i + 1) * (1 + 0.37 * k) + 1 + d + 2.1 * k));
-      // The START is orthogonalised, so the iteration begins inside the subspace
-      // that is left rather than being pulled back out of it every step.
-      if (!(orth(u) > 1e-12)) continue;
-      let norm = Math.hypot(...u);
-      for (let i = 0; i < n; i++) u[i] /= norm;
-      for (let it = 0; it < iters; it++) {
-        const w = mul(u);
-        norm = orth(w);
-        if (!(norm > 1e-12)) { lambda = 0; break; }
-        for (let i = 0; i < n; i++) w[i] /= norm;
-        lambda = norm;
-        u = w;
-      }
-      v = u;
+      without(u, axes);
+      const w = new Float64Array(n);
+      for (const e of space) { const c = dot(u, e); for (let i = 0; i < n; i++) w[i] += c * e[i]; }
+      without(w, axes);
+      const norm = Math.sqrt(dot(w, w));
+      if (norm > 1e-9) v = w.map((x) => x / norm);
     }
-    vecs.push(v ?? new Float64Array(n));
-    vals.push(lambda);
+    // Every start orthogonal to the space: take the decomposition's own vector.
+    if (!v) {
+      const w = without(Float64Array.from(vectors[d]), axes);
+      const norm = Math.sqrt(dot(w, w));
+      v = norm > 1e-12 ? w.map((x) => x / norm) : new Float64Array(n);
+    }
+    axes.push(v);
+    lambdas.push(lambda);
   }
 
-  // Only positive eigenvalues carry variance that a plane can show; Bray-Curtis
-  // routinely produces negative ones and calling their total "100%" would be a
-  // lie in the axis label.
-  //
-  // The total is taken over the WHOLE spectrum, not over the axes that happen to
-  // have been computed. Summed over `vals` — two numbers — the two fractions
-  // added up to 100% whatever the data, so the plot claimed to show all of the
-  // variation every time; asking for four axes changed the first two from
-  // 53%/47% to 43%/37% on the same plot. What is lost in the projection is
-  // exactly what these labels exist to report.
-  const posTotal = eigenvaluesSym(A).filter((x) => x > 0).reduce((a, x) => a + x, 0) || 1;
-  const scale = vals.map((l) => Math.sqrt(Math.max(0, l)));
+  // The total is taken over the WHOLE spectrum, not over the axes that happen
+  // to have been computed. Summed over two numbers, the two fractions added up
+  // to 100% whatever the data, so the plot claimed to show all of the
+  // variation every time. What is lost in the projection is exactly what these
+  // labels exist to report.
+  const posTotal = values.filter((x) => x > 0).reduce((a, x) => a + x, 0) || 1;
+  const scale = lambdas.map((l) => Math.sqrt(Math.max(0, l)));
   return {
     points: Array.from({ length: n }, (_, i) => ({
-      x: (vecs[0]?.[i] ?? 0) * scale[0],
-      y: (vecs[1]?.[i] ?? 0) * scale[1],
+      x: (axes[0]?.[i] ?? 0) * scale[0],
+      y: (axes[1]?.[i] ?? 0) * scale[1],
     })),
-    explained: [Math.max(0, vals[0]) / posTotal, Math.max(0, vals[1]) / posTotal],
+    explained: [Math.max(0, lambdas[0]) / posTotal, Math.max(0, lambdas[1] ?? 0) / posTotal],
   };
 }
 
-import { mannWhitney, benjaminiHochberg, minAttainableP, fmtP } from "./stats.js?v=79";
+import { mannWhitney, benjaminiHochberg, minAttainableP, fmtP, exactWork, EXACT_TABLE_WORK }
+  from "./stats.js?v=80";
 
 // ---- drawing -----------------------------------------------------------------
 
@@ -369,6 +477,28 @@ const svgOpen = (w, h, title, font = 11, attrs = "") =>
   `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${w} ${h}" width="${w}" height="${h}" ` +
   `font-family="ui-sans-serif, system-ui, sans-serif" font-size="${font}" role="img" ` +
   `${attrs}aria-label="${esc(title)}"><rect width="${w}" height="${h}" fill="#ffffff"/>`;
+
+/**
+ * What a percentage is OF, for a table whose values are not shares.
+ *
+ * A Gut Metabolic Module's value is the median ortholog abundance along its
+ * covered path (gmm.js): not a share of anything, and a column of them sums to
+ * about 0.019 on the shipped example. A composition bar or a pie of those
+ * values still has parts — each module's part of the sum of the sample's
+ * module values — but "12 % of this sample" is not what they are, and the
+ * export of the same level says "NOT SHARES". Passed as `share` to
+ * compositionSvg and pieSvg; the default is a share of the sample.
+ *
+ *   of     the words after a percentage in a tooltip
+ *   note   the line a composition prints under its legend
+ *   short  what the pie adds to its subtitle
+ */
+export const GMM_SHARE = Object.freeze({
+  of: "of the sum of this sample's module values",
+  note: "Module values are medians, not shares: each bar is that sample's module values, " +
+    "as parts of their sum",
+  short: "parts of a sum of medians, not shares",
+});
 
 /**
  * Stacked composition bars, one per sample, top N rows plus "other".
@@ -384,7 +514,7 @@ const svgOpen = (w, h, title, font = 11, attrs = "") =>
  * bar of "other taxa" is what reading only `species` produced.
  */
 export function compositionSvg(table, {
-  topN = 10, width = 900, barH = 0, height = 0, otherLabel = "other taxa",
+  topN = 10, width = 900, barH = 0, height = 0, otherLabel = "other taxa", share = null,
 } = {}) {
   const { samples, rows } = table;
   // `label` before `name`: kegg.js keeps the bare name in `name` for the matrix
@@ -406,16 +536,21 @@ export function compositionSvg(table, {
   // it sits in instead of leaving a band of empty card under it. Clamped: a run
   // of three samples must not get bars as tall as a hand, and a run of eighty
   // must not get bars too thin to hover.
-  const room = height ? height - padT - legendH - 10 : 0;
+  // What a percentage here is a percentage OF. A share of the sample by
+  // default; `share` (see VALUE_SHARE) says otherwise for a table whose values
+  // are not shares — the GMM medians — and earns a line under the legend.
+  const noteH = share?.note ? 16 : 0;
+  const room = height ? height - padT - legendH - noteH - 10 : 0;
   const bar = barH || (room
     ? Math.max(10, Math.min(46, room / samples.length - gap))
     : 26);
-  const h = padT + samples.length * (bar + gap) + legendH + 10;
+  const h = padT + samples.length * (bar + gap) + legendH + noteH + 10;
+  const of = share?.of ? ` ${share.of}` : "";
   let out = svgOpen(width, h, "Composition per sample");
 
   samples.forEach((name, c) => {
     const y = padT + c * (bar + gap);
-    const total = rows.reduce((a, r) => a + (r.values[c] || 0), 0) || 1;
+    const total = rows.reduce((a, r) => a + (r.values[c] || 0), 0);
     let x = padL;
     // A row is a sample you can open, and the whole strip — name included — is
     // the target, not the fifteen segments it is cut into. The rect behind it
@@ -425,12 +560,22 @@ export function compositionSvg(table, {
       `<rect class="row-hit" x="0" y="${y - 2}" width="${width}" height="${bar + 4}" ` +
       `fill="#275662" fill-opacity="0"/>` +
       `<text x="${padL - 8}" y="${y + bar / 2 + 4}" text-anchor="end" fill="#275662">${esc(name)}</text>`;
+    // NOTHING DETECTED IS NOT "OTHER". With no total the remainder below used
+    // to fill the whole bar — "other taxa — 100.0 %" over a sample in which
+    // nothing at all was found, the one thing a composition must not invent.
+    // An empty frame, said in words; the pie says the same in the panel.
+    if (!(total > 0)) {
+      out += `<rect x="${padL}" y="${y}" width="${plotW.toFixed(1)}" height="${bar}" fill="none" ` +
+        `stroke="#c9c4bd" stroke-dasharray="3 3"><title>${esc(name)}: nothing detected</title></rect>` +
+        `<text x="${padL + 8}" y="${(y + bar / 2 + 4).toFixed(1)}" fill="#6b7172">nothing detected</text></g>`;
+      return;
+    }
     keep.forEach((ri, k) => {
       const frac = (rows[ri].values[c] || 0) / total;
       const w = frac * plotW;
       if (w > 0.2) {
         out += `<rect x="${x.toFixed(1)}" y="${y}" width="${w.toFixed(1)}" height="${bar}" ` +
-          `fill="${colourAt(k)}"><title>${esc(labelOf(rows[ri]))} — ${(frac * 100).toFixed(1)}%</title></rect>`;
+          `fill="${colourAt(k)}"><title>${esc(labelOf(rows[ri]))} — ${(frac * 100).toFixed(1)}%${esc(of)}</title></rect>`;
       }
       x += w;
     });
@@ -438,7 +583,7 @@ export function compositionSvg(table, {
     if (rest > 0.2) {
       const restFrac = rest / plotW;
       out += `<rect x="${x.toFixed(1)}" y="${y}" width="${rest.toFixed(1)}" height="${bar}" ` +
-        `fill="${GREY}"><title>${esc(otherLabel)} — ${(restFrac * 100).toFixed(1)}%</title></rect>`;
+        `fill="${GREY}"><title>${esc(otherLabel)} — ${(restFrac * 100).toFixed(1)}%${esc(of)}</title></rect>`;
     }
     out += "</g>";
   });
@@ -468,6 +613,9 @@ export function compositionSvg(table, {
         `<rect x="${lx}" y="${ly + row * 18}" width="10" height="10" fill="${colour}"/>` +
         `<text x="${lx + 15}" y="${ly + row * 18 + 9}" fill="#5a5550">${esc(text)}</text></g>`;
     });
+  if (share?.note) {
+    out += `<text x="${padL}" y="${(ly + legendH - 4).toFixed(1)}" fill="#6b7172">${esc(share.note)}</text>`;
+  }
   return out + "</svg>";
 }
 
@@ -524,22 +672,22 @@ export function alphaSvg(table, { width = 760, rowH = 0, height = 0, unit = "tax
  * Which rows differ between two groups of samples — or, with no groups, which
  * rows vary most across them.
  *
- * WHY THERE ARE NO P-VALUES HERE, and why that is the honest choice rather than
- * the lazy one. A run on this page is typically a handful of samples; the rows
- * are compositional, so they are not independent; and there are 100 pathways or
- * 13,509 orthologs of them, which is a multiple-testing problem no correction
- * rescues at n=9 per group. A page that printed "p = 0.03" beside a pathway
- * would be making a claim its own data cannot support, and readers would carry
- * that number into a paper. So this figure ranks by EFFECT — the difference in
- * mean relative abundance — and then shows every sample as a dot, which is the
- * thing a p-value is a lossy summary of: the reader sees the spread, the
- * overlap, and the one outlier carrying a difference, and draws their own
- * conclusion.
+ * RANKED BY EFFECT, TESTED BESIDE IT. A run on this page is typically a handful
+ * of samples; the rows are compositional, so they are not independent; and
+ * there are 100 pathways or 13,509 orthologs of them. So the figure ranks by the
+ * difference in mean relative abundance and draws every sample as a dot — the
+ * spread, the overlap, the one outlier carrying a difference, which is what a
+ * p-value is a lossy summary of — and prints the q of a two-sided Mann-Whitney,
+ * Benjamini-Hochberg over the rows that can differ (see contrastStats), with the
+ * smallest p the group sizes allow written on the figure wherever it is above
+ * 0.05. It printed no p at all at first; the floor is the obligation that came
+ * with adding one.
  *
- * `groupOf(sample)` returns a group name or null. With two or more groups the
- * two LARGEST are contrasted, and the caller is told which in the returned
- * markup's title. With fewer, rows are ranked by spread (max − min across
- * samples) and no means are drawn — there is nothing to contrast them with.
+ * `groupOf(sample)` returns a group name or null. `pair` names the two groups
+ * to contrast; without one, or when it names a group that is not here, the two
+ * largest are taken, and the heading says which. With fewer than two groups of
+ * two, rows are ranked by spread (max − min across samples) and no means are
+ * drawn — there is nothing to contrast them with.
  *
  * The same `{ samples, rows }` table as every other figure here, so it draws
  * taxa and functions with no second implementation.
@@ -590,31 +738,40 @@ export function contrastSvg(table, {
     const hi = Math.max(...r.values), lo = Math.min(...r.values);
     return { r, a: null, b: null, score: hi - lo };
   });
-  // THE TEST, over EVERY row rather than over the ten that will be drawn: the
-  // question is asked of the whole table at once, so correcting over the subset
-  // that happened to be shown would be choosing the denominator after seeing the
-  // answers. Exact Mann-Whitney at these sizes — 468 rows of the shipped example
-  // take 64 ms — and Benjamini-Hochberg across the family.
+  // THE TEST, over every row that can differ rather than over the ten that will
+  // be drawn: the question is asked of the whole table at once, so correcting
+  // over the subset that happened to be shown would be choosing the denominator
+  // after seeing the answers. Exact Mann-Whitney wherever the table's budget
+  // allows — 468 rows of the shipped example at 9 v 9 take 60 ms — and
+  // Benjamini-Hochberg across the family.
   //
   // Ranked by EFFECT still, not by p. A p-value orders rows by how confident the
   // data are, which at nine samples a group is mostly a ranking of how many
   // zeros a row has; the difference in abundance is what the reader came for,
   // and the q is what says whether to believe it.
+  let tested = null;
   if (paired && test) {
     // `stats` lets the caller hand in what it already computed. The test is
-    // EXACT and therefore not free — 4,307 orthologs take 470 ms — and it
-    // depends on the rows and the grouping, on neither the width nor the top-N.
-    // Recomputing it while somebody drags the slider is half a second of blocked
-    // main thread per tick, for numbers that cannot have changed.
+    // not free — 4,307 orthologs take 470 ms — and it depends on the rows and
+    // the grouping, on neither the width nor the top-N. Recomputing it while
+    // somebody drags the slider is half a second of blocked main thread per
+    // tick, for numbers that cannot have changed.
     //
-    // Computed here when nothing is handed in, so the function stays whole and
-    // testable on its own.
-    const ready = stats && stats.length === scored.length;
-    const ps = ready ? stats.map((x) => x.p)
-      : scored.map((x) => mannWhitney(gA[1].map((i) => x.r.values[i] ?? 0),
-        gB[1].map((i) => x.r.values[i] ?? 0)).p);
-    const qs = ready ? stats.map((x) => x.q) : benjaminiHochberg(ps);
-    scored.forEach((x, i) => { x.p = ps[i]; x.q = qs[i]; });
+    // MATCHED BY ROW, NEVER BY POSITION. They were taken by index, guarded only
+    // by the count: a cache keyed on the number of rows handed back the stats of
+    // the same rows in another order once "group similar rows" reordered them,
+    // and 129 of 208 rows printed another row's q — one at p = 0.1 showed p = 1.
+    // Now every row is looked up by its own key, the pair has to be the pair
+    // drawn, and anything that does not match is recomputed here: a stale cache
+    // can cost time, never a number on the wrong row.
+    tested = statsFor(stats, rows, gA[0], gB[0]) ??
+      contrastStats(table, { groupOf, pair: [gA[0], gB[0]] });
+    const byKey = new Map(tested.map((x) => [x.id, x]));
+    scored.forEach((x) => {
+      const s = byKey.get(rowKey(x.r));
+      x.p = s?.p ?? NaN;
+      x.q = s?.q ?? NaN;
+    });
   }
   // WHICH ROWS, then IN WHAT ORDER — and they are not the same decision. The
   // figure exists to show the largest differences, so the top-N is always cut by
@@ -712,27 +869,33 @@ export function contrastSvg(table, {
   // q = 1 is arithmetic rather than a failure. That one cannot be dropped —
   // it is the difference between a null result and a broken figure.
   const floorP = paired ? minAttainableP(gA[1].length, gB[1].length) : NaN;
-  const subs = paired
-    ? ["Difference in mean abundance · one dot per sample · bars are the group means"]
-    : ["Range across samples, largest first · make or pick two groups to contrast them"];
-  if (showQ) {
-    // THE FLOOR RESTS ON AN ASSUMPTION, and the figure has to say so. It is
-    // computed from the NUMBER OF SAMPLES, which is the number of independent
-    // observations only if each sample is one. Three stool samples from one
-    // donor are near-replicates — on the shipped example the mean within-donor
-    // distance is 0.326 against 0.734 between — so a nine-against-nine split by
-    // sex is really three donors against three, whose floor is 0.1 and not
-    // 2/48,620: the printed one is permissive by a factor of 2,431. Nothing in
-    // the archive's metadata names the donor there (it is inside `sample_alias`,
-    // "A.M065_1"), so guessing it would be worse than saying what is assumed.
-    // The reader knows their design; the figure must not pretend the question
-    // does not arise.
-    subs.push(`q: Mann-Whitney, Benjamini-Hochberg over ${rows.length} rows` +
-      (floorP > 0.05
-        ? ` · at ${gA[1].length} v ${gB[1].length} samples nothing can reach ${fmtP(floorP)}`
-        : "") +
-      ` · assumes each sample is independent`);
-  }
+  // THE FLOOR RESTS ON AN ASSUMPTION, and the figure has to say so. It is
+  // computed from the NUMBER OF SAMPLES, which is the number of independent
+  // observations only if each sample is one. Three stool samples from one
+  // donor are near-replicates — on the shipped example the mean within-donor
+  // distance is 0.326 against 0.734 between — so a nine-against-nine split by
+  // sex is really three donors against three, whose floor is 0.1 and not
+  // 2/48,620: the printed one is permissive by a factor of 2,431. Nothing in
+  // the archive's metadata names the donor there (it is inside `sample_alias`,
+  // "A.M065_1"), so guessing it would be worse than saying what is assumed.
+  // The reader knows their design; the figure must not pretend the question
+  // does not arise. It rides on the first line, which has the room; the second
+  // carries the test, the family and the floor.
+  const subs = !paired
+    ? ["Range across samples, largest first · make or pick two groups to contrast them"]
+    : !showQ
+      ? ["Difference in mean abundance · one dot per sample · bars are the group means"]
+      : [
+        fitLine([
+          "Difference in mean abundance · one dot per sample · bars are the group means · " +
+            "assumes each sample is independent",
+          "Difference in mean abundance · one dot per sample · assumes each sample is independent",
+          "Mean difference · one dot per sample · assumes each sample is independent",
+          "Mean difference · a dot per sample · samples assumed independent",
+        ], width),
+        testLine({ method: tested.method, tested: tested.tested, rows: rows.length,
+          nA: gA[1].length, nB: gB[1].length, floorP, width }),
+      ];
   subs.forEach((line, i) => {
     out += `<text x="0" y="${27 + i * 12}" fill="#6b7172">${esc(line)}</text>`;
   });
@@ -815,8 +978,10 @@ export function contrastSvg(table, {
       out += `<text x="${(padL + plotW + qCol).toFixed(1)}" y="${(mid + 4).toFixed(1)}" ` +
         `fill="${x0.q <= 0.05 ? "#275662" : "#9aa0a1"}" ` +
         `font-weight="${x0.q <= 0.05 ? "600" : "400"}">${esc(qText)}` +
-        `<title>Mann-Whitney two-sided p = ${esc(fmtP(x0.p))}, ` +
-        `Benjamini-Hochberg q = ${esc(fmtP(x0.q))} over ${rows.length} rows</title></text>`;
+        `<title>Mann-Whitney two-sided p = ${esc(fmtP(x0.p))} ` +
+        `(${tested.method === "exact" ? "exact, by permutation" : "normal approximation, tie-corrected"}), ` +
+        `Benjamini-Hochberg q = ${esc(fmtP(x0.q))} over the ${tested.tested} of ${rows.length} ` +
+        `rows that vary between these samples</title></text>`;
     }
     out += `</g>`;
   });
@@ -860,13 +1025,45 @@ export function contrastGroups(table, groupOf = () => null) {
 }
 
 /**
+ * What identifies a row of any table these figures draw — the key the
+ * contrast's statistics are matched on, so a q can only ever land on the row it
+ * was computed for. Exported so a caller that caches the statistics can key the
+ * cache on the same thing.
+ *
+ * A functional row has its KEGG or GMM `id`. A taxonomic row has its genome —
+ * unique at species level — and above it a count like "12 genomes", which is
+ * not, so the taxon's name goes in the key as well.
+ */
+export function rowKey(r) {
+  if (r?.id != null && r.id !== "") return `id\u0001${r.id}`;
+  return `${r?.genome ?? ""}\u0001${r?.species ?? r?.label ?? r?.name ?? ""}`;
+}
+
+/**
  * The test for every row of a table, in the table's own order.
  *
  * Split out so a caller that redraws often — a slider drag, a window resize —
  * can compute it once and hand it back through `stats`. Same arithmetic either
  * way: contrastSvg calls this when nothing is handed in.
+ *
+ * Each entry is { id, p, q, tested }, `id` being the row's `rowKey`. The array
+ * also carries `method` ("exact" or "normal"), `tested` (how many rows were in
+ * the family) and `pair` (the two groups, in contrast order).
+ *
+ * THE FAMILY IS THE ROWS THAT CAN DIFFER. A row that is equal in every sample
+ * of both groups — absent from all of them, which is most rows of a split of a
+ * few samples — has p = 1 whatever the labels say, and it carries no
+ * information about them either, so leaving it out of the correction is a filter
+ * chosen before the test looks at a single label (Bourgon et al., PNAS 2010).
+ * Counted in, it only inflated q: at 3 v 3 on the shipped example, 468 rows of
+ * which about 208 vary, every q came out 2.25 times larger than the family it
+ * was actually a correction for. Those rows keep p = 1 and get no q.
+ *
+ * EXACT OR NOT IS DECIDED FOR THE WHOLE TABLE, against EXACT_TABLE_WORK: the
+ * same figure never mixes the two methods, and the caption can name the one it
+ * used.
  */
-export function contrastStats(table, { groupOf = () => null, pair = null } = {}) {
+export function contrastStats(table, { groupOf = () => null, pair = null, budget = EXACT_TABLE_WORK } = {}) {
   const { samples, rows } = table ?? { samples: [], rows: [] };
   const bySize = new Map();
   (samples ?? []).forEach((s, i) => {
@@ -882,10 +1079,74 @@ export function contrastStats(table, { groupOf = () => null, pair = null } = {})
   const cand = want.length === 2 && want[0][0] !== want[1][0] ? want : groups;
   if (!(cand.length >= 2 && cand[0][1].length >= 2 && cand[1][1].length >= 2)) return null;
   const [gA, gB] = [cand[0], cand[1]];
-  const ps = (rows ?? []).map((r) => mannWhitney(gA[1].map((i) => r.values[i] ?? 0),
-    gB[1].map((i) => r.values[i] ?? 0)).p);
+  const split = (rows ?? []).map((r) => {
+    const a = gA[1].map((i) => r.values[i] ?? 0), b = gB[1].map((i) => r.values[i] ?? 0);
+    const first = a[0];
+    const varies = a.some((v) => v !== first) || b.some((v) => v !== first);
+    return { a, b, varies };
+  });
+  const tested = split.filter((x) => x.varies).length;
+  const method = tested * exactWork(gA[1].length, gB[1].length) <= budget ? "exact" : "normal";
+  const ps = split.map((x) => (x.varies ? mannWhitney(x.a, x.b, { method }).p : NaN));
   const qs = benjaminiHochberg(ps);
-  return ps.map((p, i) => ({ p, q: qs[i] }));
+  const out = split.map((x, i) => ({
+    id: rowKey(rows[i]),
+    p: x.varies ? ps[i] : 1,
+    q: qs[i],
+    tested: x.varies,
+  }));
+  out.method = method;
+  out.tested = tested;
+  out.pair = [gA[0], gB[0]];
+  return out;
+}
+
+/**
+ * Statistics handed in by a caller, if they are for THIS table and this pair —
+ * every row present under its own key, and nothing else — or null, which makes
+ * contrastSvg compute them afresh.
+ */
+function statsFor(stats, rows, a, b) {
+  if (!Array.isArray(stats) || stats.length !== rows.length || !stats.method) return null;
+  if (stats.pair?.[0] !== a || stats.pair?.[1] !== b) return null;
+  const keys = new Set(stats.map((x) => x?.id));
+  if (keys.size !== rows.length) return null;
+  return rows.every((r) => keys.has(rowKey(r))) ? stats : null;
+}
+
+/**
+ * The first of `variants` that fits `width` at 11 px type — or the shortest,
+ * which is still better than a line cut off mid-word with nothing to say so.
+ * 6.2 px a character is the mean measured on this figure's own captions.
+ */
+function fitLine(variants, width) {
+  const room = Math.floor(width / 6.2);
+  return variants.find((v) => v.length <= room) ?? variants[variants.length - 1];
+}
+
+/**
+ * The second line of the contrast's caption: which test, over which family,
+ * and — where it bites — the floor. Longest first, each variant a shortening of
+ * the one before, so a narrow figure loses words before it loses a fact.
+ */
+function testLine({ method, tested, rows, nA, nB, floorP, width }) {
+  const how = method === "exact" ? "exact Mann-Whitney" : "Mann-Whitney (normal approximation)";
+  const fam = tested === rows ? `over all ${rows} rows` : `over the ${tested} of ${rows} rows that vary`;
+  const famShort = tested === rows ? `over ${rows} rows` : `over ${tested} of ${rows} rows`;
+  const floor = floorP > 0.05
+    ? `smallest attainable p at ${nA} v ${nB} is ${fmtP(floorP)}, so nothing reaches 0.05` : "";
+  const floorShort = floorP > 0.05
+    ? `min. p ${fmtP(floorP)} at ${nA} v ${nB}: nothing reaches 0.05` : "";
+  const floorTiny = floorP > 0.05 ? `at ${nA} v ${nB} p ≥ ${fmtP(floorP)} > 0.05` : "";
+  const join = (...xs) => xs.filter(Boolean).join(" · ");
+  return fitLine([
+    join(`q: ${how}, Benjamini-Hochberg ${fam}`, floor),
+    join(`q: ${how}, Benjamini-Hochberg ${famShort}`, floor),
+    join(`q: ${how}, BH ${famShort}`, floor),
+    join(`q: ${how}, BH ${famShort}`, floorShort),
+    join(`q: Mann-Whitney + BH, ${tested}/${rows} rows`, floorShort),
+    join(`q: Mann-Whitney + BH, ${tested}/${rows} rows`, floorTiny),
+  ], width);
 }
 
 /** A label cut to fit the lane, with the full string left in a <title>. */
@@ -914,7 +1175,7 @@ function trunc(s, n) {
  * which is what a caller with no box to fill wants.
  */
 export function pieSvg(table, sample, {
-  topN = 9, width = 470, height = 0, radius = 84, font = 12.5, unit = "taxa",
+  topN = 9, width = 470, height = 0, radius = 84, font = 12.5, unit = "taxa", share = null,
 } = {}) {
   const c = typeof sample === "number" ? sample : table.samples.indexOf(sample);
   const name = table.samples[c];
@@ -1007,7 +1268,8 @@ export function pieSvg(table, sample, {
   const h = height > 0 ? height : Math.max(cy + r + 16, padT + legend.length * 19 + 20);
   let out = svgOpen(width, h, title, font) + head +
     `<text x="18" y="36" fill="#6b7172">${present.length} ${esc(unit)} · ` +
-    `top ${Math.min(keep.length, present.length)} shown</text>`;
+    `top ${Math.min(keep.length, present.length)} shown` +
+    (share?.short ? ` · ${esc(share.short)}` : "") + `</text>`;
 
   const at = (a) => `${(cx + r * Math.cos(a)).toFixed(1)} ${(cy + r * Math.sin(a)).toFixed(1)}`;
   let a0 = -Math.PI / 2;
@@ -1019,8 +1281,11 @@ export function pieSvg(table, sample, {
     // — a saved file has no page around it to run a tooltip — and the attributes
     // are what the page's own tooltip reads, which appears at once and is styled
     // like every other tooltip here instead of after the browser's second.
-    const tip = `<title>${esc(s.label)} — ${pct}</title>`;
-    const data = ` data-taxon="${esc(s.label)}" data-share="${pct}"` +
+    // `data-share-of` says what the share is OF, so the page's tooltip does not
+    // have to assume it is the sample: for GMM values it is not (GMM_SHARE).
+    const shareOf = share?.of ?? "of this sample";
+    const tip = `<title>${esc(s.label)} — ${pct} ${esc(shareOf)}</title>`;
+    const data = ` data-taxon="${esc(s.label)}" data-share="${pct}" data-share-of="${esc(shareOf)}"` +
       (s.rest ? ` data-rest="1"` : "");
     if (frac > 0.9999) {
       // One taxon and nothing else: an arc whose two ends are the same point
@@ -1212,9 +1477,10 @@ export function enterotypeSplit(table, { genusOf = null } = {}) {
  * The ordination itself, without the drawing: computed once, drawn many times.
  */
 // How far out the plot may be pulled. Below 1 the window is WIDER than the data,
-// which is what moves the points out from under the legend in the corner; half
-// is the floor because past it the samples are a knot in the middle of an empty
-// square and the extra room has stopped buying anything.
+// which gives the points at the edge of the frame room for their names (it was
+// also the way out from under the legend, until the legend moved above the
+// plot); half is the floor because past it the samples are a knot in the middle
+// of an empty square and the extra room has stopped buying anything.
 export const PCOA_MIN_ZOOM = 0.5;
 
 export function pcoaLayout(table) {
@@ -1240,8 +1506,10 @@ const d2 = (a, b) => (a.x - b.x) ** 2 + (a.y - b.y) ** 2;
 
 export function kmeans(points, k, { iters = 60 } = {}) {
   const n = points.length;
-  if (!(k >= 1) || n === 0) return { labels: points.map(() => 0), centres: [], k: 0 };
-  if (k >= n) return { labels: points.map((_, i) => i), centres: points.map((p) => ({ ...p })), k: n };
+  if (!(k >= 1) || n === 0) return { labels: points.map(() => 0), centres: [], k: 0, asked: k };
+  if (k >= n) {
+    return { labels: points.map((_, i) => i), centres: points.map((p) => ({ ...p })), k: n, asked: k };
+  }
 
   const mean = points.reduce((a, p) => ({ x: a.x + p.x / n, y: a.y + p.y / n }), { x: 0, y: 0 });
   const centres = [{ ...points.reduce((best, p) => (d2(p, mean) < d2(best, mean) ? p : best), points[0]) }];
@@ -1268,9 +1536,8 @@ export function kmeans(points, k, { iters = 60 } = {}) {
     }
     for (let c = 0; c < centres.length; c++) {
       const mine = points.filter((_, i) => labels[i] === c);
-      // An empty cluster keeps its centre rather than being dropped: k is what
-      // the caller asked for, and silently returning k-1 groups would make the
-      // legend disagree with the control that asked for k.
+      // An empty cluster keeps its centre while the iteration runs, so it can
+      // still pick points up on the next pass.
       if (!mine.length) continue;
       centres[c] = {
         x: mine.reduce((a, p) => a + p.x, 0) / mine.length,
@@ -1279,7 +1546,20 @@ export function kmeans(points, k, { iters = 60 } = {}) {
     }
     if (!moved && it > 0) break;
   }
-  return { labels, centres, k };
+  // HOW MANY CLUSTERS THERE ARE, not how many were asked for. Points that sit
+  // on top of each other — several empty samples, or replicates — can leave a
+  // centre with nothing assigned to it, and the figure then drew two colours
+  // under a note reading "k=4". `k` is now the clusters that hold a point,
+  // numbered from 0 with no gaps; `asked` is what the caller wanted, so the page
+  // can say both when they differ.
+  const used = [...new Set(labels)].sort((a, b) => a - b);
+  const renumber = new Map(used.map((c, i) => [c, i]));
+  return {
+    labels: labels.map((l) => renumber.get(l)),
+    centres: used.map((c) => centres[c]),
+    k: used.length,
+    asked: k,
+  };
 }
 
 /**
@@ -1288,9 +1568,13 @@ export function kmeans(points, k, { iters = 60 } = {}) {
  * point in the wrong cluster.
  *
  * Reported rather than hidden, because k-means ALWAYS returns clusters. On
- * fifteen samples with no structure at all this score still averages about 0.3
- * and can reach 0.67, so the number is the whole difference between "there are
- * groups here" and "here is a partition".
+ * fifteen to thirty samples with no structure at all — Gaussian clouds, or
+ * random profiles through this file's own ordination — this score averages
+ * about 0.45 when the k is the one it picks (autoCluster), 0.4 at a k fixed in
+ * advance, and reached 0.66 in 300 draws. So the number is the whole difference
+ * between "there are groups here" and "here is a partition", and only well
+ * above that range does it mean the first. (It said "about 0.3" here, which was
+ * never measured.)
  */
 export function silhouette(points, labels) {
   const n = points.length;
@@ -1394,37 +1678,50 @@ export function pcoaSvg(table, {
   // marker: without it the rightmost sample name is cut off by the viewBox.
   const labelPad = label ? 96 : 12;
   const sx = (x) => pad + ((x - x0) / (x1 - x0)) * (width - pad - labelPad);
-  const sy = (y) => height - pad - ((y - y0) / (y1 - y0)) * (height - 2 * pad);
 
   const groups = [...new Set(table.samples.map((s) => (groupOf ? groupOf(s) : null) ?? "all"))];
   const colourOf = (s) => colourAt(groups.indexOf((groupOf ? groupOf(s) : null) ?? "all"));
 
+  // A zoomed plot that does not say so is a lie once it is downloaded: the axis
+  // fractions are of the whole ordination, and this one is a corner of it.
+  const zoomNote = Math.abs(k - 1) <= 0.001 ? ""
+    : k < 1
+      // Wider than the data is a framing choice, not a window onto part of it:
+      // every sample is still there, with room around them.
+      ? `zoom ×${k.toFixed(1)} — wider than the samples`
+      : `zoom ×${k.toFixed(1)} — ${shown.length} of ${points.length} samples`;
+
+  // THE LEGEND SITS ABOVE THE PLOT, NEVER ON IT. It used to be a panel in the
+  // top-left corner of the plotting area, semi-opaque so a point under it was
+  // "only quietened" — and on the shipped example the point it quietened was
+  // SRR14473842, a whole sample drawn under a list of names. The data can put a
+  // point anywhere in the frame, so no corner of the frame is free: the legend
+  // gets a band of its own and the plot starts below it.
+  const legend = groupOf && groups.length > 1
+    ? legendRows(groups, legendNote, width - pad - 12 - (zoomNote ? zoomNote.length * 6.2 + 16 : 0))
+    : null;
+  const top = legend ? Math.max(pad, legend.h + 26) : pad;
+  const sy = (y) => height - pad - ((y - y0) / (y1 - y0)) * (height - pad - top);
+
   // The window and the box it is drawn into, published for the page: a pointer
   // has pixels and the ordination has its own units, and the page must not
   // re-derive this mapping from constants it would then hold a second copy of.
-  const plot = [x0, x1, y0, y1, pad, width - labelPad, pad, height - pad].join(",");
+  const plot = [x0, x1, y0, y1, pad, width - labelPad, top, height - pad].join(",");
   let out = svgOpen(width, height, "PCoA on Bray-Curtis distances", 11,
     `data-plot="${plot}" `);
   out += `<line x1="${pad}" y1="${height - pad}" x2="${width - labelPad}" y2="${height - pad}" stroke="#e6e8e8"/>` +
-    `<line x1="${pad}" y1="${pad}" x2="${pad}" y2="${height - pad}" stroke="#e6e8e8"/>` +
+    `<line x1="${pad}" y1="${top}" x2="${pad}" y2="${height - pad}" stroke="#e6e8e8"/>` +
     `<text x="${width / 2}" y="${height - 14}" text-anchor="middle" fill="#5a5550">` +
     `PCo1 — ${(explained[0] * 100).toFixed(1)}% of positive eigenvalue total</text>` +
-    `<text x="14" y="${height / 2}" text-anchor="middle" fill="#5a5550" ` +
-    `transform="rotate(-90 14 ${height / 2})">PCo2 — ${(explained[1] * 100).toFixed(1)}%</text>`;
-  // A zoomed plot that does not say so is a lie once it is downloaded: the axis
-  // fractions are of the whole ordination, and this one is a corner of it.
-  if (Math.abs(k - 1) > 0.001) {
-    out += `<text x="${width - 14}" y="20" text-anchor="end" fill="#5a5550">` +
-      (k < 1
-        // Wider than the data is a framing choice, not a window onto part of it:
-        // every sample is still there, with room around them.
-        ? `zoom ×${k.toFixed(1)} — wider than the samples`
-        : `zoom ×${k.toFixed(1)} — ${shown.length} of ${points.length} samples`) + `</text>`;
+    `<text x="14" y="${(top + height - pad) / 2}" text-anchor="middle" fill="#5a5550" ` +
+    `transform="rotate(-90 14 ${(top + height - pad) / 2})">PCo2 — ${(explained[1] * 100).toFixed(1)}%</text>`;
+  if (zoomNote) {
+    out += `<text x="${width - 14}" y="20" text-anchor="end" fill="#5a5550">${esc(zoomNote)}</text>`;
     // A window can be dragged onto a patch of the ordination with nothing in it
     // — the points are not spread evenly over their own bounding box — and an
     // empty card with axes on it reads as something having gone wrong.
     if (!shown.length) {
-      out += `<text x="${width / 2}" y="${height / 2}" text-anchor="middle" fill="#6b7172">` +
+      out += `<text x="${width / 2}" y="${(top + height - pad) / 2}" text-anchor="middle" fill="#6b7172">` +
         `No sample in this window — drag, or Reset for all of them.</text>`;
     }
   }
@@ -1442,23 +1739,10 @@ export function pcoaSvg(table, {
   // the written name goes. Nothing is invented and nothing moves: the label is
   // beside its own point or it is not drawn.
   const taken = [];
-  const hits = (b) => taken.some((t) =>
-    b.x < t.x + t.w && t.x < b.x + b.w && b.y < t.y + t.h && t.y < b.y + b.h);
-  // The legend is drawn last but occupies its corner from the start, or the
-  // first eight labels are written under it.
-  if (groupOf && groups.length > 1) {
-    const longest = Math.max(...groups.map((g) => String(g).length),
-      legendNote ? legendNote.length * 0.62 : 0);
-    taken.push({ x: pad - 6, y: 8, w: Math.ceil(longest * 6.2) + 30,
-      h: groups.length * 16 + (legendNote ? 18 : 4) + 8 });
-  }
-  const LH = 12;                      // a line of 11 px type, with its leading
-  // MEASURED, not guessed: "SRR14473840" renders 78 px wide at 11 px in the
-  // page's own stack — 7.1 a character, because the run names are capitals and
-  // digits rather than the lowercase an average is usually taken over. At the
-  // 5.9 this started at, two labels judged clear of each other overlapped by
-  // nine pixels and printed "SRR1447385ARR14473855".
-  const CH = 7.1;
+  // The legend's band and the zoom note are written before any name is placed,
+  // so a label near the top of the frame cannot be printed over either.
+  if (legend) taken.push({ x: 0, y: 0, w: width, h: top - 8 });
+  if (zoomNote) taken.push({ x: width - 14 - zoomNote.length * 6.2, y: 8, w: zoomNote.length * 6.2, h: 16 });
 
   shown.forEach(({ p, i }) => {
     const name = table.samples[i];
@@ -1476,53 +1760,83 @@ export function pcoaSvg(table, {
       `cx="${sx(p.x).toFixed(1)}" cy="${sy(p.y).toFixed(1)}" r="5.5" ` +
       `fill="${colourOf(name)}" fill-opacity="0.85" stroke="#fff" stroke-width="1">` +
       `<title>${esc(name)}${groupOf && groupOf(name) ? ` — ${esc(groupOf(name))}` : ""}</title></circle>`;
-    if (label) {
-      const short = name.length > 14 ? `${name.slice(0, 13)}…` : name;
-      const w = short.length * CH + 4, cx = sx(p.x), cy = sy(p.y);
-      // Each candidate is a BOX (what must be free) and the anchor point the
-      // text is actually drawn from — they are not the same coordinate for a
-      // right-aligned or centred label, and conflating them is how a collision
-      // check ends up guarding a rectangle the text is not in.
-      const spots = [
-        { x: cx + 8, y: cy - LH / 2, tx: cx + 8, ty: cy + 4, anchor: "start" },
-        { x: cx - 8 - w, y: cy - LH / 2, tx: cx - 8, ty: cy + 4, anchor: "end" },
-        { x: cx - w / 2, y: cy - 10 - LH, tx: cx, ty: cy - 11, anchor: "middle" },
-        { x: cx - w / 2, y: cy + 8, ty: cy + 19, tx: cx, anchor: "middle" },
-      ];
-      const spot = spots.find((c) => c.x >= 2 && c.x + w <= width - 2 &&
-        c.y >= 2 && c.y + LH <= height - 2 && !hits({ x: c.x, y: c.y, w, h: LH }));
-      if (spot) {
-        taken.push({ x: spot.x, y: spot.y, w, h: LH });
-        out += `<text x="${spot.tx.toFixed(1)}" y="${spot.ty.toFixed(1)}" ` +
-          `text-anchor="${spot.anchor}" fill="#5a5550">${esc(short)}</text>`;
-      }
-    }
+    if (label) out += placeLabel(taken, sx(p.x), sy(p.y), name, width, height);
   });
 
-  if (groupOf && groups.length > 1) {
-    // A panel behind it. The legend sits at a fixed corner and the points land
-    // where the data puts them, so the two collide as soon as a sample is up
-    // there — and a legend printed over markers is unreadable exactly when it
-    // matters. Semi-opaque rather than solid: a point under it is still visible
-    // as a point, so nothing is hidden, only quietened.
-    const longest = Math.max(...groups.map((g) => String(g).length),
-      legendNote ? legendNote.length * 0.62 : 0);
-    out += `<rect x="${pad - 6}" y="8" width="${Math.ceil(longest * 6.2) + 30}" ` +
-      `height="${groups.length * 16 + (legendNote ? 18 : 4) + 8}" fill="#ffffff" ` +
-      `fill-opacity="0.82" rx="3"/>`;
-    groups.forEach((g, gi) => {
-      out += `<rect x="${pad}" y="${16 + gi * 16}" width="10" height="10" fill="${colourAt(gi)}"/>` +
-        `<text x="${pad + 15}" y="${25 + gi * 16}" fill="#5a5550">${esc(g)}</text>`;
-    });
+  if (legend) {
+    for (const it of legend.items) {
+      const y = 10 + it.row * 16;
+      out += `<rect x="${(pad + it.x).toFixed(1)}" y="${y}" width="10" height="10" fill="${colourAt(it.i)}"/>` +
+        `<text x="${(pad + it.x + 15).toFixed(1)}" y="${y + 9}" fill="#5a5550">${esc(it.g)}</text>`;
+    }
     // What the colours ARE, inside the figure. A scatter coloured by something
     // the page computed, downloaded and pasted into a slide with no caption, is
     // a claim with nothing behind it — and clusters are the colouring most
     // likely to be read as a finding.
     if (legendNote) {
-      out += `<text x="${pad}" y="${25 + groups.length * 16}" fill="#6b7172">${esc(legendNote)}</text>`;
+      out += `<text x="${pad}" y="${19 + legend.rows * 16}" fill="#6b7172">${esc(legendNote)}</text>`;
     }
   }
   return out + "</svg>";
+}
+
+/**
+ * The legend of a scatter as rows of swatches across the top of the figure,
+ * wrapped to `room` pixels: { items: [{ g, i, x, row }], rows, h }.
+ */
+function legendRows(groups, note, room) {
+  const items = [];
+  let x = 0, row = 0;
+  groups.forEach((g, i) => {
+    const w = 15 + String(g).length * 6.2 + 14;
+    if (x > 0 && x + w > room) { x = 0; row++; }
+    items.push({ g, i, x, row });
+    x += w;
+  });
+  const rows = row + 1;
+  return { items, rows, h: rows * 16 + (note ? 16 : 0) };
+}
+
+/**
+ * Where a point's name can be written: right, left, above or below its marker,
+ * the first of the four that hits nothing already written — and nothing at all
+ * when none is free. A point that has no room keeps its marker, its <title> and
+ * its click; only the written name goes. Nothing is invented and nothing moves:
+ * the label is beside its own point or it is not drawn.
+ *
+ * Shared by the ordination and the enterotype triangle. The triangle wrote
+ * every name to the right of its point whatever was there, and its samples
+ * crowd into the Bacteroides corner: "SRR14473846" and "SRR14473848" printed
+ * into one smudge.
+ */
+function placeLabel(taken, cx, cy, name, width, height) {
+  const LH = 12;                      // a line of 11 px type, with its leading
+  // MEASURED, not guessed: "SRR14473840" renders 78 px wide at 11 px in the
+  // page's own stack — 7.1 a character, because the run names are capitals and
+  // digits rather than the lowercase an average is usually taken over. At the
+  // 5.9 this started at, two labels judged clear of each other overlapped by
+  // nine pixels and printed "SRR1447385ARR14473855".
+  const CH = 7.1;
+  const short = name.length > 14 ? `${name.slice(0, 13)}…` : name;
+  const w = short.length * CH + 4;
+  // Each candidate is a BOX (what must be free) and the anchor point the text
+  // is actually drawn from — they are not the same coordinate for a
+  // right-aligned or centred label, and conflating them is how a collision
+  // check ends up guarding a rectangle the text is not in.
+  const spots = [
+    { x: cx + 8, y: cy - LH / 2, tx: cx + 8, ty: cy + 4, anchor: "start" },
+    { x: cx - 8 - w, y: cy - LH / 2, tx: cx - 8, ty: cy + 4, anchor: "end" },
+    { x: cx - w / 2, y: cy - 10 - LH, tx: cx, ty: cy - 11, anchor: "middle" },
+    { x: cx - w / 2, y: cy + 8, ty: cy + 19, tx: cx, anchor: "middle" },
+  ];
+  const hits = (b) => taken.some((t) =>
+    b.x < t.x + t.w && t.x < b.x + b.w && b.y < t.y + t.h && t.y < b.y + b.h);
+  const spot = spots.find((c) => c.x >= 2 && c.x + w <= width - 2 &&
+    c.y >= 2 && c.y + LH <= height - 2 && !hits({ x: c.x, y: c.y, w, h: LH }));
+  if (!spot) return "";
+  taken.push({ x: spot.x, y: spot.y, w, h: LH });
+  return `<text x="${spot.tx.toFixed(1)}" y="${spot.ty.toFixed(1)}" ` +
+    `text-anchor="${spot.anchor}" fill="#5a5550">${esc(short)}</text>`;
 }
 
 /**
@@ -1586,6 +1900,14 @@ export function enterotypeSvg(table, {
   const groups = [...new Set(table.samples.map((s) => (groupOf ? groupOf(s) : null) ?? "all"))];
   const colourOf = (s) => colourAt(groups.indexOf((groupOf ? groupOf(s) : null) ?? "all"));
   const label = rows.length <= 20;
+  // The marks go down first and their names after, so a name is never placed
+  // over a point that had not been drawn yet. Pole labels and the caption are
+  // taken too.
+  const taken = corners.map(([cx, cy], i) => ({
+    x: i === 0 ? cx : i === 1 ? cx - 90 : cx - 45, y: i === 2 ? cy - 24 : cy + 6, w: 90, h: 16,
+  }));
+  taken.push({ x: 0, y: height - 44, w: width, h: 44 });
+  const names = [];
   for (const r of rows) {
     // No marker abundance is not a position: there is nothing to divide, and a
     // point drawn anywhere in the triangle would be a claim.
@@ -1598,10 +1920,13 @@ export function enterotypeSvg(table, {
       ENTEROTYPE_POLES.map((p, i) => `${p.label} ${r.shares[i].toFixed(0)}%`).join(", ") +
       `</title></circle>`;
     if (label) {
-      const short = r.sample.length > 14 ? `${r.sample.slice(0, 13)}…` : r.sample;
-      out += `<text x="${(cx + 8).toFixed(1)}" y="${(cy + 4).toFixed(1)}" fill="#5a5550">${esc(short)}</text>`;
+      // A marker's own disc is taken before any name is placed, so no name is
+      // written over a point either.
+      taken.push({ x: cx - 6, y: cy - 6, w: 12, h: 12 });
+      names.push([cx, cy, r.sample]);
     }
   }
+  for (const [cx, cy, name] of names) out += placeLabel(taken, cx, cy, name, width, height);
 
   const quiet = rows.filter((r) => !(r.markers >= ENTEROTYPE_MIN_MARKERS)).length;
   out += `<text x="${width / 2}" y="${height - 30}" text-anchor="middle" fill="#5a5550">` +

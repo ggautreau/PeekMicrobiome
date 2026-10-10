@@ -12,33 +12,34 @@ import {
   sylphWorkerRpc, detectMemory64, chooseWasmBits, WORKER_VERSION,
   readsBudget, readsBudgetNote, readsOverBudgetNote, loadedBuildNote, fmtReads,
   progressFraction, basesForReads, BUDGET_READ_BP,
-} from "./sylph-worker-rpc.js?v=79";
+} from "./sylph-worker-rpc.js?v=80";
 import {
   dbCacheClient, fmtRate, fmtEta, cacheSummary, assertSameDatabase,
-} from "./db-cache.js?v=79";
-import { matePattern, stripFastqExt } from "./sample-naming.js?v=79";
+} from "./db-cache.js?v=80";
+import { mateTags, stripFastqExt } from "./sample-naming.js?v=80";
 import {
   resolveAccession, validateAccession, ASSUMED_BPS,
   downloadEstimate, readCountVerdict, expectedProfiledReads,
-} from "./ena.js?v=79";
-import { normaliseMarkers, screenVerdict, SCREENING_DB, SCREENING_MARKERS } from "./screening.js?v=79";
-import { metaLines, runFacts } from "./meta.js?v=79";
-import { clusterTable, MAX_ROWS as CLUSTER_MAX_ROWS } from "./cluster.js?v=79";
+} from "./ena.js?v=80";
+import { normaliseMarkers, screenVerdict, SCREENING_DB, SCREENING_MARKERS } from "./screening.js?v=80";
+import { metaLines, runFacts } from "./meta.js?v=80";
+import { clusterTable, MAX_ROWS as CLUSTER_MAX_ROWS } from "./cluster.js?v=80";
 import { compositionSvg, alphaSvg, pcoaSvg, pcoaLayout, pieSvg, sampleFacts, METRICS, alphaDiversity,
   enterotypeSvg, enterotypeSplit, ENTEROTYPE_POLES, ENTEROTYPE_GAP, ENTEROTYPE_MIN_MARKERS,
-  kmeans, silhouette, autoCluster, contrastSvg, contrastStats, contrastGroups, PCOA_MIN_ZOOM }
-  from "./figures.js?v=79";
+  kmeans, silhouette, autoCluster, contrastSvg, contrastStats, contrastGroups, PCOA_MIN_ZOOM,
+  rowKey, GMM_SHARE }
+  from "./figures.js?v=80";
 import { koTable, moduleTable, pathwayRollup, moduleCoverage, pathwayCoverage, keggEntryUrl,
-  keggMapUrl, moduleMapUrl, floorRows, NO_PATHWAY,
+  keggMapUrl, moduleMapUrl, floorRows, NO_PATHWAY, isOverviewMap,
   KEGG_CONSENT_KEY, keggConsent, storeKeggConsent, keggGateHtml,
-  FUNC_METHOD_NOTE } from "./kegg.js?v=79";
-import { parseGmms, gmmTable, gmmCoverage } from "./gmm.js?v=79";
-import { arrangeRows, arrangeNote, nextSort } from "./table-view.js?v=79";
+  FUNC_METHOD_NOTE } from "./kegg.js?v=80";
+import { parseGmms, gmmTable, gmmCoverage } from "./gmm.js?v=80";
+import { arrangeRows, arrangeNote, nextSort } from "./table-view.js?v=80";
 import { groupFields, groupsFromField, groupList, assignGroup, groupSummary,
-  parseMetadata, groupsCsvFrom } from "./groups.js?v=79";
-import { toMetaphlan, toBiom, toSylphTsv, toSession, fromSession } from "./exports.js?v=79";
+  parseMetadata, groupsCsvFrom } from "./groups.js?v=80";
+import { toMetaphlan, toBiom, toSylphTsv, toSession, fromSession } from "./exports.js?v=80";
 import { currentMode as themeMode, setMode as setThemeMode, applyTheme,
-  loadSchedule, saveSchedule } from "./theme.js?v=79";
+  loadSchedule, saveSchedule } from "./theme.js?v=80";
 import {
   fetchCatalog, fallbackCatalog, renderDbSelect, biomeForUrl, biomeNote,
   mgnifyGenomeUrl,
@@ -46,7 +47,7 @@ import {
   makeDbRef, sameDbRef, refLine, refShort, refCommentLines, refSlug, genomeCountMismatch,
   rememberBiome, recallBiome, catalogueName, LOCAL_VALUE,
   selectionMatchesLoaded, notLoadedNote, refMetaMismatch,
-} from "./biomes.js?v=79";
+} from "./biomes.js?v=80";
 
 const $ = (id) => document.getElementById(id);
 const els = {
@@ -120,6 +121,44 @@ let wasmBootError = null;
 // thing that scrolls away.
 let lastLoadError = null;
 let abortCtrl = null;
+
+// ---- one thing at a time, in the pool ---------------------------------------
+//
+// Four things reach into the worker pool: a profiling run, a database load, the
+// biome screen and a resize. Each guarded only itself, and the worker does not
+// queue: its message handler is async and shares one Profiler, so a second
+// profile arriving mid-sample, or a database arriving under one, ends with one
+// sample failing and the other "succeeding" on a fraction of its reads —
+// measured, 6,757 reads and no species where the sample alone gives 60,000 and
+// two, and the page then blamed the biome. Every way in was a real click:
+// dropping a file mid-run re-enabled Profile all, Load database stayed live
+// during a run, Settings resized the pool under it.
+//
+// So the pool has ONE owner at a time, claimed synchronously — before the first
+// await, or a double click gets in between — and everything that would reach
+// into the pool checks it first.
+let busy = null;              // null | "run" | "db" | "screen" | "resize"
+const BUSY_WHY = {
+  run: "A profiling run is going. This is frozen until it finishes, or until you click Cancel.",
+  db: "A reference database is loading. This is frozen until it is ready — Cancel download stops it.",
+  screen: "A sample is being screened for its biome. This is frozen until the screen ends — its Cancel stops it.",
+  resize: "The worker pool is being resized. This takes a moment.",
+};
+
+function claimBusy(what) {
+  if (busy) return false;
+  busy = what;
+  setRunControls();
+  refreshRunButton();
+  return true;
+}
+
+function releaseBusy(what) {
+  if (busy !== what) return;
+  busy = null;
+  setRunControls();
+  refreshRunButton();
+}
 // {samples, rows, ref} — `ref` is the database the numbers came from, frozen at
 // the start of the run that produced them. The exports and the on-screen header
 // read it from here rather than from the picker: the picker is a control the
@@ -294,17 +333,27 @@ function refreshDbMode() {
   // The static helper text under the picker described the picker — while the
   // picker was hidden. It is only written when no database has been loaded yet;
   // once one is, dbInfo carries the live status and must not be overwritten.
-  if (els.dbInfo && !dbMeta && !els.dbInfo.dataset.busy) {
-    els.dbInfo.textContent = auto
-      ? "Screening reads one sample, decides which catalogue fits it, and loads that one for the whole batch."
-      : "Pick the biome your samples come from and click Load database.";
+  //
+  // Nor may anything else this line says: a download in progress, a load that
+  // failed, a download cancelled. This runs on every redraw of the sample list,
+  // and it used to replace "No database is loaded. The load failed…" with the
+  // helper the moment a file was dropped. Only its own sentence, or nothing, is
+  // replaced.
+  if (els.dbInfo && !dbMeta && !busy) {
+    const now = els.dbInfo.textContent;
+    if (!now || now === els.dbInfo.dataset.helper) {
+      const helper = auto
+        ? "Screening reads one sample, decides which catalogue fits it, and loads that one for the whole batch."
+        : "Pick the biome your samples come from and click Load database.";
+      els.dbInfo.textContent = helper;
+      els.dbInfo.dataset.helper = helper;
+    }
   }
   // Automatic has nothing to screen until a sample is in the list, and saying
   // so on the button beats a button that fails when pressed.
-  const btn = document.getElementById("screenBtn");
   const hint = document.getElementById("screenHint");
   if (screenRow) screenRow.classList.toggle("hide", !auto);
-  if (btn) btn.disabled = files.length === 0;
+  paintScreenBtn();
   if (hint && auto) {
     // Name the sample rather than say "the first one". With twelve in the list,
     // "the first" is a rule the user has to apply themselves against an order
@@ -318,6 +367,14 @@ function refreshDbMode() {
         ` against a 13 MB marker set, then loads the catalogue it points to. ` +
         `The whole batch is then profiled against that one catalogue.`;
   }
+}
+
+// Not while anything else holds the pool: the screen ends by loading a database,
+// which is exactly what must not happen under a run.
+function paintScreenBtn() {
+  const btn = document.getElementById("screenBtn");
+  if (btn) setDisabled(btn, busy ? BUSY_WHY[busy] : files.length === 0
+    ? "Add a sample first — screening reads one of them to decide." : "");
 }
 
 function paintScreenVerdict(sample, v) {
@@ -351,16 +408,15 @@ function paintScreenVerdict(sample, v) {
 }
 
 async function runScreen() {
-  const btn = document.getElementById("screenBtn");
   const cancel = document.getElementById("screenCancel");
   // The first sample, not a chosen one: screening asks which ENVIRONMENT this
   // batch came from, and a batch whose samples disagree on that is a mistake the
   // user has to resolve themselves.
   const s = files[0];
   if (!s) return;
+  if (!claimBusy("screen")) return;
 
   screenAbort = new AbortController();
-  if (btn) btn.disabled = true;
   cancel?.classList.remove("hide");
   let rpc = null;
   try {
@@ -411,6 +467,9 @@ async function runScreen() {
     if (winner?.url) {
       els.dbSelect.value = winner.url;
       els.dbSelect.dispatchEvent(new Event("change"));
+      // Handed over, not held: the load claims the pool for itself, and nothing
+      // can get in between — there is no await from here to its claim.
+      releaseBusy("screen");
       await loadDatabase();
     }
   } catch (e) {
@@ -421,8 +480,9 @@ async function runScreen() {
   } finally {
     rpc?.terminate();          // the whole point: it never outlives the screen
     screenAbort = null;
-    if (btn) btn.disabled = false;
     cancel?.classList.add("hide");
+    releaseBusy("screen");
+    refreshDbMode();
   }
 }
 
@@ -487,10 +547,60 @@ const clampReads = (v) => Math.max(READS_MIN, Math.floor(Number(v) || 0));
 const READS_SEP = "\u202f";
 const fmtGrouped = (n) =>
   Number.isFinite(n) ? Math.floor(n).toLocaleString("en-US").replace(/,/g, READS_SEP) : "";
-// Every separator a user might paste or type: our own, plain spaces, commas,
-// and the non-breaking space Excel and Word produce.
-const readsFromField = (v) => clampReads(String(v ?? "").replace(/[\s,\u202f\u00a0]/g, ""));
-const currentReads = () => readsFromField(els.maxReads.value);
+/**
+ * A read count as a person types it, or NaN when it is not one.
+ *
+ * Every separator a user might paste or type \u2014 our own narrow space, plain
+ * spaces, the non-breaking space Excel and Word produce, apostrophes (3'000'000)
+ * \u2014 and commas or dots when they GROUP digits in threes. "3.000.000" is three
+ * million in half of Europe and used to read as NaN, which the clamp then turned
+ * into 10,000 without a word: a run a three-hundredth of the size asked for. A
+ * suffix is read too ("3M", "500k", "2.5M"), and so is "3e6".
+ *
+ * Anything else is refused rather than guessed: "2.5" alone is not a count.
+ */
+export function parseReads(text) {
+  const s = String(text ?? "").trim().replace(/[\s\u202f\u00a0'_]/g, "");
+  if (!s) return NaN;
+  const suffixed = /^(\d+(?:[.,]\d+)?)([kKmM])$/.exec(s);
+  if (suffixed) {
+    const n = Number(suffixed[1].replace(",", "."));
+    return Math.round(n * (/[kK]/.test(suffixed[2]) ? 1e3 : 1e6));
+  }
+  if (/^\d+$/.test(s)) return Number(s);
+  // Grouped in threes by ONE separator throughout: 3,000,000 or 3.000.000, never
+  // 3.000,000 (a decimal mark beside a group mark is a number with a fraction).
+  const grouped = /^\d{1,3}(([.,])\d{3})(\2\d{3})*$/.exec(s);
+  if (grouped) return Number(s.replace(/[.,]/g, ""));
+  if (/^\d+(\.\d+)?e\d+$/i.test(s)) return Math.round(Number(s));
+  return NaN;
+}
+
+const readsFromField = (v) => {
+  const n = parseReads(v);
+  return Number.isFinite(n) ? clampReads(n) : NaN;
+};
+// The last value the field held that was a read count. What the page runs with
+// while the field holds something that is not one.
+let lastGoodReads = 3_000_000;
+const currentReads = () => {
+  const n = readsFromField(els.maxReads.value);
+  return Number.isFinite(n) ? n : lastGoodReads;
+};
+
+/** Say, under the field, that what is in it was not used \u2014 and what was. */
+function paintReadsBad(typed, used, { clamped = false } = {}) {
+  const el = document.getElementById("readsBad");
+  if (!el) return;
+  const msg = clamped
+    ? `${fmtGrouped(used)} is the smallest cap there is \u2014 a few thousand reads detect next to nothing.`
+    : typed
+      ? `\u201c${typed}\u201d is not a number of reads \u2014 ${fmtGrouped(used)} is what will be used. ` +
+        `Write it as 3 000 000, 3,000,000, 3.000.000 or 3M.`
+      : "";
+  el.textContent = msg;
+  el.classList.toggle("hide", !msg);
+}
 const readsWarn = document.getElementById("readsWarn");
 // index.html carries a static note immediately before #readsWarn, and the
 // warning text inside it. Both are decided here — the budget depends on whether
@@ -621,10 +731,12 @@ function refreshPairUnit() {
   if (!equiv) return;
   const v = currentReads();
   equiv.classList.toggle("hide", !anyPaired);
+  // Grouped the way the field above it is, so the two numbers read as one
+  // control: "3 000 000" over "= 6,000,000" was two notations for one quantity.
   equiv.textContent = !anyPaired ? "" : asTwo
-    ? `= ${fmtReads(Math.round(v / 2))} pairs for a paired run — the unit sylph works in. `
+    ? `= ${fmtGrouped(Math.round(v / 2))} pairs for a paired run — the unit sylph works in. `
       + `Single-end samples are counted in reads either way.`
-    : `= ${fmtReads(v * 2)} sequenced reads for a paired run — the unit the ENA publishes. `
+    : `= ${fmtGrouped(v * 2)} sequenced reads for a paired run — the unit the ENA publishes. `
       + `Single-end samples are counted in reads either way.`;
 }
 
@@ -651,8 +763,10 @@ function enaCostChanged() {
 }
 
 els.maxReadsSlider.addEventListener("input", () => {
-  els.maxReads.value = fmtGrouped(Number(els.maxReadsSlider.value));
-  updateReadsState(Number(els.maxReadsSlider.value));
+  lastGoodReads = clampReads(Number(els.maxReadsSlider.value));
+  els.maxReads.value = fmtGrouped(lastGoodReads);
+  paintReadsBad("", lastGoodReads);
+  updateReadsState(lastGoodReads);
   enaCostChanged();
 });
 // NOT reformatted while typing: re-grouping on every keystroke moves the caret
@@ -661,7 +775,15 @@ els.maxReadsSlider.addEventListener("input", () => {
 // understood whatever the user has typed so far.
 els.maxReads.addEventListener("input", () => {
   const raw = readsFromField(els.maxReads.value);
-  if (!Number.isFinite(raw)) return;
+  // Said while typing only once the text cannot become a number by adding to
+  // it — "3." on its way to "3.000.000" is not a mistake yet.
+  if (!Number.isFinite(raw)) {
+    const typed = els.maxReads.value.trim();
+    paintReadsBad(/[.,]$/.test(typed) || !typed ? "" : typed, lastGoodReads);
+    return;
+  }
+  paintReadsBad("", raw);
+  lastGoodReads = raw;
   const budget = readsBudget(has64);
   els.maxReadsSlider.value = String(Math.max(READS_MIN, Math.min(budget.sliderMax, raw)));
   updateReadsState(raw);
@@ -670,12 +792,23 @@ els.maxReads.addEventListener("input", () => {
 // On leaving the field: clamp, then group. This is also what repairs anything
 // pasted in — "3,000,000", "3 000 000" or "3000000" all come back the same.
 els.maxReads.addEventListener("change", () => {
+  const typed = els.maxReads.value.trim();
+  const parsed = parseReads(typed);
+  // Refused out loud, and the field put back to what is actually in force. It
+  // used to take anything it could not read as 0 and clamp that to 10,000.
+  if (!Number.isFinite(parsed)) paintReadsBad(typed, lastGoodReads);
+  else paintReadsBad("", clampReads(parsed), { clamped: parsed < READS_MIN });
   const v = currentReads();
+  lastGoodReads = v;
   els.maxReads.value = fmtGrouped(v);
   els.maxReadsSlider.value = String(v);
   updateReadsState(v);
   enaCostChanged();
 });
+{
+  const atLoad = readsFromField(els.maxReads.value);
+  if (Number.isFinite(atLoad)) lastGoodReads = atLoad;
+}
 updateReadsState(currentReads());
 // Paint the step state on load, not only after the first click: an empty page
 // is exactly when the user needs to be told where to start.
@@ -685,8 +818,25 @@ refreshRunButton();
 
 // Which package the current reads setting calls for. 32-bit unless the run is
 // too big for it AND the browser can do better — see chooseWasmBits().
+//
+// The read cap was the only thing asked, and two others decide as much. The
+// DATABASE: a worker holds the whole .syldb twice over in linear memory, raw and
+// decoded, so soil (2.96 GB) cannot even be constructed in the 32-bit build —
+// `unreachable` in new Profiler — at any read cap. And the PAIRS: the worker
+// counts a pair once, the sketch holds both reads, so a cap of 24 M pairs is
+// 48 M reads of state against a 48.75 M measured ceiling.
+let plannedDbBytes = 0;       // the database the pool holds, or is about to
+const anyPairedSample = () => files.some((s) => s.kind === "pe");
+
+function wasmPlan(maxReads, dbBytes = plannedDbBytes) {
+  const pairs = anyPairedSample();
+  // In the unit the worker counts: pairs, for a paired sample — capFor() halves
+  // a cap given in reads — and chooseWasmBits doubles it back into reads.
+  const workerCap = pairs ? capFor({ kind: "pe" }, maxReads) : maxReads;
+  return chooseWasmBits({ maxReads: workerCap, memory64: has64, dbBytes, pairs });
+}
 function plannedBits(maxReads) {
-  return chooseWasmBits({ maxReads, memory64: has64 }).bits;
+  return wasmPlan(maxReads).bits;
 }
 
 // Boot just the first worker; the rest are spawned + initialized on demand
@@ -752,7 +902,15 @@ async function ensurePool(target, maxReads) {
 // 32/64-bit boundary since the database was loaded, swap the pool and reload the
 // database. Loud, because it costs a database load.
 async function ensureWasmBuildFor(maxReads) {
-  if (poolBits === plannedBits(maxReads)) return;
+  // No build can hold it: said before anything is torn down, not discovered as
+  // an allocator abort at sample nine.
+  const plan = wasmPlan(maxReads);
+  if (plan.refuse) {
+    const e = new Error(plan.refuse);
+    e.name = "Refused";
+    throw e;
+  }
+  if (poolBits === plan.bits) return;
   const target = Math.max(1, rpcs.length);
   const from = poolBits;
   const to = plannedBits(maxReads);
@@ -846,6 +1004,10 @@ function pickLocalDb() {
       e.target.value = "";   // allow re-picking the same file later
       resolve(f || null);
     };
+    // A dialog closed without a file. Without this the promise never settled —
+    // and the load holds the pool until it does, so one dismissed dialog froze
+    // Load database, the picker and Profile all for the rest of the visit.
+    els.dbFile.oncancel = () => resolve(null);
     els.dbFile.click();
   });
 }
@@ -978,10 +1140,11 @@ async function loadOnAllWorkers(loadFn, label) {
 }
 
 async function loadDatabase() {
-  setRunControls(true);
   // BEFORE anything is disabled and before the error line is cleared: if the
   // profiler never started, there is nothing to wait for and the wait below
-  // never ends. Say so where the click happened, and leave every control alive.
+  // never ends. Say so where the click happened, and leave every control alive —
+  // the controls used to be frozen first and this returned with them frozen,
+  // "Explore example results" included, which needs no WebAssembly at all.
   if (wasmBootError) {
     els.dbInfo.textContent =
       `The WebAssembly profiler could not start (${wasmBootError}). Nothing on this page ` +
@@ -989,42 +1152,61 @@ async function loadDatabase() {
       `browser may be too old or WebAssembly may be blocked here.`;
     return;
   }
+  // The pool is the run's while it runs — and the screen's, and a resize's.
+  if (!claimBusy("db")) return;
   els.error.textContent = "";
+  // Read ONCE, here, both of them, and the picker frozen until the load is over:
+  // everything downstream — the status line, the matrix header, the exports —
+  // describes the database that is about to be loaded, not whatever the picker
+  // says by the time it is asked. The URL was read here and the biome after the
+  // download, five minutes later, from a picker that was still live.
   const url = els.dbSelect.value;
+  const biome = pickedBiome();
   const t0 = performance.now();
 
   try {
+    // The file first, while the click that asked for it still counts as one: a
+    // browser opens a file dialog only from a user gesture, and building the pool
+    // below can take seconds. Its size is also what sizes the pool and the build.
+    let localFile = null;
+    if (url === LOCAL_VALUE) {
+      localFile = await pickLocalDb();
+      if (!localFile) { els.dbInfo.textContent = "No file selected."; return; }
+    }
+
     while (!wasmReady) await new Promise(r => setTimeout(r, 50));
 
-    // The wasm package is chosen here, from the reads setting, because this is
-    // the last moment at which it is free to choose: after this the database
-    // sits in the workers' linear memory and swapping builds means reloading it.
+    // The wasm package is chosen here, from the reads setting AND the size of
+    // the database, because this is the last moment at which it is free to
+    // choose: after this the database sits in the workers' linear memory and
+    // swapping builds means reloading it.
     const maxReads = currentReads();
+    const dbBytes = localFile ? localFile.size : Number(biome?.bytes) || 0;
+    const plan = wasmPlan(maxReads, dbBytes);
+    if (plan.refuse) {
+      // Refused here rather than discovered as an abort while decoding: nothing
+      // has been downloaded and nothing loaded is lost.
+      els.dbInfo.textContent = `Not loaded: ${plan.refuse}.` +
+        (dbMeta ? " The database already loaded is still the one in use." : "");
+      return;
+    }
+    plannedDbBytes = dbBytes;
     // Sized HERE, because this is the first moment the catalogue is known and the
     // last moment the pool is free: after this the database is in the workers'
     // linear memory, and changing the count reloads it. A catalogue eight times
     // the size of another needs a different pool, and until now the page used
     // four whatever it was about to load.
-    if (!workersChosen) {
-      const bytes = Number(biomeForUrl(catalog, url)?.bytes) || 0;
-      els.poolSize.value = String(suggestedWorkers(bytes));
-    }
+    if (!workersChosen) els.poolSize.value = String(suggestedWorkers(dbBytes));
     const target = Math.max(MIN_WORKERS, Math.min(MAX_WORKERS, parseInt(els.poolSize.value, 10) || MIN_WORKERS));
-    if (target !== rpcs.length || poolBits !== plannedBits(maxReads)) {
-      els.dbInfo.textContent = `Preparing ${target} ${plannedBits(maxReads)}-bit worker${target === 1 ? "" : "s"}…`;
+    if (target !== rpcs.length || poolBits !== plan.bits) {
+      els.dbInfo.textContent = `Preparing ${target} ${plan.bits}-bit worker${target === 1 ? "" : "s"}…`;
       await ensurePool(target, maxReads);
       dbMeta = null;  // any previously-loaded DB is in old (or terminated) workers only
     }
 
-    // Read ONCE, here: everything downstream — the status line, the matrix
-    // header, the exports — describes the database that is about to be loaded,
-    // not whatever the picker says by the time it is asked.
-    const biome = pickedBiome();
-
     let label, loadFn;
-    if (url === LOCAL_VALUE) {
-      const file = await pickLocalDb();
-      if (!file) { els.dbInfo.textContent = "No file selected."; return; }
+    if (localFile) {
+      const file = localFile;
       label = file.name;
       dbSource = "file";
       // Untouched by the cache work: a file already on the user's disk needs no
@@ -1117,7 +1299,7 @@ async function loadDatabase() {
       console.error(e);
     }
   } finally {
-    setRunControls(false);
+    releaseBusy("db");
     // The note under the picker asserts things about what is loaded, and what is
     // loaded has just changed (or been dropped).
     paintBiomeNote();
@@ -1274,6 +1456,15 @@ function adoptDbRef(ref) {
     s.reads = undefined;
     s.elapsed = undefined;
     s.error = undefined;
+    // Everything the old database produced goes with the rows: sylph's own TSV
+    // (exported as-is), the reference it was profiled against, and the
+    // functional profile measured in the same pass. The TSV survived this and
+    // went out, under the new catalogue's name, beside samples profiled against
+    // it.
+    s.tsv = undefined;
+    s.ref = undefined;
+    s.funcProfile = undefined;
+    s.funcHashes = undefined;
   }
   if (stale.length) {
     showError(
@@ -1359,8 +1550,16 @@ els.pairsAsTwo?.addEventListener("change", () => {
 els.poolSize?.addEventListener("change", async () => {
   const target = Math.max(MIN_WORKERS, Math.min(MAX_WORKERS, parseInt(els.poolSize.value, 10) || MIN_WORKERS));
   if (!wasmReady || target === rpcs.length) return;
+  // Never under a run or a load. Shrinking terminated workers that were
+  // profiling — their samples "failed: worker terminated", and the queue went on
+  // posting to the dead ones, so the run never ended and Cancel did nothing;
+  // growing re-sent the database to the busy ones, which failed their samples.
+  if (busy) {
+    els.poolSize.value = String(rpcs.length);
+    return;
+  }
+  claimBusy("resize");
   const shrinking = target < rpcs.length;
-  els.poolSize.disabled = true;
   try {
     await ensurePool(target, currentReads());
     // Growing the pool leaves the new workers without a database; re-run the
@@ -1381,12 +1580,12 @@ els.poolSize?.addEventListener("change", async () => {
     showError(`Could not resize the worker pool: ${e.message ?? e}`);
     console.error(e);
   } finally {
-    els.poolSize.disabled = false;
-    refreshRunButton();
+    releaseBusy("resize");
   }
 });
 
 els.clearFiles.addEventListener("click", () => {
+  if (busy === "run") return;
   files = [];
   renderFilesList();
   // The ENA list marks runs that are already in the sample list; clearing the
@@ -1489,6 +1688,8 @@ function enaShowError(msg) {
 
 async function enaLookup() {
   if (!els.enaAcc) return;
+  // Enter in the box reaches here with the button frozen.
+  if (busy === "run") return;
   const v = validateAccession(els.enaAcc.value);
   enaShowError("");
   // Optional chaining on EVERY element, not only on the two that happened to
@@ -1552,7 +1753,9 @@ async function enaLookup() {
     else if (els.enaStatus) els.enaStatus.textContent = "Lookup cancelled.";
   } finally {
     stopWaiting();
-    if (els.enaResolve) els.enaResolve.disabled = false;
+    // Back to what the page state says — a lookup that started before a run and
+    // landed during it used to re-enable the button the run had frozen.
+    setDisabled(els.enaResolve, busy === "run" ? BUSY_WHY.run : "");
     els.enaCancelLookup?.classList.add("hide");
     enaAbort = null;
   }
@@ -1618,7 +1821,7 @@ function updateEnaSummary() {
   // total is what this download is going to cost AT THE CURRENT SETTING, not
   // what the files weigh.
   const est = downloadEstimate(chosen, { maxReads: currentReads(), bps: currentBps() });
-  setDisabled(els.enaAdd, chosen.length === 0
+  setDisabled(els.enaAdd, busy === "run" ? BUSY_WHY.run : chosen.length === 0
     ? "Tick at least one run in the list above to add it." : "");
   if (!chosen.length) {
     els.enaSummary.textContent = "Nothing selected.";
@@ -1763,15 +1966,26 @@ function enaAlreadyAdded(run) {
   return files.some((s) => s.origin === "ena" && s.enaRun === run);
 }
 
+// Names a sample cannot have. `species` is the label field of a matrix row, and
+// the rest are the keys every plain object answers to.
+const RESERVED_SAMPLE_NAMES = new Set(["species", "__proto__", "constructor", "prototype",
+  "toString", "valueOf", "hasOwnProperty"]);
+
 function uniqueSampleName(base) {
   const taken = files.map(s => s.sampleName);
-  if (!taken.includes(base)) return base;
+  if (!taken.includes(base) && !RESERVED_SAMPLE_NAMES.has(base)) return base;
   let n = 2;
   while (taken.includes(`${base}_${n}`)) n++;
   return `${base}_${n}`;
 }
 
 function addFiles(fs) {
+  // The whole drop at once: whether a name is a mate depends on the other names.
+  // Two files that claim the SAME mate of one sample are not paired with
+  // anything — a guess between them is how sample_1_R1 came to be read with
+  // sample_2_R1 — and the reader is told which ones (mateTags).
+  const { tags, conflicts } = mateTags(fs.map((f) => f.name));
+  const clashes = [...conflicts];
   for (const f of fs) {
     const m = runManifest[f.name];
     if (m) {
@@ -1781,20 +1995,45 @@ function addFiles(fs) {
       continue;
     }
     // Otherwise fall back to mate-pattern auto-grouping.
-    const tag = matePattern(f.name);
+    const tag = tags.get(f.name);
+    const claimant = !tag && conflicts.some((c) => c.names.includes(f.name));
     if (tag) {
       // tag.key, not tag.base: mates have to agree on the suffixes too, or
       // a_1.clean.fq.gz would pair with a_2.raw.fq.gz.
       const s = getOrCreateSample(tag.key);
-      s.sources.push({ file: f, layout: "PAIRED", mate: tag.mate });
-    } else {
-      const s = getOrCreateSample(stripFastqExt(f.name));
-      s.sources.push({ file: f, layout: "SINGLE", mate: null });
+      // The same clash across two drops: this mate of this sample came in an
+      // earlier one. Kept apart rather than lined up by drop order.
+      const already = s.sources.filter((x) => x.layout === "PAIRED" && x.mate === tag.mate);
+      if (!already.length) {
+        s.sources.push({ file: f, layout: "PAIRED", mate: tag.mate });
+        continue;
+      }
+      clashes.push({ key: tag.key, mate: tag.mate, names: [...already.map((x) => x.file.name), f.name] });
     }
+    if (tag || claimant) {
+      // A sample of its own, never merged by name: two claimants share a stem
+      // ("a_1.fastq.gz", "a_1.fq.gz"), and joining them as replicates of one
+      // sample would read them as one — the thing being refused.
+      files.push({ kind: "se", sampleName: uniqueSampleName(stripFastqExt(f.name)),
+        sources: [{ file: f, layout: "SINGLE", mate: null }], status: "pending" });
+      continue;
+    }
+    const s = getOrCreateSample(stripFastqExt(f.name));
+    s.sources.push({ file: f, layout: "SINGLE", mate: null });
   }
   for (const s of files) resolveSampleKind(s);
   renderFilesList();
   refreshRunButton();
+  if (clashes.length) showError(mateClashNote(clashes));
+}
+
+/** Which files were left unpaired because they claim the same mate, in a sentence. */
+function mateClashNote(clashes) {
+  const one = (c) => `${c.names.join(", ")} (each mate ${c.mate} of “${c.key}”)`;
+  return `Not paired: ${clashes.length === 1 ? "these files each claim" : "these groups of files each claim"} ` +
+    `to be the same mate of one sample, and pairing by guess is how two different samples end up ` +
+    `read as one — ${clashes.map(one).join("; ")}. Each is listed as a single-end sample. Rename ` +
+    `them so the two files of a pair differ only by their _1/_2 (or _R1/_R2), or drop one pair at a time.`;
 }
 
 // Pick an effective layout for a sample. Prefer PE when any pairs are present:
@@ -1910,7 +2149,9 @@ function renderFilesList() {
     return;
   }
   els.filesList.classList.remove("hide");
-  setDisabled(els.clearFiles, "");
+  // Not during a run: emptying the list under it left the run going — downloads
+  // included — and filling a matrix for samples that were no longer listed.
+  setDisabled(els.clearFiles, busy === "run" ? BUSY_WHY.run : "");
   els.filesList.innerHTML = files.map((s) => {
     const cls = s.status;
     // How many reads actually went into the profile. It was not shown at all,
@@ -1922,7 +2163,7 @@ function renderFilesList() {
     const shown = readsShown(s);
     const unit = s.kind === "pe" && !pairsCountAsTwo() ? "pairs" : "reads";
     const readsPart = Number.isFinite(shown)
-      ? `${shown.toLocaleString()} ${unit} profiled, ` : "";
+      ? `${shown.toLocaleString("en-US")} ${unit} profiled, ` : "";
     const label =
       cls === "pending" ? (s.origin === "ena" ? "pending — will download from the EBI" : "pending") :
       cls === "running" ? `running (${s.progress ?? ""})` :
@@ -1979,54 +2220,73 @@ function setDisabled(el, why) {
   if (why) el.title = why; else el.removeAttribute("title");
 }
 
-function setRunControls(running) {
-  // One moment, one reason: everything here is frozen for the duration of a run,
-  // because changing the database or the read cap mid-run would leave the matrix
-  // describing numbers that came from something else.
-  const busy = running
-    ? "A profiling run is going. This is frozen until it finishes, or until you click Cancel."
-    : "";
-  setDisabled(els.loadDb, busy);
-  setDisabled(els.poolSize, busy);
-  setDisabled(els.maxReads, busy);
-  setDisabled(els.maxReadsSlider, busy);
+function setRunControls() {
+  // One moment, one reason, read off `busy` (see claimBusy). A run freezes
+  // everything that decides what it computes; a database load, a screen or a
+  // resize freezes what reaches into the pool. The read cap stays live during a
+  // download — the build is chosen again at the start of the run — and the
+  // example stays reachable, which a failed WebAssembly boot used to take away
+  // with the rest.
+  const why = busy ? BUSY_WHY[busy] : "";
+  const runWhy = busy === "run" ? why : "";
+  // The pool and the database it holds. The PICKER too: the load reads it once
+  // at the click, and moving it during a five-minute download left the page
+  // labelling one catalogue with another's name.
+  setDisabled(els.loadDb, why);
+  setDisabled(els.dbSelect, why);
+  setDisabled(els.poolSize, why);
+  // Settings writes the pool size and the read cap through the two controls
+  // above; its own fields are frozen with them, or the dialog is the way round.
+  setDisabled(document.getElementById("setWorkers"), why);
+  setDisabled(document.getElementById("setReads"), runWhy);
+  setDisabled(els.maxReads, runWhy);
+  setDisabled(els.maxReadsSlider, runWhy);
   // The pair unit IS the read cap, in another unit: capFor() halves the cap for
   // a paired sample when this is ticked, and the cap is read per sample as the
   // run walks the list. Toggling it at sample nine would profile the first eight
   // at three million pairs and the rest at one and a half, and the matrix would
   // say nothing about it — the exact failure the comment above this function
   // describes, through the one control that was left out of it.
-  setDisabled(els.pairsAsTwo, busy);
+  setDisabled(els.pairsAsTwo, runWhy);
+  // The base cap, for the same reason: it is read per sample.
+  setDisabled(els.capInBases, runWhy);
   // Same reason, one tab over: the reference is loaded into the pool once, at the
   // start. Ticking this at sample nine would give the first eight no functional
   // profile and the rest one, and the Function tab would show half a matrix with
   // nothing saying why.
-  setDisabled(els.funcOn, busy);
-  setDisabled(els.enaResolve, busy);
-  setDisabled(els.enaAdd, busy || (enaSelectedRuns().length === 0
+  setDisabled(els.funcOn, runWhy);
+  setDisabled(els.enaResolve, runWhy);
+  setDisabled(els.enaAdd, runWhy || (enaSelectedRuns().length === 0
     ? "Tick at least one run in the list above to add it."
     : ""));
   // The example lends the page the gut lineage map, and the map is what names
   // every row a finishing sample adds. Loading it mid-run would put gut species
   // names on genomes from whatever catalogue is actually loaded.
-  setDisabled(document.getElementById("demoLoad"), busy);
+  setDisabled(document.getElementById("demoLoad"), runWhy);
+  setDisabled(els.clearFiles, runWhy || (files.length ? ""
+    : "Nothing to clear — no samples have been added yet."));
+  paintScreenBtn();
   // Visible, not only on hover: there is no hover on a phone.
   if (els.runControlsNote) {
-    els.runControlsNote.textContent = busy;
-    els.runControlsNote.classList.toggle("hide", !busy);
+    els.runControlsNote.textContent = why;
+    els.runControlsNote.classList.toggle("hide", !why);
   }
 }
 
 function refreshRunButton() {
   const haveSamples = files.length > 0;
   const runnable = haveSamples && files.some(f => RERUNNABLE.includes(f.status));
-  els.run.disabled = !(dbMeta && runnable);   // `why` below carries the reason
+  // Never while the pool is held. Every sample of a run in flight is "pending"
+  // until a worker takes it, so `runnable` was true for the whole run — and any
+  // repaint (a file dropped, a run ticked in the ENA list) put the button back.
+  els.run.disabled = !!busy || !(dbMeta && runnable);   // `why` below carries the reason
 
   // A greyed-out button that does not say why is a dead end — and the usual
   // reason is that the database has not been loaded yet, which is a separate
   // card further up the page and easy to walk straight past.
   const why =
-    !haveSamples ? "Add some samples first — drop FASTQ files above, or look one up from the ENA."
+    busy ? BUSY_WHY[busy]
+    : !haveSamples ? "Add some samples first — drop FASTQ files above, or look one up from the ENA."
     : !dbMeta ? "Load a reference database first (the card above): profiling needs it, and the full one takes a few minutes to fetch the first time."
     : !runnable ? "Every sample here is already done. Add more, or press Clear to start over."
     : "";
@@ -2108,6 +2368,22 @@ function refreshSteps() {
 
 // Genome counts are the one figure here that is always a plain integer.
 const fmtCountish = (n) => (Number.isFinite(Number(n)) ? Number(n).toLocaleString("en-US") : "?");
+
+// The strip sticks just under the header, which is sticky too and drawn over it.
+// Its height is measured rather than assumed: the tagline goes on a phone and the
+// navigation can wrap, and a strip stuck at the wrong offset is either hidden
+// under the header — which is how it shipped, 10 px of it showing — or floating
+// below a gap.
+{
+  const header = document.querySelector(".app-header");
+  const setHeaderH = () => document.documentElement.style?.setProperty?.(
+    "--header-h", `${Math.ceil(header.getBoundingClientRect().height)}px`);
+  if (header) {
+    setHeaderH();
+    if (typeof ResizeObserver === "function") new ResizeObserver(setHeaderH).observe(header);
+    else addEventListener("resize", setHeaderH);
+  }
+}
 
 // The strip is a set of jump links: seeing that step 1 is unmet is only half the
 // answer if reaching it means hunting for the card.
@@ -2310,6 +2586,9 @@ document.getElementById("settings")?.addEventListener("change", (e) => {
     if (themeMode() === "schedule") applyTheme("schedule");
   }
   if (t.id === "setWorkers" && els.poolSize) {
+    // Frozen with the pool: the field is disabled while anything holds it, and a
+    // change that still arrives is put back rather than applied.
+    if (busy) { t.value = String(rpcs.length || els.poolSize.value); return; }
     // The reader has chosen. From here on the page stops sizing the pool for
     // them: a suggestion that overrides the choice it was made to inform is not
     // a suggestion.
@@ -2318,6 +2597,7 @@ document.getElementById("settings")?.addEventListener("change", (e) => {
     els.poolSize.dispatchEvent(new Event("change"));
   }
   if (t.id === "setReads" && els.maxReads) {
+    if (busy === "run") { t.value = fmtGrouped(currentReads()); return; }
     els.maxReads.value = t.value;
     els.maxReads.dispatchEvent(new Event("change", { bubbles: true }));
   }
@@ -2475,6 +2755,21 @@ els.run.addEventListener("click", runAll);
 els.cancel.addEventListener("click", () => abortCtrl?.abort());
 
 async function runAll() {
+  // Claimed BEFORE the first await. wantNotify() waits on a permission prompt,
+  // and the button used to be disabled only after it: a second click in that
+  // window started a second run over the same pool.
+  if (busy || !dbMeta) return;
+  claimBusy("run");
+  try {
+    await runBatch();
+  } finally {
+    setDisabled(els.cancel, "Nothing is running — this stops a profiling run once one has started.");
+    releaseBusy("run");
+    renderFilesList();
+  }
+}
+
+async function runBatch() {
   // Asked here, on a real click, and only if the box is ticked — never on load.
   // The answer is not needed before the run ends, but the PROMPT must come from
   // a user gesture or the browser refuses it outright.
@@ -2485,11 +2780,8 @@ async function runAll() {
   // catalogue would take its species names from it.
   clearDemo();
   els.error.textContent = "";
-  els.results.classList.add("hide");
   els.progress.classList.remove("hide");
-  els.run.disabled = true;
   setDisabled(els.cancel, "");
-  setRunControls(true);
   abortCtrl = new AbortController();
 
   const maxReads = currentReads();
@@ -2506,12 +2798,11 @@ async function runAll() {
   try {
     await ensureWasmBuildFor(maxReads);
   } catch (e) {
-    showError(`Could not switch to the ${plannedBits(maxReads)}-bit wasm build: ${e.message ?? e}. ` +
-      `Click "Load database" again.`);
+    showError(e?.name === "Refused"
+      ? `Not run: ${e.message}. Lower Max reads per sample, or use a browser with memory64.`
+      : `Could not switch to the ${plannedBits(maxReads)}-bit wasm build: ${e.message ?? e}. ` +
+        `Click "Load database" again.`);
     console.error(e);
-    setDisabled(els.cancel, "Cancelling — waiting for the workers to stop.");
-    setRunControls(false);
-    refreshRunButton();
     return;
   }
 
@@ -2520,9 +2811,16 @@ async function runAll() {
   // whatever happens to be loaded when it is exported.
   const runRef = currentRef;
 
-  // Aggregate matrix as we go: { genome_file -> { sampleName -> relAbund } }
-  const matrix = {};
-  const sampleOrder = [];
+  // Aggregate matrix as we go: { genome_file -> { sampleName -> relAbund } }.
+  // Prototype-free, rows and all: a sample is a NAME the user chose, and a
+  // sample called "constructor" read Object.prototype's on every genome it did
+  // not have.
+  const matrix = Object.create(null);
+  // Which samples have a column. The ORDER is not the order they finished in —
+  // that is whichever worker was quicker, so two runs of the same files exported
+  // their columns in two different orders — but the order of the sample list.
+  const inMatrix = new Set();
+  const sampleOrder = () => files.map((f) => f.sampleName).filter((n) => inMatrix.has(n));
   // Whatever functional profile is on screen belongs to the example or to the
   // session that was open, not to the run starting now. Left in place it would
   // sit under the new matrix in the Function tab, labelled with these samples'
@@ -2532,7 +2830,18 @@ async function runAll() {
   // is the one on screen leaves the old table and the old figure standing until
   // something else happens to redraw them, which is the same thing seen by a
   // reader.
+  //
+  // Rebuilt from the samples rather than kept: a profile lives on the sample that
+  // measured it, so the ones replayed below bring theirs back. Nulling the whole
+  // map was right for the example and wrong for them — adding one sample to three
+  // finished ones dropped the other three's functions from the tab and the
+  // session file.
   funcProfiles = null;
+  for (const f of files) {
+    if (f.status === "done" && f.funcProfile) {
+      funcProfiles = { ...(funcProfiles ?? {}), [f.sampleName]: f.funcProfile };
+    }
+  }
   if (!document.getElementById("funcPanel")?.classList.contains("hide")) refreshFunc();
 
   // The second sketch, if it was asked for. Loaded HERE — after the pool has
@@ -2569,12 +2878,12 @@ async function runAll() {
           // the line from flickering between N loads.
           i === 0 ? (p) => {
             if (p.progress?.phase === "func_refs") {
-              setStep(`Loading the KEGG ortholog reference — ${p.progress.n.toLocaleString()} orthologs…`);
+              setStep(`Loading the KEGG ortholog reference — ${p.progress.n.toLocaleString("en-US")} orthologs…`);
             }
           } : undefined,
           refBytes));
       }
-      console.log(`[func] ${infos[0]?.orthologs?.toLocaleString?.() ?? "?"} KEGG orthologs loaded in ${rpcs.length} worker${rpcs.length === 1 ? "" : "s"}`);
+      console.log(`[func] ${infos[0]?.orthologs?.toLocaleString?.("en-US") ?? "?"} KEGG orthologs loaded in ${rpcs.length} worker${rpcs.length === 1 ? "" : "s"}`);
     } catch (e) {
       // Not fatal to the run: the taxonomy is what most readers came for, and
       // failing the whole batch over the optional half would be a worse trade
@@ -2595,7 +2904,7 @@ async function runAll() {
   const queue = [];
   for (const s of files) {
     if (s.status === "done") {
-      sampleOrder.push(s.sampleName);
+      inMatrix.add(s.sampleName);
       mergeRowsIntoMatrix(matrix, s.sampleName, s.rows);
     } else {
       // Back to pending, so the line stops showing the previous attempt's
@@ -2609,6 +2918,41 @@ async function runAll() {
   const totalTodo = queue.length;
   let okCount = 0, failCount = 0, cancelCount = 0, shortCount = 0, completed = 0;
   let emptyCount = 0;
+
+  const publish = (progress = null) => {
+    lastRaw = { matrix, sampleOrder: sampleOrder(), ref: runRef,
+      refBySample: new Map(files.filter((f) => f.ref).map((f) => [f.sampleName, f.ref])),
+      metaBySample: metaStore(),
+      // Which columns were profiled on fewer reads than their input holds, and
+      // why. Kept with the matrix rather than read off the sample list, because
+      // the matrix outlives that list: a saved session has no list, and a flag
+      // that lived only there came back unflagged.
+      incomplete: new Map(files.filter((f) => f.status === "incomplete")
+        .map((f) => [f.sampleName, f.error || "fewer reads profiled than the input holds"])) };
+    lastMatrix = matrixToTable(lastRaw.matrix, lastRaw.sampleOrder, lastRaw.ref, lastRaw.refBySample);
+    refreshFieldGroups();
+    renderMatrix(viewOf(lastMatrix), progress);
+  };
+  // The finished samples are the matrix from the first moment of the run. The
+  // card used to be hidden here and shown again by the first sample to finish —
+  // so a rerun cancelled before that hid results that were still there, Save
+  // session and the exports with them.
+  if (inMatrix.size) {
+    publish({ done: 0, total: totalTodo });
+    if (openFig) drawFigure(openFig);
+  } else {
+    // A matrix started from nothing is a new set of samples, whatever their
+    // names. Groups typed or loaded for the last one are keyed by name, so a new
+    // batch called S1..S8 inherited them — coloured and contrasted under a picker
+    // still describing how they had been made. Cleared with the old matrix; a
+    // grouping by a metadata FIELD is recomputed from the new samples instead.
+    if (groupSource === "custom" || groupSource === "csv") {
+      customGroups = new Map();
+      groupSource = "none";
+      applyGroupSource();
+    }
+    if (!lastMatrix) els.results.classList.add("hide");
+  }
 
   // Each worker independently drains the shared queue. Two workers run end-
   // to-end (decompress + sylph profile) in parallel.
@@ -2640,13 +2984,13 @@ async function runAll() {
       // by the number of streams sharing that link.
       if (s.origin === "ena") netActive++;
       try {
-        let tsv, reads, func;
+        let tsv, reads, func, stop, stopDetail;
         function startWasmHeartbeat(label, reads) {
           s.frac = 1;
           const wasmT0 = performance.now();
           wasmTick = setInterval(() => {
             const sec = ((performance.now() - wasmT0) / 1000).toFixed(1);
-            s.progress = `sketching ${reads.toLocaleString()} ${label} in WASM (${sec} s)`;
+            s.progress = `sketching ${reads.toLocaleString("en-US")} ${label} in WASM (${sec} s)`;
             renderFilesList();
             setStep(`[w${slotIdx}] ${s.sampleName} — WASM compute, ${sec} s`);
           }, 250);
@@ -2693,13 +3037,13 @@ async function runAll() {
             // the sum of the two.
             const bothBps = (Number.isFinite(p1.bps) ? p1.bps : 0) + (Number.isFinite(p2.bps) ? p2.bps : 0);
             s.progress =
-              `${reads.toLocaleString()} pairs across ${r1Files.length} run${r1Files.length === 1 ? "" : "s"}; ` +
+              `${reads.toLocaleString("en-US")} pairs across ${r1Files.length} run${r1Files.length === 1 ? "" : "s"}; ` +
               `R1 file ${p1.fi + 1}/${r1Files.length} ${fmtBytes(p1.bytesIn)}/${fmtBytes(total1)}, ` +
               `R2 file ${p2.fi + 1}/${r2Files.length} ${fmtBytes(p2.bytesIn)}/${fmtBytes(total2)}` +
               (p.net ? rate(bothBps) : "");
             renderFilesList();
           };
-          ({ tsv, reads, func } = s.origin === "ena"
+          ({ tsv, reads, func, stop, stopDetail } = s.origin === "ena"
             ? await rpc.profileUrlsPe(r1Files.map(toUrlDesc), r2Files.map(toUrlDesc), cap,
               onProgress, abortCtrl.signal)
             : await rpc.profileFilesPe(r1Files, r2Files, cap, onProgress, abortCtrl.signal));
@@ -2716,12 +3060,12 @@ async function runAll() {
               bytesIn: p.bytesIn, total: totalSeBytes, reads: p.reads, cap,
             });
             s.progress =
-              `${p.reads.toLocaleString()} reads, file ${p.fi + 1}/${seFiles.length} ` +
+              `${p.reads.toLocaleString("en-US")} reads, file ${p.fi + 1}/${seFiles.length} ` +
               `(${fmtBytes(p.bytesIn)} / ${fmtBytes(totalSeBytes)} total)` +
               (p.net ? rate(p.bps) : "");
             renderFilesList();
           };
-          ({ tsv, reads, func } = s.origin === "ena"
+          ({ tsv, reads, func, stop, stopDetail } = s.origin === "ena"
             ? await rpc.profileUrls(seFiles.map(toUrlDesc), cap, onProgress, abortCtrl.signal,
                 basesCapFor(cap))
             : await rpc.profileFilesMulti(seFiles, cap, onProgress, abortCtrl.signal,
@@ -2735,11 +3079,22 @@ async function runAll() {
         // number the ENA published for the run. A file truncated upstream, with
         // a Content-Length that matches the truncation, passes every byte check
         // there is and fails only here.
-        const verdict = s.origin === "ena"
-          ? readCountVerdict({ observed: readsShown(s), expected: s.enaReads, maxReads,
-              // Paired runs have two possible readings of the ENA's read_count.
-              layout: s.kind === "pe" ? "PAIRED" : "SINGLE" })
-          : { ok: true, note: "" };
+        //
+        // And before it, the one the reader of the file cannot see: the sketcher
+        // stopping at a malformed record. A stray blank line or a truncated
+        // quality string at read 6,000 of 60,000 used to end the read there and
+        // come back as a normal profile of a tenth of the file — for a local
+        // FASTQ there is no read count to compare against, so nothing else would
+        // ever notice. `stop` says why the reading ended; "reads" and "bases" are
+        // the caps, and a capped run is short by design, not by accident.
+        const verdict = stop === "truncated"
+          ? { ok: false, note: stopDetail ||
+              "the reads stop at a malformed record — the rest of the input was not read" }
+          : s.origin === "ena"
+            ? readCountVerdict({ observed: readsShown(s), expected: s.enaReads, maxReads,
+                // Paired runs have two possible readings of the ENA's read_count.
+                layout: s.kind === "pe" ? "PAIRED" : "SINGLE", stop })
+            : { ok: true, note: "" };
         // "done" means species came out. Zero is a distinct outcome and gets its
         // own status, so it can be counted apart and coloured apart.
         s.status = !verdict.ok ? "incomplete" : (rows.length === 0 ? "empty" : "done");
@@ -2757,21 +3112,21 @@ async function runAll() {
         // The second sketch, when it was asked for. Accumulated per sample the
         // way the matrix is, so a run that is still going shows the functions of
         // the samples that are done — the same rule the taxonomic table follows.
+        // On the sample, so a later run that replays this one replays its
+        // functions too.
+        s.funcProfile = undefined;
         if (func?.profile && Object.keys(func.profile).length) {
+          s.funcProfile = func.profile;
           funcProfiles = { ...(funcProfiles ?? {}), [s.sampleName]: func.profile };
           s.funcHashes = func.hashes;
         }
-        sampleOrder.push(s.sampleName);
+        inMatrix.add(s.sampleName);
         mergeRowsIntoMatrix(matrix, s.sampleName, rows);
         // Show the matrix as it fills, rather than at the end. On a project of
         // 85 runs the end is hours away, and the first few samples are usually
         // enough to tell whether the run is worth waiting for. The download
         // buttons work on what is there — the summary says how much that is.
-        lastRaw = { matrix, sampleOrder, ref: runRef,
-          refBySample: new Map(files.filter((f) => f.ref).map((f) => [f.sampleName, f.ref])),
-          metaBySample: metaStore() };
-        lastMatrix = matrixToTable(lastRaw.matrix, lastRaw.sampleOrder, lastRaw.ref, lastRaw.refBySample);
-        renderMatrix(viewOf(lastMatrix), { done: completed + 1, total: totalTodo });
+        publish({ done: completed + 1, total: totalTodo });
         // Same rule for the other tab, and only when it is the one on screen:
         // the functional table is expensive to build (13,509 orthologs rolled up
         // over every sample) and nobody is looking at it.
@@ -2800,21 +3155,22 @@ async function runAll() {
 
   await Promise.all(rpcs.map((rpc, i) => drain(rpc, i + 1)));
 
-  setDisabled(els.cancel, "Nothing is running — this stops a profiling run once one has started.");
-  setRunControls(false);
-  refreshRunButton();
-  if (okCount > 0) {
-    lastRaw = { matrix, sampleOrder, ref: runRef,
-      refBySample: new Map(files.filter((f) => f.ref).map((f) => [f.sampleName, f.ref])),
-      metaBySample: metaStore() };
-    lastMatrix = matrixToTable(lastRaw.matrix, lastRaw.sampleOrder, lastRaw.ref, lastRaw.refBySample);
-    renderMatrix(viewOf(lastMatrix));
+  if (inMatrix.size) {
+    publish();
+    // A figure left open was drawn from the matrix as it stood when it was
+    // opened — three samples, beside a table that has since grown to five. The
+    // figures are not redrawn per sample on purpose (a PCoA per finished sample
+    // of 85 is work nobody asked for); at the end, they are.
+    if (openFig) drawFigure(openFig);
+    if (!document.getElementById("funcPanel")?.classList.contains("hide")) refreshFunc();
   }
+  if (lastMatrix) els.results.classList.remove("hide");
   // Cancelled samples are counted apart from failures: twelve red "failed:
   // aborted" lines after a deliberate click on Cancel is a report of an
   // incident that did not happen.
   const summary = `${okCount} sample${okCount === 1 ? "" : "s"} ok` +
-    (shortCount ? `, ${shortCount} incomplete (fewer reads than the ENA lists)` : "") +
+    (shortCount ? `, ${shortCount} incomplete (fewer reads profiled than the input holds — ` +
+      `see ${shortCount === 1 ? "its line" : "their lines"})` : "") +
     (emptyCount ? `, ${emptyCount} with NO species — check the biome` : "") +
     `, ${failCount} failed` +
     (cancelCount ? `, ${cancelCount} cancelled` : "");
@@ -2824,7 +3180,11 @@ async function runAll() {
 
 function mergeRowsIntoMatrix(matrix, sampleName, rows) {
   for (const r of rows) {
-    matrix[r.genome] ??= { species: r.species };
+    // Prototype-free, like the matrix: the keys of a row are the user's sample
+    // names, and "toString" or "constructor" is a name somebody will one day use.
+    if (!Object.hasOwn(matrix, r.genome)) {
+      matrix[r.genome] = Object.assign(Object.create(null), { species: r.species });
+    }
     matrix[r.genome][sampleName] = r.relAbund;
   }
 }
@@ -3011,6 +3371,20 @@ function applyGroupSource() {
   // then made some, asked for the contrast. Leaving the fallback latched would
   // hide the figure they had just done the work for.
   contrastFallback = false;
+}
+
+/**
+ * A grouping by a metadata field, recomputed for the samples now in the matrix.
+ *
+ * applyGroupSource() does this too, but it also forgets the contrast pair and the
+ * sort — right when the reader changes the source, wrong when a run merely adds a
+ * sample: "by host_sex" was computed once, at the moment it was picked, and every
+ * sample that finished afterwards stayed in no group at all.
+ */
+function refreshFieldGroups() {
+  if (!groupSource.startsWith("field:")) return;
+  metaGroups = groupsFromField(lastMatrix?.samples ?? [], (s) => metaOf(s) ?? {},
+    groupSource.slice("field:".length));
 }
 
 // ---- the contrast figure has to ASK for what it needs -------------------------
@@ -3311,9 +3685,50 @@ document.getElementById("metaFile")?.addEventListener("change", async (e) => {
 // grain and grouping they try is a leak with extra steps.
 let statsCache = { key: "", stats: null };
 
+/**
+ * What a table IS, in a string short enough to be a cache key: its samples, and
+ * every row's identity and values, in order.
+ *
+ * Both caches below were keyed on the NUMBER of rows. "group similar rows"
+ * reorders rows without changing how many there are, and the contrast's p and q
+ * were then pasted onto the rows by position — measured on the example, 129 of
+ * 208 rows showing another row's q, a row at p = 0.1 printed at p = 1. The
+ * ordination cache had the same hole between two levels of equal length (102
+ * pathways, 103 gut metabolic modules).
+ *
+ * Two independent 32-bit FNV-1a passes over the samples, the row identifiers and
+ * the raw bits of every value: about a millisecond for 4,307 rows, against the
+ * half second of the test it saves. Memoised per table object, because a pan of
+ * the ordination redraws the same view sixty times a second.
+ */
+const fingerprints = new WeakMap();
+export function tableFingerprint(t) {
+  if (!t) return "";
+  const known = fingerprints.get(t);
+  if (known) return known;
+  let a = 0x811c9dc5, b = 0x01000193 ^ 0x5bd1e995;
+  const mix = (x) => {
+    a = Math.imul(a ^ x, 0x01000193) >>> 0;
+    b = Math.imul(b ^ x, 0x5bd1e995) >>> 0;
+    b ^= b >>> 15;
+  };
+  const str = (v) => { const s = String(v ?? ""); for (let i = 0; i < s.length; i++) mix(s.charCodeAt(i)); mix(0x1f); };
+  const f64 = new Float64Array(1), u32 = new Uint32Array(f64.buffer);
+  for (const s of t.samples ?? []) str(s);
+  mix(0x1e);
+  for (const r of t.rows ?? []) {
+    // rowKey: the identity figures.js itself aligns the statistics by.
+    str(rowKey(r));
+    for (const v of r.values ?? []) { f64[0] = Number(v) || 0; mix(u32[0]); mix(u32[1]); }
+  }
+  const fp = `${(t.samples ?? []).length}x${(t.rows ?? []).length}:${a.toString(36)}${b.toString(36)}`;
+  fingerprints.set(t, fp);
+  return fp;
+}
+
 function contrastStatsFor(t, tag) {
   const groups = [...metaGroups.entries()].sort().map(([k, v]) => `${k}=${v}`).join(",");
-  const key = [tag, t.samples.join("|"), t.rows.length, groups,
+  const key = [tag, tableFingerprint(t), groups,
     (contrastPair ?? []).join(">")].join("::");
   if (statsCache.key === key) return statsCache.stats;
   const stats = contrastStats(t, { groupOf: metaGroupOf, pair: contrastPair });
@@ -3360,7 +3775,7 @@ function drawFigure(kind) {
     paintGroupControls(null);
     hideDetail();
     if (note) note.textContent = "";
-    for (const b of document.querySelectorAll(".fig-tab")) b.classList.remove("is-on");
+    for (const b of document.querySelectorAll(".fig-tab")) setTabOn(b, false);
     return;
   }
   const view = viewOf(lastMatrix);
@@ -3426,7 +3841,7 @@ function drawFigure(kind) {
   paintContrastControls(view);
   paintGroupControls(view);
   for (const b of document.querySelectorAll(".fig-tab")) {
-    b.classList.toggle("is-on", b.dataset.fig === kind);
+    setTabOn(b, b.dataset.fig === kind);
   }
   wireFigure(canvas, view);
   // Every figure is relative to one catalogue and to nothing else. Said here
@@ -3631,11 +4046,11 @@ async function loadKeggMap() {
 // The definitions are NOT shipped. VIB licenses them for academic,
 // non-commercial use and forbids transferring them outside the licensee's
 // institution, so committing them to a public repository that deploys to a
-// public site is the one thing the licence names. The reader brings their own
-// copy from github.com/raeslab/GMMs; it is read in this tab, like the groups
-// CSV, and not kept when the tab closes — which is also why the page does not
-// fetch it for them: the privacy notice promises that Zenodo and the EBI are the
-// only hosts contacted, and quietly adding a third would make that false.
+// public site is the one thing the licence names. Once the reader has answered
+// the licence question the page fetches them from the Raes lab's own repository
+// (GMM_URL below) — a third host, named as such in the privacy notice — and if
+// that cannot happen the reader opens their own copy; either way they are read
+// in this tab, like the groups CSV, and not kept when the tab closes.
 let gmmDefs = null;          // { modules, kos } — this session only
 let gmmName = "";            // where the definitions came from, so the version is named
 let gmmFetchError = "";      // why the automatic fetch failed, if it did
@@ -3904,7 +4319,9 @@ function cellPopHtml(t, r, c) {
     const entry = keggEntryUrl(r.id);
     const bits = [];
     if (m) {
-      bits.push(`<a href="${escapeHTML(m.url)}" target="_blank" rel="noopener noreferrer">` +
+      bits.push(`<a href="${escapeHTML(m.url)}" target="_blank" rel="noopener noreferrer" ` +
+        `title="Following it sends kegg.jp this module's orthologs detected in ${escapeHTML(sample)}, ` +
+        `each with a colour for its abundance — no sample name, and nothing until you click">` +
         `see it on ${escapeHTML(m.map)}, coloured by this sample</a>`);
     }
     if (entry) {
@@ -3979,6 +4396,27 @@ document.addEventListener("click", (e) => {
   if (e.target.closest?.("#cellPop, .cell-open")) return;
   closeCellPop();
 });
+
+/**
+ * The rows a composition is drawn from: SHARES of one bar, or of one disc.
+ *
+ * The rows the table shows — its floor included, so the figure under "87
+ * pathways" no longer says "102 rows" — and, at the pathway level, not the
+ * global and overview maps. Those re-count the orthologs of the specific maps
+ * they summarise (see isOverviewMap): as slices of the same bar they were seven
+ * of the ten largest, and map01100 alone a fifth of every sample. They stay in
+ * the table, where each row is read on its own.
+ *
+ * Only the composition. Diversity, the ordination and the contrast are computed
+ * over every row, floor or no floor: a distance or a test over a display
+ * threshold answers a different question.
+ */
+function funcCompositionTable(view) {
+  const t = funcTableFor(view, funcGrain, { floored: true });
+  if (funcGrain !== "pathway") return { ...t, overview: 0 };
+  const rows = t.rows.filter((r) => !isOverviewMap(r.id));
+  return { ...t, rows, overview: t.rows.length - rows.length };
+}
 
 function funcTableFor(view, grain = funcGrain, { floored = false } = {}) {
   const samples = (view?.samples ?? []).filter((s) => funcProfiles?.[s]);
@@ -4082,27 +4520,6 @@ function genusTable() {
     lastRaw.refBySample, { rank: "g" });
 }
 
-// What the archive knows about the specimen, which is a different question from
-// what the catalogue is. The gate checks the database; this checks the sample,
-// and says so when it cannot.
-function specimenNote(samples) {
-  const seen = new Map();
-  for (const s of samples) {
-    const v = (metaOf(s) ?? {}).scientific_name;
-    if (v) seen.set(v, (seen.get(v) ?? 0) + 1);
-  }
-  if (!seen.size) {
-    return "The catalogue was checked, not the specimen: nothing here says whether these " +
-      "FASTQs are human stool.";
-  }
-  const odd = [...seen].filter(([v]) => !/human gut|gut metagenome/i.test(v));
-  if (odd.length) {
-    return `The archive calls ${odd.length === seen.size ? "these samples" : "some of these samples"} ` +
-      `${odd.map(([v, n]) => `"${v}" (${n})`).join(", ")} — which is not human stool.`;
-  }
-  return `The archive calls all ${samples.length} of these ${[...seen.keys()].join(", ")}.`;
-}
-
 // ---- zooming the ordination --------------------------------------------------
 //
 // Fifteen samples fit in a card; eighty-five in a gut study do not, and the
@@ -4129,8 +4546,11 @@ let pcoaZoom = null;      // {x, y, k} or null for the whole thing
 let pcoaFit = null;       // {key, layout} — the ordination, cached against redraws
 let figView = null;       // the view the open figure was drawn from
 
+// The table's content (tableFingerprint), and the reference by what it IS —
+// `view.ref` is an object, and interpolated it was "[object Object]" for every
+// database there is.
 const viewKey = (view) =>
-  `${view.samples.join("\u0001")}|${view.rows.length}|${view.ref ?? ""}`;
+  `${tableFingerprint(view)}|${view.ref ? refLine(view.ref) : ""}`;
 
 // What the points are coloured by: the groups the user loaded, or clusters this
 // page computes. Kept across redraws, like the neighbour metric — someone who
@@ -4162,7 +4582,12 @@ function clusterColours(view, mode) {
     groupOf: (s) => byName.get(s) ?? null,
     // The score travels with the colours, into the downloaded SVG. k-means
     // always returns clusters; this is what says whether they are separated.
+    // k is the number of clusters DRAWN — the colours in the legend. Asked for
+    // four over points that sit on top of each other, k-means can return two;
+    // the note said "k=4" over a two-colour plot.
     note: `k-means on these two axes · k=${fit.k}` +
+      (Number.isFinite(fit.asked) && fit.asked !== fit.k
+        ? ` (${fit.asked} asked — the others came out empty)` : "") +
       `${mode === "auto" ? " chosen by silhouette" : ""} · silhouette ${fit.score.toFixed(2)}`,
   };
   return pcoaClusters;
@@ -4504,7 +4929,9 @@ const FUNC_SURFACE = {
   // level the same sample is legible. Both are true; they answer different
   // questions, and the panel labels which is which.
   view: () => (lastMatrix ? funcTableFor(viewOf(lastMatrix), "ko") : null),
-  pie: () => (lastMatrix ? funcTableFor(viewOf(lastMatrix), funcGrain) : null),
+  // The same rows as the composition bars: what the table shows, without the
+  // overview maps at the pathway level (funcCompositionTable says why).
+  pie: () => (lastMatrix ? funcCompositionTable(viewOf(lastMatrix)) : null),
   pieUnit: () => (funcGrain === "ko" ? "orthologs" : funcGrain === "module" ? "modules"
     : funcGrain === "gmm" ? "gut metabolic modules" : "pathways"),
 };
@@ -4806,6 +5233,8 @@ function fitPie(panel, view, name, surface = TAXO_SURFACE) {
     // its own legend; a ceiling, because a stacked card is 600 px tall and a
     // 600 px disc is not more informative than a 400 px one.
     height: Math.max(180, Math.min(440, room)),
+    // Medians along a path, at the GMM level, and the disc says so.
+    share: surface === FUNC_SURFACE && funcGrain === "gmm" ? GMM_SHARE : undefined,
   });
   wirePie(body);
 }
@@ -4831,7 +5260,10 @@ function wirePie(body) {
     if (e.pointerType === "touch" || e.pointerType === "pen") { hideTip(); return; }
     showTip(
       `<strong>${escapeHTML(el.getAttribute("data-taxon") ?? "")}</strong>` +
-      `<span>${escapeHTML(el.getAttribute("data-share") ?? "")} of this sample</span>` +
+      // What the share is OF comes with the slice: at the gut-metabolic-module
+      // level a value is a median along a path, not a share of the sample.
+      `<span>${escapeHTML(el.getAttribute("data-share") ?? "")} ` +
+      `${escapeHTML(el.getAttribute("data-share-of") ?? "of this sample")}</span>` +
       (el.getAttribute("data-rest")
         ? `<span class="fig-tip-hint">among the ones pooled as “other”</span>` : ""),
       e);
@@ -4928,13 +5360,21 @@ function enterotypeHtml(name) {
   return out;
 }
 
+// A distance printed to the metric's usual digits — unless that prints a real,
+// non-zero distance as "0.0", which the functional table's fractions did for
+// every neighbour of every sample.
+function fmtDistance(d, digits) {
+  const fixed = d.toFixed(digits);
+  return Number(fixed) === 0 && d > 0 ? d.toPrecision(2) : fixed;
+}
+
 function factsHtml(view, name, surface = TAXO_SURFACE) {
   const f = sampleFacts(view, name, { metric: neighbourMetric });
   if (!f) return "";
   const stat = (v, label, title) =>
     `<div class="pie-stat" title="${escapeHTML(title)}"><b>${v}</b><span>${label}</span></div>`;
   let out = `<div class="pie-facts"><div class="pie-stats">` +
-    stat(f.richness.toLocaleString(), `${surface.unit} detected`,
+    stat(f.richness.toLocaleString("en-US"), `${surface.unit} detected`,
       `Rows with an abundance above zero in this sample, out of ${view.rows.length} in the matrix.`) +
     stat(f.effective.toFixed(1), `effective ${surface.unit}`,
       `e^Shannon (H = ${f.shannon.toFixed(2)}): how many equally-abundant ${surface.unit} would give ` +
@@ -4971,7 +5411,11 @@ function factsHtml(view, name, surface = TAXO_SURFACE) {
       Object.entries(METRICS).map(([key, meta]) =>
         `<button type="button" data-metric="${key}"` +
         `${key === f.metric ? ' class="is-on"' : ""}>${escapeHTML(meta.label)}</button>`).join("") +
-      `</label></div>`;
+      `</label></div>` +
+      // Two quantities on one line, so the line says which is which: the bar
+      // grows as the samples get ALIKE (a list headed "Closest" whose bars
+      // shrank down it read backwards), and the number is the distance itself.
+      `<div class="pie-near-key">bar: how alike · number: ${escapeHTML(m.label)} distance</div>`;
     for (const n of f.nearest) {
       const g = metaGroupOf(n.sample);
       // How CLOSE, not how far: the list is sorted nearest first, and drawing
@@ -4982,7 +5426,14 @@ function factsHtml(view, name, surface = TAXO_SURFACE) {
       // sample whose closest relative is far away must not look as close as one
       // with a twin. So a full bar is an identical profile, an empty one shares
       // nothing, and the number beside it stays the distance itself.
-      const close = Math.max(0, Math.min(100, (1 - n.distance / m.max) * 100));
+      // Against the ceiling the metric reaches ON THIS TABLE (f.max): Euclidean
+      // is bounded by the column totals, percentages on one side and fractions
+      // on the other, and against the percentage ceiling every functional
+      // neighbour drew a full bar beside a distance printed as "0.0". The bar
+      // and the number are now the same distance — one as a closeness, one as
+      // a value — and the line above says which is which.
+      const close = Math.max(0, Math.min(100,
+        (Number.isFinite(n.closeness) ? n.closeness : 1 - n.distance / (f.max || m.max)) * 100));
       out += `<button type="button" class="pie-near-row" data-jump="${escapeHTML(n.sample)}" ` +
         `title="Open ${escapeHTML(n.sample)}">` +
         `<span class="pie-near-name">${escapeHTML(n.sample)}` +
@@ -4991,7 +5442,7 @@ function factsHtml(view, name, surface = TAXO_SURFACE) {
         `identical profile — a full bar is the same sample twice, an empty one ` +
         `shares nothing. The number is the ${escapeHTML(m.label)} distance itself.">` +
         `<i style="width:${close.toFixed(1)}%"></i></span>` +
-        `<span class="pie-near-d">${n.distance.toFixed(m.digits)}</span></button>`;
+        `<span class="pie-near-d">${escapeHTML(n.text ?? fmtDistance(n.distance, m.digits))}</span></button>`;
     }
     out += `</div>`;
   }
@@ -5083,7 +5534,17 @@ document.getElementById("exportAs")?.addEventListener("change", (e) => {
   if (kind === "sylph") {
     // Straight from what sylph wrote, so every column survives — including the
     // ones this page never reads.
-    const tsv = toSylphTsv(files.filter((f) => f.tsv));
+    //
+    // For the samples of the matrix ON SCREEN, in its order, and only when that
+    // matrix was profiled in this tab. It read every sample of the list that had
+    // a TSV: after a database change and a rerun cancelled half-way, that was one
+    // sample against the new catalogue and two against the old one, in one file
+    // with nothing to tell them apart — and after a session or the example was
+    // opened, the samples of the list, exported under the session's name.
+    const byName = new Map(files.map((f) => [f.sampleName, f]));
+    const tsv = lastRaw && !lastRaw.restored
+      ? toSylphTsv(lastRaw.sampleOrder.map((n) => byName.get(n)).filter((f) => f?.tsv))
+      : "";
     // A matrix on screen is not enough: this export is sylph's own output, kept
     // per sample as it was written, and neither a saved session nor the example
     // carries it — they hold the assembled matrix and nothing else.
@@ -5096,23 +5557,68 @@ document.getElementById("exportAs")?.addEventListener("change", (e) => {
       return;
     }
     saveBlob(tsv, "text/tab-separated-values", `sylph_profile_${slug}.tsv`);
-  } else if (kind === "mpa") {
-    saveBlob(toMetaphlan(view, {
-      lineageOf, speciesOf: (g) => taxonAt(g, "s"),
-      header: refCommentLines(view.ref, { samples: view.samples.length, rows: view.rows.length })
-        .map((l) => l.replace(/^#\s?/, "")),
-    }), "text/tab-separated-values", `metaphlan_${slug}.tsv`);
-  } else if (kind === "biom") {
-    saveBlob(toBiom(view, { lineageOf, speciesOf: (g) => taxonAt(g, "s"),
-      date: new Date().toISOString() }), "application/json", `table_${slug}.biom`);
+  } else if (kind === "mpa" || kind === "biom") {
+    // From the PER-GENOME table, whatever level the picker shows. Both formats
+    // carry their own lineage — the clade string, the taxonomy list — and are
+    // built genome by genome from it; handed the genus view, every row was
+    // "12 genomes", which has no lineage, so MetaPhlAn wrote each genus as a
+    // species at the top level and the BIOM file had 136 rows called "1 genome",
+    // which biom-format refuses to load.
+    //
+    // And the species LABEL, not the bare GTDB name: 20 representative genomes
+    // are all "Collinsella sp002232035", and MetaPhlAn sums rows that share a
+    // clade string — distinct species added into one, which the native TSV goes
+    // out of its way not to do (see speciesLabel).
+    const t = perGenomeTable();
+    if (!t) return;
+    // exports.js refuses a table whose rows are not genomes. It cannot be handed
+    // one from here, but a refusal is a sentence for the reader, not an
+    // exception in the console with nothing saved.
+    try {
+      if (kind === "mpa") {
+        saveBlob(toMetaphlan(t, {
+          lineageOf, speciesOf: speciesLabel,
+          header: [...refCommentLines(t.ref, { samples: t.samples.length, rows: t.rows.length })
+            .map((l) => l.replace(/^#\s?/, "")), ...incompleteNotes(t.samples)],
+        }), "text/tab-separated-values", `metaphlan_${slug}.tsv`);
+      } else {
+        // BIOM 1.0 wants a timestamp with no fraction and no zone letter;
+        // `biom validate-table` refuses toISOString()'s ".123Z".
+        saveBlob(toBiom(t, { lineageOf, speciesOf: speciesLabel,
+          date: new Date().toISOString().slice(0, 19),
+          columnMeta: (name) => (lastRaw?.incomplete?.has(name)
+            ? { incomplete: lastRaw.incomplete.get(name) } : null) }),
+          "application/json", `table_${slug}.biom`);
+      }
+    } catch (err) {
+      showError(`Could not write the ${kind === "mpa" ? "MetaPhlAn" : "BIOM"} file: ${err?.message ?? err}`);
+    }
   }
 });
+
+// "INCOMPLETE: <sample> — <why>", one line per flagged column among `samples`.
+// Every export carries these: a file read a month later has no screen beside it.
+function incompleteNotes(samples) {
+  const inc = lastRaw?.incomplete;
+  if (!inc?.size) return [];
+  return samples.filter((n) => inc.has(n)).map((n) => `INCOMPLETE: ${n} — ${inc.get(n)}`);
+}
+
+// The matrix one row per genome, in the order of the sample list, whatever the
+// level picker shows — what the formats that carry their own lineage are built
+// from. Null when there is nothing on screen.
+function perGenomeTable() {
+  if (!lastRaw) return null;
+  return matrixToTable(lastRaw.matrix, lastRaw.sampleOrder, lastRaw.ref, lastRaw.refBySample,
+    { rank: "s" });
+}
 
 function saveSession() {
   if (!lastRaw) { showError("Nothing to save yet — no sample has been profiled."); return; }
   saveBlob(toSession({
     ref: lastRaw.ref, sampleOrder: lastRaw.sampleOrder, matrix: lastRaw.matrix,
     refBySample: lastRaw.refBySample, sampleMeta: lastRaw.metaBySample,
+    incomplete: lastRaw.incomplete,
     funcProfiles,
     // Only the hand-made ones. A grouping by metadata field is recomputed on
     // open from the metadata that is saved beside it.
@@ -5129,19 +5635,37 @@ function saveSession() {
 // bundled example, so the example cannot drift into being a mock of the results:
 // it goes through the same restore as any session from disk.
 function applySession(st) {
+  // `restored`: these numbers came from a file, not from samples profiled in
+  // this tab — so nothing kept on the sample list (sylph's own TSV above all)
+  // describes them, whatever the names have in common.
   lastRaw = { matrix: st.matrix, sampleOrder: st.sampleOrder, ref: st.ref,
-    refBySample: st.refBySample, metaBySample: st.sampleMeta ?? new Map() };
+    refBySample: st.refBySample, metaBySample: st.sampleMeta ?? new Map(),
+    incomplete: st.incomplete ?? new Map(), restored: true };
   // Groups the reader made, back as they were — and selected, since a session
   // that carries them was saved by somebody who wanted them.
+  //
+  // And when it carries none, NONE: the groups on screen belonged to the matrix
+  // being replaced. Kept, a colleague's session with the same sample names was
+  // coloured and contrasted TREATED against CONTROL under a picker reading
+  // "none". A grouping by a metadata field is the exception — it is recomputed
+  // from this session's own metadata, and is empty if the field is not there.
   customGroups = st.groups?.size ? new Map(st.groups) : new Map();
-  if (customGroups.size) { groupSource = "custom"; applyGroupSource(); }
+  groupSource = customGroups.size ? "custom"
+    : groupSource.startsWith("field:") ? groupSource : "none";
+  // applyGroupSource() reads the samples from lastMatrix, which is rebuilt just
+  // below — so it runs after that.
   // Null, not {}: the Function tab distinguishes "this run measured no
   // functions" from "it measured them and found none", and only one of those is
   // a reason to explain rather than to draw.
   funcProfiles = st.funcProfiles ?? null;
   const pick = document.getElementById("rankPick");
-  if (pick && st.rank) pick.value = st.rank;
+  // The saved level only when it can be drawn. Without a lineage map the rows
+  // stay one per genome whatever the picker says, and set to "genus" it headed
+  // those genome rows "Genus" on screen and "genus" in the exported file. The
+  // caller says how to get the level back (load the catalogue).
+  if (pick && st.rank) pick.value = canAggregate() ? st.rank : "s";
   lastMatrix = matrixToTable(lastRaw.matrix, lastRaw.sampleOrder, lastRaw.ref, lastRaw.refBySample);
+  applyGroupSource();
   renderMatrix(viewOf(lastMatrix));
   els.results.classList.remove("hide");
   refreshSteps();
@@ -5283,17 +5807,18 @@ async function loadDemo() {
     }
     if (stale()) return;
 
-    metaGroups = parseMetadata(groupsText);
-    // The example ships its own groups file, so the picker says so: it read
-    // "none" over a plot coloured by six donors, which is the same inconsistency
-    // the CSV path had.
-    groupSource = "csv";
-    contrastPair = null;
     // Before applySession, which paints the step strip: the strip asks demoOn
     // whether to call this the example, and would otherwise announce it as a
     // finished run of yours for as long as nothing else refreshed it.
     demoOn = true;
     applySession(st);
+    // AFTER applySession, which clears every grouping a session does not bring
+    // with it. The example ships its own groups file, so the picker says so: it
+    // read "none" over a plot coloured by six donors, which is the same
+    // inconsistency the CSV path had.
+    metaGroups = parseMetadata(groupsText);
+    groupSource = "csv";
+    contrastPair = null;
     paintDemoBanner(st);
     // Opened rather than merely offered: the ordination with its groups coloured
     // is the one view that says in a glance what the example is for, and a tab
@@ -5479,6 +6004,21 @@ function speciesLabel(genome) {
   return `${name} [${acc}]`;
 }
 
+// One cell of the per-genome matrix. OWN keys only, and numbers only: a session
+// file is JSON a colleague sent, its rows are plain objects, and `m[s] ?? 0` for
+// a sample named "constructor" or "toString" read a FUNCTION off Object.prototype
+// for every genome that sample did not have.
+const cellOf = (m, s) => {
+  const v = Object.hasOwn(m, s) ? Number(m[s]) : 0;
+  return Number.isFinite(v) ? v : 0;
+};
+// The row's label. `species` shares the row with the sample columns, so a sample
+// once called "species" overwrote it with a number; such a name is no longer
+// accepted (uniqueSampleName), and a session that still carries one gets the
+// label from the lineage instead of printing an abundance as a species name.
+const labelOf = (genome, m) =>
+  (typeof m.species === "string" ? m.species : speciesLabel(genome));
+
 function matrixToTable(matrix, sampleOrder, ref, refBySample = new Map(), { rank = null } = {}) {
   // `rank` overrides the picker. One figure needs genus whatever the table is
   // showing — the enterotype poles are genera — and re-ranking the page under
@@ -5491,8 +6031,8 @@ function matrixToTable(matrix, sampleOrder, ref, refBySample = new Map(), { rank
   let rows;
   if (rank === "s" || !canAggregate()) {
     rows = Object.entries(matrix).map(([genome, m]) => {
-      const values = sampleOrder.map(s => m[s] ?? 0);
-      return { genome, species: m.species, values, maxAbund: Math.max(...values) };
+      const values = sampleOrder.map((s) => cellOf(m, s));
+      return { genome, species: labelOf(genome, m), values, maxAbund: Math.max(...values) };
     });
   } else {
     const byTaxon = new Map();
@@ -5503,7 +6043,7 @@ function matrixToTable(matrix, sampleOrder, ref, refBySample = new Map(), { rank
       const name = taxonAt(genome, rank) || `unclassified at ${RANK_LABELS[rank].toLowerCase()} level`;
       let e = byTaxon.get(name);
       if (!e) { e = { name, values: sampleOrder.map(() => 0), n: 0 }; byTaxon.set(name, e); }
-      sampleOrder.forEach((s, i) => { e.values[i] += m[s] ?? 0; });
+      sampleOrder.forEach((s, i) => { e.values[i] += cellOf(m, s); });
       e.n++;
     }
     rows = [...byTaxon.values()].map((e) => ({
@@ -5558,17 +6098,18 @@ function matrixToTable(matrix, sampleOrder, ref, refBySample = new Map(), { rank
 // matters — it is also 150 px off the top of the page on every visit, met once
 // and scrolled past for ever after. Open the first time so a first-time reader
 // still meets it; remembered closed after that, in this browser only.
-{
-  const cite = document.getElementById("noticeCite");
-  if (cite) {
-    let seen = false;
-    try { seen = localStorage.getItem("peek-cite-read") === "1"; } catch { /* private mode */ }
-    cite.open = !seen;
-    cite.addEventListener("toggle", () => {
-      if (cite.open) return;
-      try { localStorage.setItem("peek-cite-read", "1"); } catch { /* private mode */ }
-    });
-  }
+// The privacy banner's detail folds the same way, and for the same reason: the
+// headline sentence is met on every visit, the paragraph behind it once.
+for (const [id, key] of [["noticeCite", "peek-cite-read"], ["privacyMore", "peek-privacy-read"]]) {
+  const fold = document.getElementById(id);
+  if (!fold) continue;
+  let seen = false;
+  try { seen = localStorage.getItem(key) === "1"; } catch { /* private mode */ }
+  fold.open = !seen;
+  fold.addEventListener("toggle", () => {
+    if (fold.open) return;
+    try { localStorage.setItem(key, "1"); } catch { /* private mode */ }
+  });
 }
 
 
@@ -5626,8 +6167,12 @@ function paintMatrix(headEl, bodyEl, {
       <th>${escapeHTML(idHead)}</th>
       ${samples.map((s, c) => `<th class="sortable" data-sort-col="${c}" ` +
         `aria-sort="${sortCol === c ? (sort.dir === "asc" ? "ascending" : "descending") : "none"}" ` +
-        `title="${escapeHTML(s)} — click to sort by this sample">${escapeHTML(s)}` +
-        `<span class="sort-mark">${mark(c)}</span></th>`).join("")}
+        `title="${escapeHTML(s)} — click to sort by this sample">` +
+        // A button inside the cell, so the sort is reachable from the keyboard:
+        // a <th> takes no focus, and a click handler on one is a mouse-only
+        // control. The click still lands on the cell's delegated handler.
+        `<button type="button" class="th-sort">${escapeHTML(s)}` +
+        `<span class="sort-mark">${mark(c)}</span></button></th>`).join("")}
     </tr>
     <tr class="matrix-ref-row">
       <th></th><th>${escapeHTML(subHead)}</th>${subCells}
@@ -5718,8 +6263,14 @@ function renderMatrix({ samples, rows, ref, refs, mixed }, progress = null) {
   // reference stops being a line above the table that a screenshot or a copied
   // range leaves behind, and becomes a property of the column. It is also the
   // only thing that could show a mixed matrix if the invariant ever broke.
-  const refCells = (refs ?? []).map((r) => {
+  const inc = lastRaw?.incomplete;
+  const refCells = (refs ?? []).map((r, i) => {
     const short = r ? refShort(r) : "—";
+    const why = inc?.get(samples[i]);
+    if (why) {
+      return `<th class="matrix-ref matrix-incomplete" title="${escapeHTML(`INCOMPLETE — ${why}. ${short}`)}">` +
+        `⚠ incomplete</th>`;
+    }
     return `<th class="matrix-ref" title="${escapeHTML(short)}">${escapeHTML(r?.label || r?.file || "—")}</th>`;
   }).join("");
 
@@ -5791,9 +6342,13 @@ function downloadMatrix(sep, ext) {
     ? ["# WARNING: these columns were NOT all profiled against the same catalogue. " +
        "Abundances from different catalogues are not comparable."]
     : [];
+  // A sample flagged INCOMPLETE on screen is a column here like any other — the
+  // profile finished, on fewer reads than its input holds — and a file read a
+  // month later has no screen beside it. So the flag travels.
+  const incompleteLines = incompleteNotes(samples).map((l) => `# ${l}`);
   const lines = [
     ...refCommentLines(ref, { samples: samples.length, rows: rows.length }),
-    ...perSample, ...mixedLine,
+    ...perSample, ...mixedLine, ...incompleteLines,
     header.map(csvEscape(sep)).join(sep),
   ];
   for (const r of rows) {
@@ -5867,6 +6422,13 @@ function escapeHTML(s) {
 // taxonomic counterpart.
 let openFuncFig = "composition";
 
+// A tab says it is the selected one in the way a screen reader hears, not only
+// in the colour a sighted reader sees.
+function setTabOn(b, on) {
+  b.classList.toggle("is-on", on);
+  b.setAttribute("aria-selected", String(on));
+}
+
 function showResultsTab(which) {
   const taxo = document.getElementById("taxoPanel");
   const func = document.getElementById("funcPanel");
@@ -5874,7 +6436,7 @@ function showResultsTab(which) {
   taxo.classList.toggle("hide", which !== "taxo");
   func.classList.toggle("hide", which !== "func");
   for (const b of document.querySelectorAll(".res-tab")) {
-    b.classList.toggle("is-on", b.dataset.res === which);
+    setTabOn(b, b.dataset.res === which);
   }
   // Each side is redrawn when it BECOMES visible. An SVG is sized from
   // clientWidth, and a hidden panel measures 0 — so a figure repainted while its
@@ -5928,6 +6490,10 @@ function refreshFunc() {
     const cn = document.getElementById("funcClusterNote");
     if (cn) cn.textContent = "";
     for (const b of document.querySelectorAll(".func-tab")) b.classList.add("hide");
+    // The figure bar and the search box serve a table that is not there. Left
+    // standing, the licence question sat between an empty bordered strip and a
+    // "Filter rows" box with nothing to filter.
+    funcChrome(false);
   };
 
   // The licence question comes before the data question. A reader who has not
@@ -5997,8 +6563,17 @@ function refreshFunc() {
     methodRef.classList.remove("hide");
   }
   for (const b of document.querySelectorAll(".func-tab")) b.classList.remove("hide");
+  funcChrome(true);
   renderFuncMatrix(view);
   drawFuncFigure(openFuncFig);
+}
+
+/** The Function panel's figure bar and table frame, shown with a table only. */
+function funcChrome(on) {
+  document.querySelector("#funcPanel .fig-tabs")?.classList.toggle("hide", !on);
+  // The whole frame, search box included: hiding the box alone left the empty
+  // table's border drawn under the question.
+  document.querySelector("#funcPanel .matrixWrap")?.classList.toggle("hide", !on);
 }
 
 /**
@@ -6127,7 +6702,12 @@ function renderFuncMatrix(view) {
       return `Open ${r.id} on KEGG for ${t.samples[c]}, coloured by this sample's ` +
         `ortholog abundances on a log scale` +
         (noGrey ? " — an overview map, which KEGG draws in its own colours and " +
-          "offers no grey version, so ours read less clearly there" : "");
+          "offers no grey version, so ours read less clearly there" : "") +
+        // The one place this page sends anything of yours, so it says so where
+        // the click is: the colours are the data.
+        `. Following it sends kegg.jp this map's orthologs detected in ` +
+        `${t.samples[c]}, each with a colour for its abundance — no sample name, ` +
+        `no read — and nothing is sent unless you click`;
     },
   });
 
@@ -6155,7 +6735,7 @@ function renderFuncMatrix(view) {
       // second number is the one that matters: 3,500 hidden rows holding 4% of
       // the signal is noise removed, holding 40% would be the answer removed.
       (t.hidden
-        ? ` (${t.hidden.toLocaleString()} more below ${t.floor}%, holding ` +
+        ? ` (${t.hidden.toLocaleString("en-US")} more below ${t.floor}%, holding ` +
           `${(t.carried * 100).toFixed(1)}% of the table)`
         : "") +
       (funcGrain === "ko"
@@ -6193,11 +6773,12 @@ function drawFuncFigure(kind) {
     document.getElementById("funcFigClose")?.classList.add("hide");
     hideDetail(FUNC_SURFACE);
     if (note) note.textContent = "";
-    for (const b of document.querySelectorAll(".func-tab")) b.classList.remove("is-on");
+    for (const b of document.querySelectorAll(".func-tab")) setTabOn(b, false);
     return;
   }
   const view = lastMatrix ? viewOf(lastMatrix) : null;
   const t = funcTableFor(view, funcGrain);
+  const comp = kind === "composition" ? funcCompositionTable(view) : null;
   canvas.classList.remove("hide");
   canvas.innerHTML = "";
   document.getElementById("funcFigClose")?.classList.remove("hide");
@@ -6256,7 +6837,8 @@ function drawFuncFigure(kind) {
           pair: contrastPair, scale: 100, sort: contrastSort,
           stats: contrastStatsFor(t, `func:${funcGrain}`) })
         : contrastRefusalHtml(t))
-    : compositionSvg(t, { width: w, height: h, topN: funcTopNValue, otherLabel: `other ${unit}` });
+    : compositionSvg(comp, { width: w, height: h, topN: funcTopNValue, otherLabel: `other ${unit}`,
+      share: funcGrain === "gmm" ? GMM_SHARE : undefined });
   const funcNeedsGroups = kind === "contrast" && !contrastable(t) && !contrastFallback;
   if (funcNeedsGroups) wireContrastRefusal(canvas, t);
   dl?.classList.toggle("hide", funcNeedsGroups);
@@ -6278,7 +6860,7 @@ function drawFuncFigure(kind) {
   // composition, and nothing was listening.
   wireFigure(canvas, funcTableFor(view, "ko"), FUNC_SURFACE);
   for (const b of document.querySelectorAll(".func-tab")) {
-    b.classList.toggle("is-on", b.dataset.ffig === kind);
+    setTabOn(b, b.dataset.ffig === kind);
   }
   if (note) {
     // What a rolled-up level costs the figure, said under the figure. The
@@ -6290,8 +6872,18 @@ function drawFuncFigure(kind) {
     // things present.
     const overlap = funcGrain !== "ko";
     const plain = FIG_PLAIN[kind] ? `${FIG_PLAIN[kind]} ` : "";
+    // The row count the figure was drawn from, said against the table's, so the
+    // two numbers on one screen cannot read as a contradiction.
+    const allRows = kind === "contrast" || kind === "pcoa"
+      ? ` · all ${t.rows.length} rows, below the table's floor too: a distance or a test ` +
+        `over a display threshold would answer another question`
+      : "";
     note.textContent = plain + (kind === "composition"
-        ? `${t.rows.length} rows, measured from the reads in amino-acid k-mers` +
+        ? `${comp.rows.length} rows, the ones the table shows` +
+          (comp.hidden ? ` above its ${comp.floor}% floor` : "") +
+          (comp.overview ? ` · ${comp.overview} global and overview maps (map011xx–map013xx) ` +
+            `left out: each re-counts the orthologs of the maps it summarises, so they are not ` +
+            `shares of the same bar — they stay in the table` : "") +
           (overlap ? ` · each bar is renormalised, because ${unit} overlap and do not sum to the sample`
             : " · every measured ortholog, summing to the whole")
         : kind === "alpha"
@@ -6299,9 +6891,9 @@ function drawFuncFigure(kind) {
             (overlap ? ` — not over ${unit}, which overlap: an index over categories that ` +
               `share members is not a diversity index` : "")
           : kind === "contrast"
-            ? `${t.rows.length} rows · click a dot for that sample`
+            ? `${t.rows.length} rows · click a dot for that sample${allRows}`
           : `${t.rows.length} rows, measured from the reads in amino-acid k-mers` +
-            (overlap ? ` · ${unit} overlap` : ""));
+            (overlap ? ` · ${unit} overlap` : "") + allRows);
   }
 }
 
@@ -6347,7 +6939,10 @@ const groupsCsv = (samples) => groupsCsvFrom(samples, metaGroups);
 function downloadFuncMatrix(sep, ext) {
   const view = lastMatrix ? viewOf(lastMatrix) : null;
   if (!view) return;
-  const level = funcGrain === "ko" ? "orthologs" : funcGrain === "module" ? "modules" : "pathways";
+  // Named for the level on screen — the gut-metabolic-module table went out
+  // called "functions-pathways".
+  const level = funcGrain === "ko" ? "orthologs" : funcGrain === "module" ? "modules"
+    : funcGrain === "gmm" ? "gut-metabolic-modules" : "pathways";
   // The separator goes IN, so every field is escaped for it. Writing the TSV
   // and swapping tabs for commas afterwards is what broke most rows of the CSV.
   const text = funcMatrixTsv(view, sep);

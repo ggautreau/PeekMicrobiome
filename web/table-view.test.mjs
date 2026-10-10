@@ -96,6 +96,15 @@ check("and a search that matches nothing says so in words",
   arrangeNote(arrangeRows(ROWS, { find: "zzz" }), "species") === "nothing matches that search");
 check("an empty table says nothing at all",
   arrangeNote(arrangeRows([]), "species") === "");
+// The page is in English and writes "13,509" everywhere else. A count that
+// followed the browser's locale printed "4 307" beside it in a French browser.
+{
+  const many = Array.from({ length: 4307 }, (_, i) => ({ species: `k${i}`, genome: `K${i}`, values: [i] }));
+  check("a count is written the way the rest of the page writes numbers, whatever the locale",
+    arrangeNote(arrangeRows(many), "orthologs") === "4,307 orthologs" &&
+    arrangeNote(arrangeRows(many, { find: "k1" }), "orthologs").endsWith("of 4,307 orthologs"),
+    arrangeNote(arrangeRows(many), "orthologs"));
+}
 
 console.log(`\n${pass} passed, ${fail} failed (table-view)`);
 process.exit(fail ? 1 : 0);

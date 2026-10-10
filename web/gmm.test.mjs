@@ -91,8 +91,12 @@ const TEXT = [
   // subunit, and half a complex is not the complex.
   check("half a complex covers nothing", at("MF0003").coverage[2] === 0,
     String(at("MF0003").coverage[2]));
-  check("...and a whole one is the median of its own orthologs",
-    Math.abs(at("MF0003").values[0] - 0.2) < 1e-12, String(at("MF0003").values[0]));
+  // ...and a whole one is worth its rarest subunit: K0006 at 0.1 and K0007 at
+  // 0.3 make a complex at 0.1. This used to read 0.2, the median of the two —
+  // the complex's abundant subunit lifting it above the rare one the rule is
+  // about.
+  check("...and a whole one is worth its rarest subunit, not their median",
+    Math.abs(at("MF0003").values[0] - 0.1) < 1e-12, String(at("MF0003").values[0]));
   // Below the cutoff the module reports zero rather than a quantity computed
   // from the two steps of seven that happened to be there.
   check("a module under the coverage cutoff reports nothing, not a fraction",
@@ -118,6 +122,29 @@ const TEXT = [
   // Prototype keys arrive from a file a reader opened.
   check("an ortholog named like an Object member is not a lookup on the prototype",
     gmmTable({ s: { constructor: 1 } }, ["s"], d).rows.every((r) => r.values[0] === 0));
+}
+
+// ---- one value per step ---------------------------------------------------------
+//
+// The median is over STEPS. Pushing every subunit of a complex into it made a
+// four-subunit complex weigh as four steps, and its three abundant subunits
+// outvoted the rare one: K1 = 1, K2 = 1 and a complex {10, 10, 10, 0.1} gave
+// median(1, 1, 10, 10, 10, 0.1) = 5.5. One value per step — the complex at its
+// rarest, 0.1 — gives median(1, 1, 0.1) = 1.
+{
+  const d = parseGmms([
+    "MF0009\ttwo steps and a complex",
+    "K1", "K2", "K3,K4,K5,K6", "///", "",
+  ].join("\n"));
+  const t = gmmTable({ s: { K1: 1, K2: 1, K3: 10, K4: 10, K5: 10, K6: 0.1 } }, ["s"], d);
+  check("a complex counts as one step in the median, at its rarest subunit",
+    Math.abs(t.rows[0].values[0] - 1) < 1e-12, String(t.rows[0].values[0]));
+  // The alternative TAKEN is still the one whose rarest subunit is largest: a
+  // two-subunit complex at {5, 0.2} loses to a lone ortholog at 0.3.
+  const alt = gmmTable({ s: { K1: 5, K2: 0.2, K3: 0.3 } }, ["s"],
+    parseGmms("MF0010\tchoice\nK1,K2\tK3\n///\n"));
+  check("...and the best alternative is judged by its rarest subunit",
+    Math.abs(alt.rows[0].values[0] - 0.3) < 1e-12, String(alt.rows[0].values[0]));
 }
 
 // ---- the real catalogue, when the person running this has a copy ----------------

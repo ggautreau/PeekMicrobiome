@@ -48,8 +48,13 @@ export function resolveTheme(mode, schedule = loadSchedule(), now = new Date()) 
   return matchMedia?.("(prefers-color-scheme: dark)")?.matches ? "dark" : "light";
 }
 
+// Nothing chosen yet means "follow the OS". It meant "light", which left a reader
+// whose whole system is dark with a white page they had never asked for — and the
+// mode that does follow the OS was there all along, one dialog away.
+export const DEFAULT_MODE = "auto";
+
 export function currentMode() {
-  try { return localStorage.getItem(THEME_KEY) || "light"; } catch { return "light"; }
+  try { return localStorage.getItem(THEME_KEY) || DEFAULT_MODE; } catch { return DEFAULT_MODE; }
 }
 
 export function applyTheme(mode = currentMode()) {
@@ -73,17 +78,35 @@ setInterval(() => {
   if (currentMode() === "schedule") applyTheme("schedule");
 }, 60_000);
 
-document.addEventListener("DOMContentLoaded", () => {
+/**
+ * The header's light/dark button, found by its own name.
+ *
+ * It was found as "the first `.theme-toggle`" — and on the multi-sample page the
+ * first one is the Settings gear, which borrows that class for its square
+ * outline. So the moon did nothing, and every opening of Settings flipped the
+ * palette and overwrote an "auto" or "schedule" mode the dialog then still
+ * showed as chosen. The label is the fallback for a page that has not given the
+ * button its id.
+ */
+export function themeButton(doc = document) {
+  return doc.getElementById("themeToggle")
+    ?? doc.querySelector('.theme-toggle[aria-label="Toggle theme"]');
+}
+
+const ready = (fn) => (document.readyState === "loading"
+  ? document.addEventListener("DOMContentLoaded", fn) : fn());
+
+ready(() => {
   // The header button stays a quick light/dark flip — the four-way choice lives
   // in Settings, and a single click is what a toggle is for.
-  const btn = document.querySelector(".theme-toggle");
+  const btn = themeButton();
   if (btn) {
     btn.addEventListener("click", () => {
       setMode(document.documentElement.getAttribute("data-theme") === "dark" ? "light" : "dark");
       document.dispatchEvent(new CustomEvent("theme-changed"));
     });
   }
-  const path = (location.pathname.split("/").pop() || "index.html").toLowerCase();
+  const path = (String(location.pathname ?? "").split("/").pop() || "index.html").toLowerCase();
   document.querySelectorAll(".app-nav a").forEach((a) => {
     const href = (a.getAttribute("href") || "").toLowerCase();
     if (href.endsWith(path)) a.classList.add("active");

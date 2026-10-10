@@ -416,6 +416,73 @@ console.log("== truncated gzip ==");
   check("an intact .gz still succeeds", whole.reads === 2000, `${whole.reads}`);
 }
 
+// ---- a cancelled read is a cancellation, never a shorter sample --------------
+//
+// The same failure as the truncated gzip, by another road. Cancelling makes the
+// reader's pending read() resolve with done:true — exactly what the end of a
+// file looks like. A .gz then throws anyway (the deflate stream is cut), but an
+// UNCOMPRESSED FASTQ came back as a complete sample of whatever had been read,
+// which the worker profiled and the page recorded as done.
+console.log("== cancellation ==");
+{
+  const BIG = makeFastq(4000, 91);
+  for (const [label, bytes] of [["uncompressed", BIG], ["gzip", gzipSync(BIG)]]) {
+    const ac = new AbortController();
+    let fed = 0, threw = null, res = null;
+    const run = streamTrimMulti([new FakeFile(bytes, 4096, 2)], 1e9,
+      (c) => { fed += c.length; }, null, ac.signal);
+    setTimeout(() => ac.abort(), 30);
+    try { res = await run; } catch (e) { threw = e; }
+    check(`a cancelled ${label} read rejects with an AbortError`,
+      threw?.name === "AbortError",
+      threw ? `${threw.name}: ${threw.message}` : `resolved with ${res?.reads} of 4000 reads`);
+    check(`...after reading only part of it (${label})`, fed > 0 && fed < BIG.length,
+      `${fed} of ${BIG.length}`);
+  }
+  // And a read that completes before anyone cancels is a result, as before.
+  const ac = new AbortController();
+  const done = await streamTrimMulti([new FakeFile(BIG, 4096)], 1e9, () => {}, null, ac.signal);
+  check("a read that finished before any cancel is still a result", done.reads === 4000,
+    `${done.reads}`);
+}
+
+// ---- several files, one sample: a missing final newline ----------------------
+//
+// A sample split over several files is read as ONE stream. A file whose last
+// quality line has no newline glued it to the next file's first header, the
+// sketcher stopped at "IIII@read" — and every read of every later file was left
+// out, with nothing said.
+console.log("== the seam between two files ==");
+{
+  const A = makeFastq(300, 5), B = makeFastq(300, 6);
+  const noNl = A.subarray(0, A.length - 1);
+  let out = [];
+  const res = await streamTrimMulti([new FakeFile(noNl, 1000), new FakeFile(B, 1000)], 1e9,
+    (c) => out.push(Buffer.from(c)));
+  const joined = Buffer.concat(out);
+  check("the seam gets the newline the first file left out",
+    same(joined, Buffer.concat([Buffer.from(A), Buffer.from(B)])), `${joined.length} bytes`);
+  check("...so all 600 reads are counted", res.reads === 600, `${res.reads}`);
+  out = [];
+  await streamTrimMulti([new FakeFile(gzipSync(noNl), 1000), new FakeFile(gzipSync(B), 1000)], 1e9,
+    (c) => out.push(Buffer.from(c)));
+  check("...in gzip too", same(Buffer.concat(out), Buffer.concat([Buffer.from(A), Buffer.from(B)])));
+  // Only BETWEEN files: the last one may end without a newline, and nothing is
+  // added after it — the sketcher reads that record out of its carry.
+  out = [];
+  const last = await streamTrimMulti([new FakeFile(A, 1000), new FakeFile(B.subarray(0, B.length - 1), 1000)],
+    1e9, (c) => out.push(Buffer.from(c)));
+  const tail = Buffer.concat(out);
+  check("nothing is added after the LAST file", tail[tail.length - 1] !== 0x0A, `${tail.length} bytes`);
+  check("...whose unterminated last record still counts", last.reads === 600, `${last.reads}`);
+  // Why each read ended, which the worker passes on to the page.
+  const why = async (cap, bases) => (await streamTrimMulti([new FakeFile(A, 1000)], cap, () => {},
+    null, null, null, undefined, bases)).stoppedBy;
+  check("stoppedBy: null at the end of the input", (await why(1e9, Infinity)) === null);
+  check("stoppedBy: reads at the read cap", (await why(100, Infinity)) === "reads");
+  check("stoppedBy: bases at the base cap", (await why(1e9, 50 * 150)) === "bases");
+}
+
 // ---- paired-end: the cross-stop must not ignore the carry -------------------
 console.log("== paired-end cross-stop and the carry ==");
 {
@@ -953,6 +1020,43 @@ console.log("== wasm package choice ==");
   check("a non-finite maxReads defaults to 32-bit", bits(NaN, true) === 32);
   check("undefined memory64 is treated as absent", bits(50_000_000, undefined) === 32);
 
+  // THE DATABASE IS IN THE SAME MEMORY. The budget above was measured as if the
+  // sketch had the 4 GB to itself; a .syldb takes ~2x its size once loaded
+  // (measured 2.00-2.04x on four catalogues), and soil.syldb is 2.96 GB — it
+  // died in the 32-bit constructor with `unreachable`, which poisons the worker.
+  const { dbRefusal, DB_LOAD_FACTOR } = await import("./sylph-worker-rpc.js");
+  const SOIL = 2_959_289_168, MARINE = 1_281_608_885, GUT = 454_021_440;
+  const pick = (o) => chooseWasmBits({ memory64: true, ...o });
+  check("the human-gut default stays 32-bit at the default cap",
+    pick({ maxReads: 3_000_000, dbBytes: GUT }).bits === 32);
+  check("...and at the full 32-bit budget",
+    pick({ maxReads: WASM32_SAFE_READS, dbBytes: GUT }).bits === 32);
+  check("soil goes 64-bit even for a tiny run — it cannot load in 32 bits at all",
+    pick({ maxReads: 10_000, dbBytes: SOIL }).bits === 64, pick({ maxReads: 10_000, dbBytes: SOIL }).reason);
+  check("marine goes 64-bit at the full read budget, where catalogue + reads pass 4 GB",
+    pick({ maxReads: WASM32_SAFE_READS, dbBytes: MARINE }).bits === 64);
+  check("...but stays 32-bit for a small run, where both fit",
+    pick({ maxReads: 3_000_000, dbBytes: MARINE }).bits === 32);
+  const noMem64 = chooseWasmBits({ maxReads: 10_000, memory64: false, dbBytes: SOIL });
+  check("without memory64, a database that cannot load in 32 bits is REFUSED, with a sentence",
+    typeof noMem64.refuse === "string" && /64-bit build/.test(noMem64.refuse) && /memory64/.test(noMem64.refuse),
+    noMem64.refuse);
+  check("...while one that merely strains the read budget is not",
+    chooseWasmBits({ maxReads: 50_000_000, memory64: false, dbBytes: GUT }).refuse === null);
+  check("a refusal is null whenever a build can load it",
+    pick({ maxReads: 1, dbBytes: SOIL }).refuse === null && pick({ maxReads: 1, dbBytes: GUT }).refuse === null);
+  check("dbRefusal: soil in 32 bits is refused, in 64 bits it is not",
+    dbRefusal(32, SOIL) !== null && dbRefusal(64, SOIL) === null);
+  check("dbRefusal: the human gut is fine in 32 bits", dbRefusal(32, GUT) === null);
+  check("the load factor is the measured one, rounded up", DB_LOAD_FACTOR >= 2.04 && DB_LOAD_FACTOR < 2.2);
+  // PAIRS. The worker counts pairs, and a pair stores about what two reads do;
+  // the budget was measured on single-end reads.
+  check("half the read budget in PAIRS still fits 32 bits",
+    pick({ maxReads: WASM32_SAFE_READS / 2, pairs: true }).bits === 32);
+  check("one pair past half the budget does not",
+    pick({ maxReads: WASM32_SAFE_READS / 2 + 1, pairs: true }).bits === 64);
+  check("the same number as READS still fits", pick({ maxReads: WASM32_SAFE_READS / 2 + 1 }).bits === 32);
+
   // The margin under the measured ceilings has to be real and generous: the
   // failure mode is an unrecoverable allocator abort, and PE roughly doubles
   // the per-read state.
@@ -1070,6 +1174,52 @@ console.log("== pairing dropped files into samples ==");
     stripFastqExt("single_sample.fq.gz") === "single_sample");
   check("a non-FASTQ extension is not a FASTQ", matePattern("x_1.clean.fs.gz") === null,
     "an unknown extension must not be guessed at");
+
+  // A _1 or _2 INSIDE the sample's name. The leftmost marker used to win, so
+  // sample_1_R1 and sample_2_R1 both read as "sample_R1", mates 1 and 2: the
+  // first reads of two samples paired into one, nothing said. Every name below
+  // is a real-world shape; the column says which file each must pair with.
+  const tagOf = (n) => { const t = matePattern(n); return t && `${t.key}/${t.mate}`; };
+  check("sample_1_R1 is mate 1 of sample_1, not mate 1 of 'sample_R1'",
+    tagOf("sample_1_R1.fastq.gz") === "sample_1/1", tagOf("sample_1_R1.fastq.gz"));
+  check("...and pairs with sample_1_R2", pairs("sample_1_R1.fastq.gz", "sample_1_R2.fastq.gz"));
+  check("...and NOT with sample_2_R1", !pairs("sample_1_R1.fastq.gz", "sample_2_R1.fastq.gz"));
+  check("...nor with sample_2_R2", !pairs("sample_1_R1.fastq.gz", "sample_2_R2.fastq.gz"));
+  check("ctrl_1_1 and ctrl_2_1 are mate 1 of two samples, not a pair",
+    !pairs("ctrl_1_1.fq.gz", "ctrl_2_1.fq.gz")
+      && tagOf("ctrl_1_1.fq.gz") === "ctrl_1/1" && tagOf("ctrl_2_1.fq.gz") === "ctrl_2/1",
+    `${tagOf("ctrl_1_1.fq.gz")} ${tagOf("ctrl_2_1.fq.gz")}`);
+  check("...while ctrl_1_1 and ctrl_1_2 are", pairs("ctrl_1_1.fq.gz", "ctrl_1_2.fq.gz"));
+  check("D1-1_R1 and D1-2_R1 are two samples", !pairs("D1-1_R1.fq.gz", "D1-2_R1.fq.gz"));
+  check("...and D1-1_R1 pairs with D1-1_R2", pairs("D1-1_R1.fq.gz", "D1-1_R2.fq.gz"));
+  check("mouse_1_R1_001 and mouse_2_R1_001 are two samples",
+    !pairs("mouse_1_R1_001.fastq.gz", "mouse_2_R1_001.fastq.gz"));
+  check("...and mouse_1_R1_001 pairs with mouse_1_R2_001",
+    pairs("mouse_1_R1_001.fastq.gz", "mouse_1_R2_001.fastq.gz"));
+  check("Illumina X_S1_L001_R1_001 still pairs with its R2",
+    pairs("X_S1_L001_R1_001.fastq.gz", "X_S1_L001_R2_001.fastq.gz"));
+  check("ERR123_1 still pairs with ERR123_2", pairs("ERR123_1.fastq.gz", "ERR123_2.fastq.gz"));
+  // The other way to get it wrong. Rightmost-always would read an R1 in two
+  // parts as mate 2; an R1/R2 marker outranks a bare digit for that reason.
+  check("s_R1_2 is part 2 of mate 1, and pairs with s_R2_2",
+    tagOf("s_R1_2.fq.gz") === "s_2/1" && pairs("s_R1_2.fq.gz", "s_R2_2.fq.gz"),
+    tagOf("s_R1_2.fq.gz"));
+
+  // Two files claiming the same mate of the same sample. Paired in drop order,
+  // they mixed two libraries; refused, each is profiled on its own, and the
+  // conflict is named so the page can say why.
+  const { mateTags } = await import("./sample-naming.js");
+  const drop = ["a_1.fq.gz", "a.1.fq.gz", "a_2.fq.gz", "b_1.fq.gz", "b_2.fq.gz", "c.fq.gz"];
+  const { tags, conflicts } = mateTags(drop);
+  check("two files claiming mate 1 of one sample are both refused as mates",
+    tags.get("a_1.fq.gz") === null && tags.get("a.1.fq.gz") === null);
+  check("...the conflict names both files",
+    conflicts.length === 1 && conflicts[0].key === "a" && conflicts[0].mate === "1"
+      && conflicts[0].names.join() === "a_1.fq.gz,a.1.fq.gz",
+    JSON.stringify(conflicts));
+  check("...and the unambiguous pair beside them is left alone",
+    tags.get("b_1.fq.gz")?.key === "b" && tags.get("b_2.fq.gz")?.mate === "2");
+  check("...and a file with no marker stays untagged", tags.get("c.fq.gz") === null);
 }
 
 // Sources read by the biome section below. `here` and `rpcSrc` come from the
@@ -1157,9 +1307,18 @@ const catalogEntries = biomes.allBiomes(catalog);
     catalogEntries.find((b) => !Number.isFinite(b.species) || !Number.isFinite(b.bytes))?.key ?? "");
   check("the option text shows both, plus where the bytes come from",
     /4,744 species/.test(biomes.optionLabel(biomes.biomeByKey(catalog, "human-gut")))
-    && /433 MB/.test(biomes.optionLabel(biomes.biomeByKey(catalog, "human-gut")))
+    && /454 MB/.test(biomes.optionLabel(biomes.biomeByKey(catalog, "human-gut")))
     && /Zenodo/.test(biomes.optionLabel(biomes.biomeByKey(catalog, "human-gut"))),
     biomes.optionLabel(biomes.biomeByKey(catalog, "human-gut")));
+  // Decimal, like every sentence on the page: the picker used to say 433 MB
+  // (1024-based) a line above a paragraph saying 454 MB, for one file.
+  check("the picker and the page's prose give a database the same size",
+    biomes.fmtSize(454021440) === "454 MB" && biomes.fmtSize(2959289168) === "3.0 GB"
+      && biomes.fmtSize(12557284) === "13 MB" && biomes.fmtSize(6516832) === "6.5 MB",
+    [454021440, 2959289168, 12557284, 6516832].map(biomes.fmtSize).join(", "));
+  check("a label that already gives the count does not get it twice",
+    !/species.*species/.test(biomes.optionLabel(biomes.biomeByKey(catalog, "gut-mini") ?? {})),
+    biomes.optionLabel(biomes.biomeByKey(catalog, "gut-mini") ?? {}));
 
   // The lineage map names genomes, and there is one per catalogue. Declaring it
   // per entry is what stops the gut map being fetched for a soil database — the
@@ -1411,9 +1570,13 @@ console.log("== the figures compute what they claim to ==");
     // THE FLOOR. At three samples a group the smallest attainable p is 0.1, so
     // no row can reach 0.05 however cleanly the groups separate. Printing q
     // without that is printing a column of failures and calling it evidence.
+    // And it must say it the right way round: 0.1 IS reached — by a perfect
+    // split — so "nothing can reach 0.1", which the caption once said, was the
+    // opposite of the arithmetic.
     check("...and says, at these group sizes, what the test cannot do",
-      /at 3 v 3 samples nothing can reach 0\.1/.test(svg),
-      (svg.match(/q: Mann-Whitney[^<]*/) ?? ["no floor sentence"])[0]);
+      /smallest attainable p at 3 v 3 is 0\.1, so nothing reaches 0\.05/.test(svg) &&
+      !/nothing can reach 0\.1/.test(svg),
+      (svg.match(/q: [^<]*/) ?? ["no floor sentence"])[0]);
     // The floor is computed from the NUMBER OF SAMPLES, which is the number of
     // observations only if each sample is one. Three stool samples from one
     // donor are not three observations, and the archive's metadata does not
@@ -1421,12 +1584,18 @@ console.log("== the figures compute what they claim to ==");
     // guessing, and this holds it to that.
     check("...and names the assumption that floor rests on",
       /assumes each sample is independent/.test(svg),
-      (svg.match(/q: Mann-Whitney[^<]*/) ?? ["no assumption stated"])[0]);
-    // The family is the whole table, not the ten rows drawn: correcting over the
-    // rows that happened to be shown would choose the denominator after seeing
-    // the answers.
-    check("...corrected over every row of the table, and saying how many",
-      /Benjamini-Hochberg over 3 rows/.test(svg), (svg.match(/over \d+ rows/) ?? ["-"])[0]);
+      (svg.match(/Difference in mean[^<]*/) ?? ["no assumption stated"])[0]);
+    // The family is every row that CAN differ, not the ten rows drawn:
+    // correcting over the rows that happened to be shown would choose the
+    // denominator after seeing the answers. `flat_but_huge` is 0.50 in all six
+    // samples — p = 1 whatever the labels — so it is left out of the family,
+    // and the caption says how many were in it out of how many.
+    check("...corrected over every row that can differ, and saying how many of how many",
+      /Benjamini-Hochberg over the 2 of 3 rows that vary/.test(svg),
+      (svg.match(/over [^<·]*rows[^<·]*/) ?? ["-"])[0]);
+    // Which test it was. Three a side is always the exact one.
+    check("...and naming which test it was",
+      /q: exact Mann-Whitney/.test(svg) && /exact, by permutation/.test(svg));
     // Still ranked by effect. A p-value ranking at nine samples a group is
     // mostly a ranking of how many zeros a row has.
     check("...while the ORDER is still the difference, not the p",
@@ -2991,8 +3160,9 @@ console.log("== the pages carry the reference through ==");
       .test(multiSrc));
   check("...and it adopts the new reference rather than merely describing it",
     /adoptDbRef\(makeDbRef\(\{/.test(multiSrc));
+  // The load lets go of the pool (releaseBusy) in its finally, whatever ended it.
   check("multi.js re-enables (or greys out) Profile all after a failed load",
-    /setRunControls\(false\);\s*\n(\s*\/\/[^\n]*\n)*\s*paintBiomeNote\(\);\s*\n\s*refreshRunButton\(\);/
+    /releaseBusy\("db"\);\s*\n(\s*\/\/[^\n]*\n)*\s*paintBiomeNote\(\);\s*\n\s*refreshRunButton\(\);/
       .test(multiSrc));
 
   // The matrix carries the reference it was PROFILED against, not the one that
@@ -3001,7 +3171,8 @@ console.log("== the pages carry the reference through ==");
     /const runRef = currentRef;/.test(multiSrc)
     // The call now goes through lastRaw, which is what a rank change re-sums —
     // but its `ref` is still the run's, which is the property being pinned.
-    && /lastRaw = \{ matrix, sampleOrder, ref: runRef,/.test(multiSrc)
+    // sampleOrder() — the order of the sample list, not of the workers.
+    && /lastRaw = \{ matrix, sampleOrder: sampleOrder\(\), ref: runRef,/.test(multiSrc)
     && /matrixToTable\(lastRaw\.matrix, lastRaw\.sampleOrder, lastRaw\.ref/.test(multiSrc)
     && /return \{ samples: sampleOrder, rows, ref, refs, mixed \}/.test(multiSrc));
   // Stronger than the above, and the reason it changed shape: the reference is

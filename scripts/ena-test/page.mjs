@@ -528,10 +528,13 @@ try {
   // grouping — three samples a side — the smallest p the test can return is 0.1,
   // so no row can reach 0.05: without that sentence the q column reads as a
   // column of failures rather than as arithmetic.
+  // Said the right way round — 0.1 itself IS reached, by a perfect split — and
+  // in whichever of its shortenings fits the width the page gives the figure.
   check("...with a q per row, and the floor that q cannot go below",
     /Benjamini-Hochberg q = /.test(cSvg) &&
-    /nothing can reach 0\.1/.test(cSvg),
-    (cSvg.match(/q: Mann-Whitney[^<]*/) ?? ["no floor sentence"])[0]);
+    /at 3 v 3 is 0\.1, so nothing reaches 0\.05|0\.1 at 3 v 3: nothing reaches 0\.05|at 3 v 3 p ≥ 0\.1 > 0\.05/
+      .test(cSvg) && !/nothing can reach 0\.1/.test(cSvg),
+    (cSvg.match(/q: [^<]*/) ?? ["no floor sentence"])[0]);
   const cDots = (cSvg.match(/<circle /g) ?? []).length;
   check("...with one dot per sample per row", cDots >= 18, `${cDots} dots`);
   const cNote = await cdp.eval(`document.getElementById("figNote").textContent`);
@@ -669,9 +672,13 @@ try {
   // apply; the demo's donor grouping (three a side) is where it does, and that is
   // checked below by regrouping.
   const fSvg2 = await cdp.eval(`document.getElementById("funcCanvas").innerHTML`);
-  check("the contrast carries a q, corrected across every row of the table",
-    /Benjamini-Hochberg q = /.test(fSvg2) && /Benjamini-Hochberg over \d+ rows/.test(fSvg2),
-    (fSvg2.match(/over \d+ rows/) ?? ["none"])[0]);
+  // Corrected over every row that CAN differ, and saying how many: all of them
+  // when every row varies across the samples, "the k of n rows that vary" when
+  // some are equal in every sample of both groups (p = 1 by construction).
+  check("the contrast carries a q, corrected across every row that can differ",
+    /Benjamini-Hochberg q = /.test(fSvg2) &&
+    /(Benjamini-Hochberg|BH) over (all \d+|the \d+ of \d+|\d+ of \d+) rows/.test(fSvg2),
+    (fSvg2.match(/over [^<·]*rows/) ?? ["none"])[0]);
 
   // A dot in a lane stands for a sample, exactly as a point in the ordination
   // does — and it was the only such mark on the page that could not be asked

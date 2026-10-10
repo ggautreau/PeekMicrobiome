@@ -188,6 +188,27 @@
 // v55: the results split into Taxonomy and Function, each with its own matrix,
 // downloads and figures — and the bundled example now carries the functional
 // half, which is 1 MB more session than a page on v54 expects to fetch.
+// v80: THE WORKER PROTOCOL CHANGED, in four places, after a review found results
+// that were wrong with nothing to say so:
+//   - every profile reply carries `stop` ("eof" | "reads" | "bases" |
+//     "truncated") and `stopDetail`. A FASTQ that stops at a malformed record,
+//     and a pair whose two files do not hold the same number of reads, used to
+//     come back as complete samples profiled on part of their reads; a page on
+//     v79 would go on showing them as results.
+//   - a cancelled sample replies `ok: false, name: "AbortError"` and the RPC
+//     rejects with an AbortError — before, an uncompressed FASTQ cancelled
+//     half-way came back `ok: true`, a partial sample recorded as done;
+//   - the worker runs its messages ONE AT A TIME, in arrival order. It owns one
+//     Profiler, and two profile calls, or a loadDb during a profile, used to
+//     interleave on it at every await: a sample came back with 6,757 of its
+//     60,000 reads, or none, depending on scheduling;
+//   - "loadFuncRefs" really uses the `bytes` the page sends (v79 announced it and
+//     the worker dropped the field, so the pool still fetched once per worker),
+//     and a failure there is a reply instead of a promise that never settles.
+// "profileFile" also takes `maxBases`, the cap the multi-sample paths already
+// had, and a database too big for the loaded build is refused with a sentence
+// before the constructor aborts the allocator. ena.js stops following redirects
+// on FASTQ downloads and its readCountVerdict takes the `stop` above.
 // v79: THE WORKER PROTOCOL CHANGED — "loadFuncRefs" now accepts a `bytes` field
 // and uses it instead of fetching. A page on v79 hands the compressed reference
 // to a worker; a cached v78 worker would ignore the field and fetch the URL
@@ -312,7 +333,7 @@
 // its legend and counted "effective number of taxa"; both now take the label and
 // the unit. The functional matrix is drawn by the same renderer as the
 // taxonomic one, with the KEGG identifier linked where the genome accession is.
-export const WORKER_VERSION = "79";
+export const WORKER_VERSION = "80";
 
 // ---- memory64 capability probe ----------------------------------------------
 
@@ -448,39 +469,120 @@ export function progressFraction({ bytesIn, total, reads, cap } = {}) {
   return Math.min(1, Math.max(0, Math.max(...known)));
 }
 
+// ---- the database's share of the same memory ---------------------------------
+//
+// The reads budget above was measured as if the sketch had the address space to
+// itself. It does not: the catalogue lives in the same linear memory, and it is
+// not small. `new Profiler(bytes)` copies the .syldb in and decodes it beside
+// the copy, and wasm never hands the high-water mark back. Measured with the
+// shipped wasm32 package, linear memory right after the constructor:
+//
+//   human-oral        33,236,205 B  ->    67,633,152 B  (2.035x)
+//   cow-rumen        248,090,414 B  ->   497,483,776 B  (2.005x)
+//   human-gut        454,021,440 B  ->   909,377,536 B  (2.003x)
+//   marine-sediment  706,660,184 B  -> 1,414,725,632 B  (2.002x)
+//
+// so `soil` (2,959,289,168 B) needs ~5.9 GB before a single read is sketched and
+// cannot load in 32 bits at all — it died in the constructor with `unreachable`,
+// which poisons the worker — while `marine` (1.28 GB) loads at 2.39 GiB and
+// leaves too little of the 4 GiB for the reads budget to mean anything.
+export const DB_LOAD_FACTOR = 2.05;
+const GIB = 2 ** 30;
+export const WASM32_MEMORY_BYTES = 4 * GIB;
+export const WASM64_MEMORY_BYTES = 16 * GIB;
+// What the ceiling runs had reserved when they died: an upper bound on the
+// sketch state at the SAFE read count, which is half of what those runs held.
+export const WASM32_STATE_BYTES = 2.385 * GIB;
+export const WASM64_STATE_BYTES = 8.762 * GIB;
+// Never fill the address space with the catalogue alone: the inference pass
+// and the first reads need somewhere to go.
+const DB_HEADROOM_BYTES = GIB / 4;
+
+/** Linear memory a database takes once loaded, at the measured factor. */
+export const dbLoadBytes = (dbBytes) =>
+  Number.isFinite(dbBytes) && dbBytes > 0 ? DB_LOAD_FACTOR * dbBytes : 0;
+
+// The sketch state of `reads` (single-end equivalents), scaled from the state
+// the ceiling run held. Linear, which overstates small runs a little: a bound,
+// not a prediction.
+function stateBytes(reads, bits) {
+  const r = Number.isFinite(reads) && reads > 0 ? reads : 0;
+  return bits === 64
+    ? WASM64_STATE_BYTES * (r / WASM64_SAFE_READS)
+    : WASM32_STATE_BYTES * (r / WASM32_SAFE_READS);
+}
+
+/**
+ * Why a database of `dbBytes` cannot be loaded into the `bits` build at all, or
+ * null when it can. Asked BEFORE `new Profiler(bytes)`: past the address space
+ * the constructor does not throw, it aborts the allocator, and the worker is
+ * unusable until the page is reloaded. A sentence beats that.
+ */
+export function dbRefusal(bits, dbBytes) {
+  const need = dbLoadBytes(dbBytes);
+  const room = (bits === 64 ? WASM64_MEMORY_BYTES : WASM32_MEMORY_BYTES) - DB_HEADROOM_BYTES;
+  if (need <= room) return null;
+  const gb = (n) => `${(n / 1e9).toFixed(1)} GB`;
+  return bits === 64
+    ? `this database (${gb(dbBytes)}) needs about ${gb(need)} of WebAssembly memory once ` +
+      `loaded, past the 16 GB a browser allows even the 64-bit build`
+    : `this database (${gb(dbBytes)}) needs about ${gb(need)} of WebAssembly memory once ` +
+      `loaded, past the 4 GB of the 32-bit build — it needs the 64-bit build, which needs ` +
+      `memory64 (Chrome 133+, Firefox 134+; no version of Safari)`;
+}
+
 // THE POLICY. wasm64 is 1.58x-1.68x slower end-to-end than wasm32 on the same
 // profile() (measured; the cost is in the inference phase, not the sketching,
 // which is within 1.7%). So 32-bit is the default and 64-bit is chosen only when
 // 32-bit provably will not hold the run.
 //
-// Returns { bits, capped, memory64, reason }. `capped` means the user asked for
-// more reads than this browser can deliver — the run is going to be attempted at
-// 32 bits and may abort. Say so in the UI; do not swallow it.
-export function chooseWasmBits({ maxReads, memory64 } = {}) {
+// Two things have to fit, not one: the reads, and the database they are
+// profiled against. `maxReads` is in the unit the worker counts — PAIRS for a
+// paired sample — and `pairs: true` says so: a pair stores one entry plus two
+// inter-mate markers, so it costs about what two single-end reads do, and the
+// budget was measured on single-end reads. `dbBytes` is the .syldb size.
+//
+// Returns { bits, capped, memory64, reason, refuse }. `capped` means the user
+// asked for more reads than this browser can deliver — the run is going to be
+// attempted at 32 bits and may abort. Say so in the UI; do not swallow it.
+// `refuse` is a sentence when NO build this browser has can even load the
+// database (it is null otherwise): do not load it, show the sentence.
+export function chooseWasmBits({ maxReads, memory64, dbBytes = 0, pairs = false } = {}) {
   const has64 = memory64 === true || memory64?.ok === true;
   const why64 = memory64?.reason ?? (has64 ? "memory64 available" : "memory64 unavailable");
-  const needs64 = Number.isFinite(maxReads) && maxReads > WASM32_SAFE_READS;
+  const readsEq = Number.isFinite(maxReads) ? maxReads * (pairs ? 2 : 1) : maxReads;
+  const unit = pairs ? "pairs" : "reads";
+  const asked = `${fmtReads(maxReads)} ${unit}${pairs ? ` (${fmtReads(readsEq)} reads' worth)` : ""}`;
+  const readsFit32 = !(Number.isFinite(readsEq) && readsEq > WASM32_SAFE_READS);
+  const dbFits32 = dbRefusal(32, dbBytes) === null;
+  // The catalogue and the reads together, against the 32-bit address space.
+  const bothFit32 = dbLoadBytes(dbBytes) + stateBytes(readsEq, 32) <= WASM32_MEMORY_BYTES;
+  const dbNote = dbBytes > 0
+    ? ` with a ${(dbBytes / 1e9).toFixed(2)} GB database (~${(dbLoadBytes(dbBytes) / 1e9).toFixed(1)} GB loaded)`
+    : "";
 
-  if (!needs64) {
+  if (readsFit32 && bothFit32) {
     return {
-      bits: 32, capped: false, memory64: has64,
-      reason: `${fmtReads(maxReads)} reads is inside the 32-bit budget ` +
-        `(safe up to ${fmtReads(WASM32_SAFE_READS)}); the 32-bit build is ~1.6x faster`,
+      bits: 32, capped: false, memory64: has64, refuse: null,
+      reason: `${asked} is inside the 32-bit budget${dbNote} ` +
+        `(safe up to ${fmtReads(WASM32_SAFE_READS)} reads); the 32-bit build is ~1.6x faster`,
     };
   }
+  const why = !readsFit32
+    ? `${asked} needs more than the 32-bit budget (safe up to ${fmtReads(WASM32_SAFE_READS)} reads)`
+    : `${asked}${dbNote} does not fit the 32-bit build's 4 GB`;
   if (!has64) {
     return {
       bits: 32, capped: true, memory64: false,
-      reason: `${fmtReads(maxReads)} reads needs more than the 32-bit budget ` +
-        `(safe up to ${fmtReads(WASM32_SAFE_READS)}) but this browser has no memory64 ` +
-        `(${why64}), so there is nothing else to load`,
+      refuse: dbFits32 ? null : dbRefusal(32, dbBytes),
+      reason: `${why} but this browser has no memory64 (${why64}), so there is nothing else to load`,
     };
   }
   return {
     bits: 64, capped: false, memory64: true,
-    reason: `${fmtReads(maxReads)} reads exceeds the 32-bit budget ` +
-      `(safe up to ${fmtReads(WASM32_SAFE_READS)}); switching to the 64-bit build ` +
-      `(safe up to ${fmtReads(WASM64_SAFE_READS)}) at ~1.6x the run time`,
+    refuse: dbRefusal(64, dbBytes),
+    reason: `${why}; switching to the 64-bit build ` +
+      `(safe up to ${fmtReads(WASM64_SAFE_READS)} reads) at ~1.6x the run time`,
   };
 }
 
@@ -556,44 +658,95 @@ export function readsOverBudgetNote(maxReads, memory64) {
     `sylph on a server.`;
 }
 
-export function sylphWorkerRpc() {
-  const workerUrl = new URL(`./sylph-worker.js?v=${WORKER_VERSION}`, import.meta.url);
-  const worker = new Worker(workerUrl, { type: "module" });
+// How a cancelled call rejects, everywhere: the DOMException a fetch() or a
+// stream gives, so a caller asks one question (`err.name === "AbortError"`)
+// whatever was cancelled and wherever.
+const abortError = () => new DOMException("cancelled", "AbortError");
+
+/**
+ * The promise side of the worker protocol, without the Worker: `worker` is
+ * anything with postMessage / addEventListener / terminate. Exported so node can
+ * drive it against a fake worker; the pages go through sylphWorkerRpc().
+ *
+ * Three promises the pages build on, and none of them held before:
+ *   - a cancelled call REJECTS with an AbortError, at once, and never resolves —
+ *     not even if the worker finished the sample on the same tick the user
+ *     clicked Cancel and its result was already on the way;
+ *   - a call to a worker that is gone (terminated, or failed to load) rejects
+ *     at once instead of waiting for a reply nobody is left to send;
+ *   - a worker that dies takes every call it was holding down with it.
+ */
+export function rpcOver(worker) {
   const pending = new Map();
   let nextId = 1;
+  let dead = null;      // why this worker can no longer answer, once it cannot
+
+  const settle = (id, entry) => {
+    pending.delete(id);
+    if (entry.signal && entry.onAbort) entry.signal.removeEventListener("abort", entry.onAbort);
+  };
+  const die = (why) => {
+    if (!dead) dead = why;
+    for (const [id, entry] of [...pending]) { settle(id, entry); entry.reject(new Error(why)); }
+  };
 
   worker.addEventListener("message", (e) => {
     const { id } = e.data;
-    const resolver = pending.get(id);
-    if (!resolver) return;
+    const entry = pending.get(id);
+    if (!entry) return;
     if (e.data.progress) {
-      resolver.onProgress?.(e.data.progress);
+      entry.onProgress?.(e.data.progress);
       return;
     }
-    pending.delete(id);
-    if (resolver.signal && resolver.onAbort) {
-      resolver.signal.removeEventListener("abort", resolver.onAbort);
-    }
-    if (e.data.ok) resolver.resolve(e.data);
-    else resolver.reject(new Error(e.data.error));
+    settle(id, entry);
+    if (entry.signal?.aborted) entry.reject(abortError());
+    else if (e.data.ok) entry.resolve(e.data);
+    else if (e.data.name === "AbortError") entry.reject(abortError());
+    else entry.reject(new Error(e.data.error));
   });
+  // A module worker that fails to load fires this and then answers nothing,
+  // ever. An exception inside a message is a reply (the worker catches them all),
+  // so reaching here means the worker is not going to answer what it holds.
   worker.addEventListener("error", (e) => {
-    for (const { reject } of pending.values()) reject(new Error(e.message ?? "worker error"));
-    pending.clear();
+    die(`the profiling worker stopped: ${e?.message ?? "worker error"}`);
   });
 
   function call(type, payload, { transfer, onProgress, signal } = {}) {
     const id = nextId++;
     return new Promise((resolve, reject) => {
+      if (dead) { reject(new Error(dead)); return; }
+      if (signal?.aborted) { reject(abortError()); return; }
       const entry = { resolve, reject, onProgress, signal };
       if (signal) {
-        entry.onAbort = () => worker.postMessage({ id: 0, type: "cancel", target: id });
+        // Settled HERE, not when the worker gets round to answering: a sample
+        // the worker is still finishing (a wasm call cannot be interrupted) is
+        // already cancelled as far as the page is concerned, and whatever the
+        // worker replies later finds no one waiting for it.
+        entry.onAbort = () => {
+          worker.postMessage({ id: 0, type: "cancel", target: id });
+          if (pending.get(id) === entry) { settle(id, entry); reject(abortError()); }
+        };
         signal.addEventListener("abort", entry.onAbort);
       }
       pending.set(id, entry);
       worker.postMessage({ id, type, ...payload }, transfer ?? []);
     });
   }
+
+  return {
+    call,
+    get dead() { return dead; },
+    terminate() {
+      worker.terminate();
+      die("worker terminated");
+    },
+  };
+}
+
+export function sylphWorkerRpc() {
+  const workerUrl = new URL(`./sylph-worker.js?v=${WORKER_VERSION}`, import.meta.url);
+  const worker = new Worker(workerUrl, { type: "module" });
+  const { call, terminate } = rpcOver(worker);
 
   return {
     worker,
@@ -627,10 +780,12 @@ export function sylphWorkerRpc() {
      * Turn the second sketch on for this worker, and load the KEGG ortholog
      * sketches it matches against.
      *
-     * PER WORKER, and there is no way around it: each worker owns its own wasm
-     * memory, so the 39 MB of references is paid once per worker rather than
-     * once per page. The 20 MB download is not — the browser cache serves the
-     * pool after the first — but the parse is. Resolves to { orthologs }.
+     * The PARSE is per worker, and there is no way around it: each worker owns
+     * its own wasm memory, so the 39 MB of references is paid once per worker
+     * rather than once per page. The 20 MB DOWNLOAD is not, when the caller
+     * passes `bytes` (the compressed reference it fetched once): the worker
+     * then reads those and fetches nothing. Resolves to { orthologs }; a failure
+     * rejects like any other call, it does not hang.
      */
     async loadFuncRefs(pkg, refUrl, onProgress, bytes) {
       const { result } = await call("loadFuncRefs", { pkg, refUrl, bytes }, { onProgress });
@@ -644,8 +799,15 @@ export function sylphWorkerRpc() {
       const { meta } = await call("loadDbFile", { file });
       return meta;
     },
-    async profileFile(file, maxReads, onProgress, signal) {
-      return call("profileFile", { file, maxReads }, { onProgress, signal });
+    // Every profile call below resolves to { tsv, reads, func, stop, stopDetail }
+    // (plus elapsedMs). `stop` says what ended the read: "eof", "reads" (the
+    // read cap), "bases" (the base cap) or "truncated" — the input stops at a
+    // malformed record, or the two mates do not hold the same number of reads,
+    // and `stopDetail` says which in a sentence for the page. A truncated sample
+    // is a PART of the input: show it as incomplete, never as a result. A
+    // cancelled one rejects with an AbortError and never resolves.
+    async profileFile(file, maxReads, onProgress, signal, maxBases) {
+      return call("profileFile", { file, maxReads, maxBases }, { onProgress, signal });
     },
     async profileFilesMulti(files, maxReads, onProgress, signal, maxBases) {
       return call("profileFilesMulti", { files, maxReads, maxBases }, { onProgress, signal });
@@ -673,10 +835,6 @@ export function sylphWorkerRpc() {
       const { result } = await call("stats", {});
       return result;
     },
-    terminate() {
-      worker.terminate();
-      for (const { reject } of pending.values()) reject(new Error("worker terminated"));
-      pending.clear();
-    },
+    terminate,
   };
 }

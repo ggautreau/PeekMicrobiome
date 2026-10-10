@@ -477,6 +477,20 @@ console.log("\n== the profiled read count, against the count the ENA published =
     v({ observed: 100, expected: NaN, maxReads: 1e9 }).ok === true);
   check("more reads than the catalogue lists is a mismatch too",
     v({ observed: 2_000_000, expected: 1_000_000, maxReads: 1e9 }).ok === false);
+
+  // The BASE cap, on by default for single-end runs, stops 250 bp reads at 60 %
+  // of the read cap and nanopore reads far earlier — below the read cap, so a
+  // count-only test called every long-read run "the download ended early".
+  // The worker now says which cap stopped the read, and that settles it.
+  const longRead = { observed: 600, expected: 2_000, maxReads: 1_000, layout: "SINGLE" };
+  check("a run stopped by the BASE cap is not reported incomplete",
+    v({ ...longRead, stop: "bases" }).ok === true && v({ ...longRead, stop: "bases" }).capped === true);
+  check("...nor one the worker says the READ cap stopped",
+    v({ ...longRead, stop: "reads" }).ok === true);
+  check("...while the same count read to the end of the file still is",
+    v({ ...longRead, stop: "eof" }).ok === false);
+  check("...and so is the same count with no stop given (the old callers)",
+    v(longRead).ok === false);
 }
 
 // =============================================================================
@@ -1012,6 +1026,97 @@ console.log("\n== U. the allow-list is enforced at the fetch, not only at resolu
   threw = null;
   try { urlSource("javascript:alert(1)"); } catch (e) { threw = e; }
   check("...nor is a URL that is not one", threw !== null, threw?.message);
+}
+
+// The allow-list is checked on the URL ASKED for, and fetch() follows a 30x on
+// its own: an allowed host answering with a redirect elsewhere had that other
+// host contacted with the user's address, no line of ena.js ever seeing the new
+// URL. The "elsewhere" here is 127.0.0.2, which the allow-list does not name.
+console.log("\n== U2. a redirect off the allow-list is not followed ==");
+{
+  let elsewhere = 0;
+  const away = http.createServer((req, res) => {
+    elsewhere++;
+    res.writeHead(200, { "Content-Type": "text/plain", "Content-Length": PLAIN.length });
+    res.end(PLAIN);
+  });
+  const redirector = http.createServer((req, res) => {
+    res.writeHead(302, { Location: `http://127.0.0.2:${PORT_Q + 5}/reads.fastq` });
+    res.end();
+  });
+  await new Promise((r) => away.listen(PORT_Q + 5, "127.0.0.2", r));
+  await new Promise((r) => redirector.listen(PORT_Q + 4, "127.0.0.1", r));
+  try {
+    const url = `http://127.0.0.1:${PORT_Q + 4}/reads.fastq`;
+    const src = urlSource(url, { size: PLAIN.length, ...FAST, maxStrikes: 2 });
+    const { bytes, err } = await drain(src);
+    check("the stream fails instead of delivering the redirected body",
+      err !== null && bytes.length === 0, err?.message ?? `${bytes.length} bytes`);
+    let sliceErr = null;
+    try {
+      await urlSource(url, { size: PLAIN.length, ...FAST }).slice(0, 2).arrayBuffer();
+    } catch (e) { sliceErr = e; }
+    check("...and so does the two-byte gzip probe", sliceErr !== null, sliceErr?.message);
+    check("THE OTHER HOST WAS NEVER CONTACTED", elsewhere === 0, `${elsewhere} requests reached it`);
+  } finally {
+    await new Promise((r) => redirector.close(r));
+    await new Promise((r) => away.close(r));
+  }
+}
+
+// Every other shape in this file ENDS: a reset, a short body, a 503. This one
+// does not — the socket stays open and nothing more arrives, which is what a
+// dead NAT entry or a proxy that lost its upstream looks like. Nothing above
+// could see it: the sample sat at the same byte, "running", for ever.
+console.log("\n== U3. a connection that goes silent without closing ==");
+{
+  let n = 0;
+  const sockets = new Set();
+  const srv = http.createServer((req, res) => {
+    n++;
+    const range = /bytes=(\d+)-/.exec(req.headers.range ?? "");
+    const start = range ? Number(range[1]) : 0;
+    if (n === 1) {
+      // A probe-sized request answered with headers and then silence.
+      res.writeHead(200, { "Content-Type": "text/plain", "Content-Length": PLAIN.length });
+      res.write(PLAIN.subarray(0, 1));
+      return;
+    }
+    if (n === 3) {
+      // The stream's first request: 30 % of the body, then silence, socket open.
+      res.writeHead(200, { "Content-Type": "text/plain", "Content-Length": PLAIN.length });
+      res.write(PLAIN.subarray(0, Math.floor(PLAIN.length * 0.3)));
+      return;
+    }
+    res.writeHead(range ? 206 : 200, {
+      "Content-Type": "text/plain", "Content-Length": PLAIN.length - start,
+      ...(range ? { "Content-Range": `bytes ${start}-${PLAIN.length - 1}/${PLAIN.length}` } : {}),
+    });
+    res.end(PLAIN.subarray(start));
+  });
+  srv.on("connection", (s) => { sockets.add(s); s.on("close", () => sockets.delete(s)); });
+  await new Promise((r) => srv.listen(PORT_Q + 6, "127.0.0.1", r));
+  try {
+    const url = `http://127.0.0.1:${PORT_Q + 6}/reads.fastq`;
+    const notes = [];
+    const src = urlSource(url, {
+      size: PLAIN.length, ...FAST, idleMs: 300, onRetry: (r) => notes.push(r.note),
+    });
+    const t0 = Date.now();
+    const head = new Uint8Array(await src.slice(0, 2).arrayBuffer());
+    check("a probe that goes silent is retried, not waited on for ever",
+      head.length === 2 && head[0] === PLAIN[0] && head[1] === PLAIN[1], `${head.length} bytes`);
+    const { bytes, err } = await drain(src, { limitMs: 20_000 });
+    check("a stream that goes silent is resumed and completes", !err, err?.message);
+    check("BYTE FOR BYTE", sha(bytes) === sha(PLAIN), `${bytes.length} vs ${PLAIN.length}`);
+    check("...and the user is told the connection stalled",
+      notes.some((t) => /stalled/.test(t)), notes.join(" | ").slice(0, 200));
+    check("...within a few idle periods, not a bench timeout", Date.now() - t0 < 10_000,
+      `${Date.now() - t0} ms`);
+  } finally {
+    for (const s of sockets) s.destroy();
+    await new Promise((r) => srv.close(r));
+  }
 }
 
 // =============================================================================

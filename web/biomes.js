@@ -176,11 +176,17 @@ export function fmtCount(n) {
   return Number.isFinite(n) ? n.toLocaleString("en-US") : "?";
 }
 
+// Decimal units, the ones every sentence on both pages and Zenodo's own record
+// use. This was 1024-based while labelled "MB", so the picker said 433 MB for the
+// human-gut database and the paragraph right under it said 454 MB — the same
+// 454,021,440 bytes, read as two different files. One decimal below 10 MB, so
+// the 6.5 MB smoke-test database is not rounded to a number nobody wrote.
 export function fmtSize(bytes) {
   if (!Number.isFinite(bytes)) return "size unknown";
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
-  if (bytes < 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(0)} MB`;
-  return `${(bytes / 1024 / 1024 / 1024).toFixed(1)} GB`;
+  if (bytes < 1e6) return `${(bytes / 1e3).toFixed(0)} KB`;
+  if (bytes < 1e7) return `${(bytes / 1e6).toFixed(1)} MB`;
+  if (bytes < 1e9) return `${(bytes / 1e6).toFixed(0)} MB`;
+  return `${(bytes / 1e9).toFixed(1)} GB`;
 }
 
 // "MGnify human-gut v2.0.2" — the catalogue, not our file. Two databases built
@@ -195,7 +201,10 @@ export function catalogueName(b) {
 // figures that decide whether an entry is the right one and whether it is worth
 // the wait, and a dropdown is read once, quickly.
 export function optionLabel(b) {
-  const bits = [`${fmtCount(b.species)} species`, fmtSize(b.bytes)];
+  // A label that already gives the count ("Smoke test — 50 human-gut species")
+  // does not get it a second time.
+  const counted = new RegExp(`\\b${fmtCount(b.species)}\\b[^,—]*species`, "i").test(b.label ?? "");
+  const bits = counted ? [fmtSize(b.bytes)] : [`${fmtCount(b.species)} species`, fmtSize(b.bytes)];
   const where = b.bundled ? "bundled" : b.available ? "downloads from Zenodo" : null;
   if (where) bits.push(where);
   const head = `${b.label} — ${bits.join(", ")}`;

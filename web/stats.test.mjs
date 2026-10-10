@@ -8,7 +8,7 @@
 // twenty splits) or checked against an independent brute-force enumeration of
 // the same permutation null.
 
-import { mannWhitney, benjaminiHochberg, minAttainableP, fmtP } from "./stats.js";
+import { mannWhitney, benjaminiHochberg, minAttainableP, fmtP, exactWork, EXACT_ROW_WORK } from "./stats.js";
 
 let pass = 0, fail = 0;
 const check = (name, ok, detail = "") => {
@@ -100,6 +100,79 @@ function bruteP(a, b) {
   }
   check("the exact p matches an independent enumeration on every case",
     worst < 1e-12, worstCase);
+
+  // The null is counted over the SMALLER group, because that is the cheaper
+  // table. Same answer by construction — the other group's rank sum is the
+  // total minus this one's — and the enumeration is the check that it is.
+  let swapped = 0, swapCase = "";
+  for (const [a, b] of cases) {
+    for (const [x, y] of [[a, b], [b, a]]) {
+      const d = Math.abs(mannWhitney(x, y).p - bruteP(x, y));
+      if (d > swapped) { swapped = d; swapCase = `${JSON.stringify(x)} vs ${JSON.stringify(y)}`; }
+    }
+  }
+  check("...whichever of the two groups is the larger",
+    swapped < 1e-12, swapCase);
+}
+
+// ---- exact where it is affordable, the normal approximation where it is not --
+//
+// The exact null is a dynamic program whose cost grows as the fourth power of
+// the group size: 40 samples a side took 29 ms a ROW, which over 468 species
+// froze the page for thirteen seconds. So the cost is computed, the method is
+// chosen from it, and every result says which method it is — a figure that
+// printed an approximation as if it were the permutation p would be wrong in the
+// one way nobody can see.
+//
+// The approximation is checked against scipy's own. Each reference below is
+//   scipy.stats.mannwhitneyu(a, b, alternative="two-sided",
+//                            method="asymptotic", use_continuity=True).pvalue
+// (scipy 1.14), and for the exact ones method="exact" on data with no ties —
+// the only case where scipy's exact branch is the permutation p.
+{
+  check("the cost of the exact test grows as the fourth power of the group size",
+    exactWork(9, 9) === 18 * 9 * 18 * 19 && exactWork(40, 45) > 300 * exactWork(9, 9) &&
+    exactWork(3, 30) === exactWork(30, 3),
+    `${exactWork(9, 9)} at 9 v 9, ${exactWork(40, 45)} at 40 v 45`);
+  check("...so small groups get the exact test and say so",
+    mannWhitney([1, 2, 3], [4, 5, 6]).method === "exact");
+  const big = Array.from({ length: 100 }, (_, i) => i), big2 = big.map((v) => v + 0.5);
+  check("...and groups past the threshold get the normal approximation, and say so",
+    exactWork(100, 100) > EXACT_ROW_WORK && mannWhitney(big, big2).method === "normal" &&
+    mannWhitney(big, big2).exact === false);
+  check("...unless the caller asks for one or the other",
+    mannWhitney([1, 2, 3], [4, 5, 6], { method: "normal" }).method === "normal" &&
+    mannWhitney(big.slice(0, 30), big2.slice(0, 30), { method: "exact" }).method === "exact");
+
+  const REF = {
+    // no ties: method="exact"
+    noTiesA: { a: [1.5, 2.7, 3.1, 8.0, 9.2], b: [4.4, 5.0, 6.6, 7.3, 10.1, 11.0, 12.5],
+      method: "exact", p: 0.148989898989899 },
+    noTiesB: { a: [0.31, 0.12, 0.95, 0.44, 0.27, 0.68, 0.73, 0.05], b: [0.81, 0.99, 0.57, 0.62, 0.88],
+      method: "exact", p: 0.09324009324009325 },
+    // method="asymptotic": ties, and the continuity correction
+    ties: { a: [0, 0, 0, 0.1, 0.2, 0.2, 0.5, 0.9, 1.2, 0, 0, 0.3],
+      b: [0, 0.4, 0.4, 0.7, 1.1, 1.3, 1.3, 2.0, 0, 0.9, 1.0, 2.2, 0.05],
+      method: "normal", p: 0.027717581642498913 },
+    mixed: { a: Array.from({ length: 25 }, (_, i) => (i * 0.37) % 1),
+      b: Array.from({ length: 28 }, (_, i) => (i * 0.53 + 0.2) % 1),
+      method: "normal", p: 0.5040014767589307 },
+    // Thirty against thirty, perfectly apart: z near 6.6, p = 3.0e-11. Deep in
+    // the tail, where an absolute error of 1e-7 — the old 1 - Φ(z) — is every
+    // digit of the answer.
+    tail: { a: Array.from({ length: 30 }, (_, i) => i), b: Array.from({ length: 30 }, (_, i) => i + 100),
+      method: "normal", p: 3.019859359162157e-11 },
+  };
+  const off = [];
+  for (const [name, r] of Object.entries(REF)) {
+    const got = mannWhitney(r.a, r.b, { method: r.method });
+    const rel = Math.abs(got.p - r.p) / r.p;
+    if (!(rel < 1e-6) || got.method !== r.method) {
+      off.push(`${name}: ${got.p} (${got.method}) against ${r.p}`);
+    }
+  }
+  check("both methods give scipy's p, to a few parts in ten million", off.length === 0,
+    off.join("; "));
 }
 
 // ---- the floor ---------------------------------------------------------------

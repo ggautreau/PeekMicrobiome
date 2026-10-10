@@ -141,9 +141,17 @@ export function screenVerdict(tsv, markers) {
   if (!confident) {
     const tied = rows.filter((r) => r.taxo >= (rows[0]?.taxo ?? 0) * 0.75)
       .map((r) => r.biome).slice(0, 4);
-    note = `Inconclusive: every species detected here lives in more than one catalogue, ` +
-      `so nothing distinguishes ${tied.length > 1 ? tied.join(", ") : "the candidates"}. ` +
-      `Pick from what you know about the sample.`;
+    const which = tied.length > 1 ? tied.join(", ") : "the candidates";
+    // Two different reasons to refuse, and the note must give the right one.
+    // "Every species lives in more than one catalogue" was printed even when a
+    // species found in one catalogue only WAS detected, at under the threshold —
+    // a sentence the table beside it contradicted.
+    note = best && best.excl > 0
+      ? `Inconclusive: only ${best.excl.toFixed(2)}% of this sample comes from species found ` +
+        `in a single catalogue (${best.biome}), under the ${MIN_EXCLUSIVE_PCT}% it takes to tell ` +
+        `catalogues apart, so nothing distinguishes ${which}. Pick from what you know about the sample.`
+      : `Inconclusive: every species detected here lives in more than one catalogue, ` +
+        `so nothing distinguishes ${which}. Pick from what you know about the sample.`;
   } else {
     note = `${best.biome} explains ${best.taxo.toFixed(1)}% of this sample, ` +
       `${best.excl.toFixed(1)}% of it from species found in no other catalogue` +

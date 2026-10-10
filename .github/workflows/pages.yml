@@ -22,10 +22,12 @@ jobs:
   # 173 in the ENA suite and 37 mutations that only ever executed because
   # somebody remembered to type them.
   #
-  # Thirteen seconds, and no dependencies to install — these are plain node ESM
-  # files with no package.json, importing nothing but node builtins and the
-  # sources they test. node-suite.mjs stands up its own hostile HTTP server on
-  # localhost; nothing here reaches the network.
+  # About seventy seconds (sixteen benches, measured on a clean checkout), and no
+  # dependencies to install — these are plain node ESM files with no
+  # package.json, importing nothing but node builtins and the sources they test.
+  # The two node suites stand up their own hostile HTTP servers on localhost
+  # (the database cache's is scripts/flaky_server.py, in the runner's python3);
+  # nothing here reaches the network.
   test:
     runs-on: ubuntu-latest
     steps:
@@ -80,6 +82,38 @@ jobs:
       # that need it are skipped here and run locally with GMM_DEFS set.
       - name: Gut Metabolic Modules
         run: node web/gmm.test.mjs
+
+      # The figures, the clustering and the exports, each against inputs whose
+      # answer is known: a BIOM another tool can load, a MetaPhlAn file that
+      # merges no two genomes, a cluster permutation that moves every per-sample
+      # field and not only the values.
+      - name: Figures
+        run: node web/figures.test.mjs
+      - name: Clustering
+        run: node web/cluster.test.mjs
+      - name: Exports
+        run: node web/exports.test.mjs
+      - name: Biome screening
+        run: node web/screening.test.mjs
+
+      # The sylph worker through its own message handler, with the real wasm:
+      # one sample at a time, a cancel that never comes back as a result, a file
+      # that stops being FASTQ reported as such, the KEGG reference handed over
+      # once rather than fetched by every worker.
+      - name: Worker
+        run: node web/worker.test.mjs
+
+      # The real multi.js, with a stand-in DOM and stand-in workers, driven
+      # through its own listeners: two runs that must not overlap, a database
+      # swapped mid-run, the pool resized under a run, a session that must not
+      # inherit the last one's groups, columns in the order samples were added.
+      - name: Page state
+        run: node web/page-state.test.mjs
+
+      # db-cache.js against the same hostile server the ENA suite uses: cuts,
+      # 503s, a host that ignores Range, a connection that goes silent.
+      - name: Database cache
+        run: node scripts/dbcache-test/node-suite.mjs
 
       # What the pages CLAIM against what they ship — a sentence in a banner, a
       # control that must be frozen during a run, a door that must not be

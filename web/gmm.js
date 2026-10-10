@@ -11,10 +11,12 @@
 // Non-commercial Software License, whose clause 9 forbids transferring them
 // outside the licensee's institution. Committing GMMs.v1.07.txt to a public
 // repository that deploys to a public site is exactly that transfer. So the
-// page ships the parser and the reader brings the file — read in this tab, like
-// the groups CSV, and never sent anywhere. The page does not fetch it either:
-// its privacy notice promises that the only hosts it contacts are Zenodo and the
-// EBI, and quietly adding raw.githubusercontent.com would make that false.
+// page ships the parser and never the file: once the reader has answered the
+// licence question, the page fetches the definitions from the Raes lab's own
+// repository on raw.githubusercontent.com — never from this one — and reads
+// them in the tab, storing them nowhere; or the reader opens their own copy,
+// read the same way, like the groups CSV. The privacy notice names that host,
+// beside Zenodo and the EBI.
 //
 // WHY GMMs ARE NOT KEGG MODULES, MEASURED RATHER THAN ASSERTED. Only 7 of the
 // 103 have a KO set identical to some KEGG module; the median best Jaccard
@@ -82,22 +84,35 @@ export function parseGmms(text) {
 /**
  * How much of a module was seen, and how abundant it is, per sample.
  *
- * THE ESTIMATOR, AND WHAT IT IS NOT. omixer-rpm — the reference implementation —
- * takes the median of the ortholog abundances along the highest-scoring
- * alternative path, and gates it with a coverage cutoff which by DEFAULT it
- * learns from the distribution of every module's coverage in that sample. This
- * reimplements the first half faithfully and replaces the second with a fixed
- * cutoff, because a learned one makes a module's number depend on which other
- * modules happened to be in the run — defensible in the published pipeline,
- * surprising in a table a reader is scrolling. So: not an omixer-rpm number, and
- * the interface has to say so rather than let the identifier imply it.
+ * THE ESTIMATOR, AND WHAT IT IS NOT. omixer-rpm — the reference implementation
+ * (ModuleAbundanceCoverageMedianMaximizer) — scores a module as the median over
+ * the STEPS of its best path, one value per step, a complex's value being the
+ * MEAN of its subunits; and it gates that with a coverage cutoff which by
+ * DEFAULT it learns from the distribution of every module's coverage in that
+ * sample. This keeps the one-value-per-step median and replaces the rest with
+ * two stricter choices, each for a reason a reader can check:
  *
- * A step's alternative is present only if EVERY ortholog of it was measured; its
- * abundance is the smallest of them, because a complex is no more present than
- * its rarest subunit. The step takes its best alternative. A module reaching the
- * cutoff reports the median over the orthologs of its chosen path; below it,
- * zero — the process was not seen, and a number computed from two steps of seven
- * would be a quantity for something that is not there.
+ *   · a complex is no more present than its RAREST subunit, so its step takes
+ *     the minimum, not the mean — and an alternative missing a subunit is not
+ *     present at all, where omixer-rpm counts it if any subunit was seen;
+ *   · the cutoff is fixed, because a learned one makes a module's number depend
+ *     on which other modules happened to be in the run — defensible in the
+ *     published pipeline, surprising in a table a reader is scrolling.
+ *
+ * So: not an omixer-rpm number, and the interface has to say so rather than let
+ * the identifier imply it.
+ *
+ * ONE VALUE PER STEP, and it is what keeps the minimum meaning anything. This
+ * used to push every subunit of the chosen alternative into the median, so a
+ * four-subunit complex weighed as four steps and its abundant subunits outvoted
+ * the rare one the rule above is about: two steps at 1 and a complex at
+ * {10, 10, 10, 0.1} gave 5.5 where the rule gives 1.
+ *
+ * The step takes its best alternative — the one whose rarest subunit is the
+ * most abundant. A module reaching the cutoff reports the median over its
+ * covered steps; below it, zero — the process was not seen, and a number
+ * computed from two steps of seven would be a quantity for something that is
+ * not there.
  */
 export function gmmTable(profiles, samples, defs, { minCoverage = 2 / 3 } = {}) {
   const mods = defs?.modules ?? [];
@@ -136,7 +151,7 @@ export function gmmTable(profiles, samples, defs, { minCoverage = 2 / 3 } = {}) 
         }
         if (!best) continue;
         covered++;
-        for (const k of best.alt) path.push(p[k]);
+        path.push(best.low);
       }
       coverage[i] = m.steps.length ? covered / m.steps.length : 0;
       if (coverage[i] >= minCoverage && path.length) values[i] = median(path);
