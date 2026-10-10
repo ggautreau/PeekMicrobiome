@@ -12,25 +12,33 @@ import {
   sylphWorkerRpc, detectMemory64, chooseWasmBits, WORKER_VERSION,
   readsBudget, readsBudgetNote, readsOverBudgetNote, loadedBuildNote, fmtReads,
   progressFraction, basesForReads, BUDGET_READ_BP,
-} from "./sylph-worker-rpc.js?v=53";
+} from "./sylph-worker-rpc.js?v=79";
 import {
   dbCacheClient, fmtRate, fmtEta, cacheSummary, assertSameDatabase,
-} from "./db-cache.js?v=53";
-import { matePattern, stripFastqExt } from "./sample-naming.js?v=53";
+} from "./db-cache.js?v=79";
+import { matePattern, stripFastqExt } from "./sample-naming.js?v=79";
 import {
   resolveAccession, validateAccession, ASSUMED_BPS,
   downloadEstimate, readCountVerdict, expectedProfiledReads,
-} from "./ena.js?v=53";
-import { normaliseMarkers, screenVerdict, SCREENING_DB, SCREENING_MARKERS } from "./screening.js?v=53";
-import { metaLines, runFacts } from "./meta.js?v=53";
-import { clusterTable, MAX_ROWS as CLUSTER_MAX_ROWS } from "./cluster.js?v=53";
+} from "./ena.js?v=79";
+import { normaliseMarkers, screenVerdict, SCREENING_DB, SCREENING_MARKERS } from "./screening.js?v=79";
+import { metaLines, runFacts } from "./meta.js?v=79";
+import { clusterTable, MAX_ROWS as CLUSTER_MAX_ROWS } from "./cluster.js?v=79";
 import { compositionSvg, alphaSvg, pcoaSvg, pcoaLayout, pieSvg, sampleFacts, METRICS, alphaDiversity,
   enterotypeSvg, enterotypeSplit, ENTEROTYPE_POLES, ENTEROTYPE_GAP, ENTEROTYPE_MIN_MARKERS,
-  kmeans, silhouette, autoCluster, PCOA_MIN_ZOOM }
-  from "./figures.js?v=53";
-import { toMetaphlan, toBiom, toSylphTsv, toSession, fromSession } from "./exports.js?v=53";
+  kmeans, silhouette, autoCluster, contrastSvg, contrastStats, contrastGroups, PCOA_MIN_ZOOM }
+  from "./figures.js?v=79";
+import { koTable, moduleTable, pathwayRollup, moduleCoverage, pathwayCoverage, keggEntryUrl,
+  keggMapUrl, moduleMapUrl, floorRows, NO_PATHWAY,
+  KEGG_CONSENT_KEY, keggConsent, storeKeggConsent, keggGateHtml,
+  FUNC_METHOD_NOTE } from "./kegg.js?v=79";
+import { parseGmms, gmmTable, gmmCoverage } from "./gmm.js?v=79";
+import { arrangeRows, arrangeNote, nextSort } from "./table-view.js?v=79";
+import { groupFields, groupsFromField, groupList, assignGroup, groupSummary,
+  parseMetadata, groupsCsvFrom } from "./groups.js?v=79";
+import { toMetaphlan, toBiom, toSylphTsv, toSession, fromSession } from "./exports.js?v=79";
 import { currentMode as themeMode, setMode as setThemeMode, applyTheme,
-  loadSchedule, saveSchedule } from "./theme.js?v=53";
+  loadSchedule, saveSchedule } from "./theme.js?v=79";
 import {
   fetchCatalog, fallbackCatalog, renderDbSelect, biomeForUrl, biomeNote,
   mgnifyGenomeUrl,
@@ -38,19 +46,18 @@ import {
   makeDbRef, sameDbRef, refLine, refShort, refCommentLines, refSlug, genomeCountMismatch,
   rememberBiome, recallBiome, catalogueName, LOCAL_VALUE,
   selectionMatchesLoaded, notLoadedNote, refMetaMismatch,
-} from "./biomes.js?v=53";
+} from "./biomes.js?v=79";
 
 const $ = (id) => document.getElementById(id);
 const els = {
   drop: $("drop"), file: $("file"), dropLabel: $("dropLabel"),
   filesList: $("filesList"),
   maxReads: $("maxReads"), maxReadsSlider: $("maxReadsSlider"),
-  run: $("run"), cancel: $("cancel"), clearFiles: $("clearFiles"),
+  run: $("run"), cancel: $("cancel"), clearFiles: $("clearFiles"), funcOn: $("funcOn"),
   progress: $("progress"), bar: $("bar"), step: $("step"),
   error: $("error"),
   results: $("results"), resultsSummary: $("resultsSummary"),
   matrixHead: $("matrixHead"), matrixBody: $("matrixBody"),
-  downloadTsv: $("downloadTsv"), downloadCsv: $("downloadCsv"),
   dbSelect: $("dbSelect"), loadDb: $("loadDb"), dbInfo: $("dbInfo"), dbFile: $("dbFile"),
   cancelDb: $("cancelDb"), dbCacheInfo: $("dbCacheInfo"), dbBiomeNote: $("dbBiomeNote"),
   matrixRef: $("matrixRef"),
@@ -510,6 +517,69 @@ const MIN_WORKERS = 2;
 // starting point, not a claim about the machine: Settings moves it, and the
 // browser reports how many cores it will admit to.
 const DEFAULT_WORKERS = 4;
+const MAX_WORKERS = 8;
+
+// ---- how many workers this machine should actually run -----------------------
+//
+// Four was a constant, and a constant is wrong in both directions. MEASURED on a
+// 32-core host: 32 samples took 86.3 s through one worker and 20.0 s through
+// eight — a 4.32x speed-up the default left on the table. In the other direction
+// every worker holds its OWN copy of the database in its own WebAssembly heap,
+// and peak resident memory rose from 1.89 GB at one worker to 14.55 GB at eight
+// for the 454 MB human-gut catalogue: a near-constant 1.85 GB per worker. Eight
+// workers on the 3.0 GB soil catalogue would ask far more than a 16 GB laptop
+// has, and nothing in the page stopped it.
+//
+// (Measured with node worker threads standing in for Web Workers — the same
+// one-database-per-worker shape. The ratio is one measured point, not a fitted
+// model, and it is used as one: scaled linearly with the catalogue and nothing
+// else read into it.)
+//
+// `deviceMemory` is a LOWER BOUND — the spec rounds it down to a power of two and
+// Chrome caps it at 8, so a 64 GB machine reports 8. Being bounded by that is the
+// safe direction, and the reason the number the page chose is shown in Settings
+// with its reason rather than applied silently: moving it is one click.
+const GB_PER_WORKER_PER_BYTE = 1.85 / 454_021_440;
+
+// Set the moment the reader moves the control in Settings. The page sizes the
+// pool for them until then, and never again after.
+let workersChosen = false;
+
+function suggestedWorkers(catalogueBytes = 0) {
+  const cores = Number(navigator.hardwareConcurrency);
+  // One core is left for the page itself: the main thread still parses every
+  // TSV, rebuilds the matrix and redraws the figures between samples.
+  let n = Number.isFinite(cores) && cores > 0
+    ? Math.max(MIN_WORKERS, Math.min(MAX_WORKERS, cores - 1))
+    : DEFAULT_WORKERS;
+  const gb = Number(navigator.deviceMemory);
+  if (Number.isFinite(gb) && gb > 0 && catalogueBytes > 0) {
+    // Half the memory the browser will admit to. Not all of it: the page, the
+    // browser and everything else the machine is doing are in the other half.
+    const perWorker = Math.max(0.35, GB_PER_WORKER_PER_BYTE * catalogueBytes);
+    n = Math.max(MIN_WORKERS, Math.min(n, Math.floor((gb * 0.5) / perWorker)));
+  }
+  return n;
+}
+
+/** Why the page chose that number, in one sentence, for the Settings dialog. */
+function workersReason(catalogueBytes = 0) {
+  const cores = Number(navigator.hardwareConcurrency);
+  const gb = Number(navigator.deviceMemory);
+  const parts = [];
+  parts.push(Number.isFinite(cores) && cores > 0
+    ? `${cores} cores reported, one left for the page`
+    : `this browser does not report its core count, so ${DEFAULT_WORKERS} is assumed`);
+  if (Number.isFinite(gb) && gb > 0 && catalogueBytes > 0) {
+    const perWorker = Math.max(0.35, GB_PER_WORKER_PER_BYTE * catalogueBytes);
+    parts.push(`at least ${gb} GB of memory, and each worker holds its own copy of ` +
+      `this ${(catalogueBytes / 1e9).toFixed(2)} GB catalogue — about ` +
+      `${perWorker.toFixed(1)} GB apiece`);
+  } else if (catalogueBytes > 0) {
+    parts.push("this browser does not report its memory, so only the core count bounds it");
+  }
+  return parts.join("; ");
+}
 
 const pairsCountAsTwo = () => !!els.pairsAsTwo?.checked;
 
@@ -930,7 +1000,16 @@ async function loadDatabase() {
     // the last moment at which it is free to choose: after this the database
     // sits in the workers' linear memory and swapping builds means reloading it.
     const maxReads = currentReads();
-    const target = Math.max(MIN_WORKERS, Math.min(8, parseInt(els.poolSize.value, 10) || MIN_WORKERS));
+    // Sized HERE, because this is the first moment the catalogue is known and the
+    // last moment the pool is free: after this the database is in the workers'
+    // linear memory, and changing the count reloads it. A catalogue eight times
+    // the size of another needs a different pool, and until now the page used
+    // four whatever it was about to load.
+    if (!workersChosen) {
+      const bytes = Number(biomeForUrl(catalog, url)?.bytes) || 0;
+      els.poolSize.value = String(suggestedWorkers(bytes));
+    }
+    const target = Math.max(MIN_WORKERS, Math.min(MAX_WORKERS, parseInt(els.poolSize.value, 10) || MIN_WORKERS));
     if (target !== rpcs.length || poolBits !== plannedBits(maxReads)) {
       els.dbInfo.textContent = `Preparing ${target} ${plannedBits(maxReads)}-bit worker${target === 1 ? "" : "s"}…`;
       await ensurePool(target, maxReads);
@@ -1278,7 +1357,7 @@ els.pairsAsTwo?.addEventListener("change", () => {
 });
 
 els.poolSize?.addEventListener("change", async () => {
-  const target = Math.max(MIN_WORKERS, Math.min(8, parseInt(els.poolSize.value, 10) || MIN_WORKERS));
+  const target = Math.max(MIN_WORKERS, Math.min(MAX_WORKERS, parseInt(els.poolSize.value, 10) || MIN_WORKERS));
   if (!wasmReady || target === rpcs.length) return;
   const shrinking = target < rpcs.length;
   els.poolSize.disabled = true;
@@ -1918,6 +1997,11 @@ function setRunControls(running) {
   // say nothing about it — the exact failure the comment above this function
   // describes, through the one control that was left out of it.
   setDisabled(els.pairsAsTwo, busy);
+  // Same reason, one tab over: the reference is loaded into the pool once, at the
+  // start. Ticking this at sample nine would give the first eight no functional
+  // profile and the rest one, and the Function tab would show half a matrix with
+  // nothing saying why.
+  setDisabled(els.funcOn, busy);
   setDisabled(els.enaResolve, busy);
   setDisabled(els.enaAdd, busy || (enaSelectedRuns().length === 0
     ? "Tick at least one run in the list above to add it."
@@ -2042,7 +2126,14 @@ document.getElementById("stepper")?.addEventListener("click", (e) => {
 // that claims one and does nothing is worse than no control. Workers ARE the CPU
 // dial, the read cap IS the memory bound, and fewer streams IS the network one.
 const SETTINGS_KEY = "peek-settings";
-const DEFAULT_SETTINGS = { diskGb: 8 };
+// funcMinPct: the floor under the FUNCTIONAL MATRIX, in percent of a sample.
+// 4,307 orthologs is what a 3M-read profile reports, and the great majority of
+// them sit at the detection floor — one shared hash, about 0.0003% — where the
+// number is a presence, not a quantity. 0.05% keeps a few hundred rows a reader
+// can actually scan. It bounds the TABLE and its downloads only: a diversity
+// index computed on a display threshold is not a diversity index, so the figures
+// keep every row.
+const DEFAULT_SETTINGS = { diskGb: 8, funcMinPct: 0.05 };
 let settings = { ...DEFAULT_SETTINGS };
 try { settings = { ...settings, ...JSON.parse(localStorage.getItem(SETTINGS_KEY) || "{}") }; }
 catch { /* private mode */ }
@@ -2063,9 +2154,53 @@ async function paintSettings() {
   // printed "1" into a field whose own minimum is 2, under a heading that says
   // what this page is allowed to use.
   dlg.querySelector("#setWorkers").value = String(Math.max(MIN_WORKERS,
-    Math.min(8, Number(els.poolSize?.value) || DEFAULT_WORKERS)));
+    Math.min(MAX_WORKERS, Number(els.poolSize?.value) || DEFAULT_WORKERS)));
+  // A number the page chose has to say why it chose it, or the reader has no
+  // basis for moving it — and this one is bounded by a measurement they cannot
+  // see: every worker holds its own copy of the catalogue.
+  const why = dlg.querySelector("#setWorkersWhy");
+  if (why) {
+    const bytes = Number(currentRef?.bytes) || 0;
+    why.textContent = workersChosen
+      ? "You set this. The page no longer sizes it for you."
+      : bytes
+        ? `Chosen for this machine: ${workersReason(bytes)}.`
+        : "Sized when a database is loaded, from this machine's cores and memory and the size of that catalogue.";
+  }
   dlg.querySelector("#setReads").value = fmtGrouped(currentReads());
+  const kegg = dlg.querySelector("#setKegg");
+  if (kegg) {
+    kegg.value = keggConsent();
+    kegg.onchange = () => {
+      // "not answered" is a real choice: it puts the question back, which is the
+      // only way to undo an answer given by mistake.
+      try {
+        if (kegg.value) localStorage.setItem(KEGG_CONSENT_KEY, kegg.value);
+        else localStorage.removeItem(KEGG_CONSENT_KEY);
+      } catch { /* private mode */ }
+      // Repaint the PANEL, not a figure. `openFig` holds one of the four
+      // `data-fig` values or null and never "function" — the Function tab is a
+      // level up now, with its own `openFuncFig` — so this branch was dead, and
+      // "not answered" cleared the stored answer while the KEGG matrix, figures
+      // and summary stayed on screen. The undo promised two lines above did
+      // nothing unless the reader happened to switch tabs and back.
+      if (!document.getElementById("funcPanel")?.classList.contains("hide")) refreshFunc();
+    };
+  }
   dlg.querySelector("#setDisk").value = String(settings.diskGb);
+  const gmm = dlg.querySelector("#setGmm");
+  if (gmm) {
+    gmm.value = gmmConsent();
+    gmm.onchange = () => {
+      try {
+        if (gmm.value) localStorage.setItem(GMM_CONSENT_KEY, gmm.value);
+        else localStorage.removeItem(GMM_CONSENT_KEY);
+      } catch { /* private mode */ }
+      if (!document.getElementById("funcPanel")?.classList.contains("hide")) refreshFunc();
+    };
+  }
+  const funcMin = dlg.querySelector("#setFuncMin");
+  if (funcMin) funcMin.value = String(settings.funcMinPct ?? DEFAULT_SETTINGS.funcMinPct);
   // What is on disk right now, so the cap is set against a number rather than a
   // guess. Live, because it changes every time a database is loaded.
   const now = dlg.querySelector("#diskNow");
@@ -2175,7 +2310,11 @@ document.getElementById("settings")?.addEventListener("change", (e) => {
     if (themeMode() === "schedule") applyTheme("schedule");
   }
   if (t.id === "setWorkers" && els.poolSize) {
-    els.poolSize.value = String(Math.max(MIN_WORKERS, Math.min(8, Number(t.value) || MIN_WORKERS)));
+    // The reader has chosen. From here on the page stops sizing the pool for
+    // them: a suggestion that overrides the choice it was made to inform is not
+    // a suggestion.
+    workersChosen = true;
+    els.poolSize.value = String(Math.max(MIN_WORKERS, Math.min(MAX_WORKERS, Number(t.value) || MIN_WORKERS)));
     els.poolSize.dispatchEvent(new Event("change"));
   }
   if (t.id === "setReads" && els.maxReads) {
@@ -2186,7 +2325,39 @@ document.getElementById("settings")?.addEventListener("change", (e) => {
     settings.diskGb = Math.max(0, Number(t.value) || 0);
     saveSettings();
   }
+  if (t.id === "setFuncMin") setFuncFloor(t.value);
 });
+
+/**
+ * The function matrix's display floor, from either of the two boxes that set it.
+ *
+ * Two boxes because the caption under the table used to point at Settings —
+ * "Settings changes the floor" — which is a page admitting its control is in the
+ * wrong place. One rule, so the two cannot disagree; and both are written back,
+ * because a setting shown in two places that differ is worse than one that is
+ * merely hard to find.
+ */
+function setFuncFloor(value) {
+  // Clamped at both ends: a negative floor is meaningless, and above 100 the
+  // table is empty with nothing on screen explaining why.
+  settings.funcMinPct = Math.min(100, Math.max(0, Number(value) || 0));
+  for (const id of ["setFuncMin", "funcMinInline"]) {
+    const el = document.getElementById(id);
+    if (el) el.value = String(settings.funcMinPct);
+  }
+  saveSettings();
+  if (!document.getElementById("funcPanel")?.classList.contains("hide")) refreshFunc();
+}
+
+document.getElementById("funcMinInline")?.addEventListener("change",
+  (e) => setFuncFloor(e.target.value));
+// Filled at load, not only when Settings is opened: the box beside the table is
+// the one most readers will ever see, and an empty number field says nothing
+// about the floor that is actually in force.
+{
+  const inline = document.getElementById("funcMinInline");
+  if (inline) inline.value = String(settings.funcMinPct ?? DEFAULT_SETTINGS.funcMinPct);
+}
 
 document.getElementById("settingsPurge")?.addEventListener("click", async () => {
   const btn = document.getElementById("settingsPurge");
@@ -2352,6 +2523,72 @@ async function runAll() {
   // Aggregate matrix as we go: { genome_file -> { sampleName -> relAbund } }
   const matrix = {};
   const sampleOrder = [];
+  // Whatever functional profile is on screen belongs to the example or to the
+  // session that was open, not to the run starting now. Left in place it would
+  // sit under the new matrix in the Function tab, labelled with these samples'
+  // names — the demo's orthologs presented as yours.
+  //
+  // Repainted, not merely nulled: clearing the variable while the Function panel
+  // is the one on screen leaves the old table and the old figure standing until
+  // something else happens to redraw them, which is the same thing seen by a
+  // reader.
+  funcProfiles = null;
+  if (!document.getElementById("funcPanel")?.classList.contains("hide")) refreshFunc();
+
+  // The second sketch, if it was asked for. Loaded HERE — after the pool has
+  // settled at its final size and its final wasm build, before the first sample
+  // reaches a worker — because a worker spawned later would sketch reads against
+  // no reference and return an empty profile that looks like "no functions
+  // found" rather than "never measured".
+  //
+  // Always the 32-bit sourmash, whatever bit-width sylph is running beside it:
+  // the two are separate wasm modules with separate memories, 13,509 ortholog
+  // sketches need ~39 MB, and matching the build the offline script uses keeps a
+  // run in this tab numerically comparable with the bundled example.
+  funcWanted = !!els.funcOn?.checked;
+  if (funcWanted) {
+    setStep("Loading the KEGG ortholog reference (20 MB, once)…");
+    try {
+      // DOWNLOADED ONCE, HERE, and handed to every worker. Each worker is its own
+      // realm, so the module-level memo inside func-sketch.js cannot be shared:
+      // `rpcs.map(r => r.loadFuncRefs(url))` issued one fetch per worker — eight
+      // concurrent downloads of the same 20 MB file, under a line that says
+      // "once". The parse and the 38 MB of WebAssembly are still per worker, and
+      // always were; only the download is now what the sentence claims.
+      const res = await fetch(FUNC_REF_URL);
+      if (!res.ok) throw new Error(`${FUNC_REF_URL} — HTTP ${res.status}`);
+      const refBytes = await res.arrayBuffer();
+      // Sequentially rather than all at once: the bytes are structured-cloned
+      // into each worker, and eight clones of 20 MB in flight together is a
+      // spike worth not having for a step that is already off the critical path.
+      const infos = [];
+      for (const [i, r] of rpcs.entries()) {
+        infos.push(await r.loadFuncRefs(
+          "./funprofiler-pkg", FUNC_REF_URL,
+          // One worker's count is every worker's count; showing the first keeps
+          // the line from flickering between N loads.
+          i === 0 ? (p) => {
+            if (p.progress?.phase === "func_refs") {
+              setStep(`Loading the KEGG ortholog reference — ${p.progress.n.toLocaleString()} orthologs…`);
+            }
+          } : undefined,
+          refBytes));
+      }
+      console.log(`[func] ${infos[0]?.orthologs?.toLocaleString?.() ?? "?"} KEGG orthologs loaded in ${rpcs.length} worker${rpcs.length === 1 ? "" : "s"}`);
+    } catch (e) {
+      // Not fatal to the run: the taxonomy is what most readers came for, and
+      // failing the whole batch over the optional half would be a worse trade
+      // than saying so and profiling species anyway.
+      funcWanted = false;
+      showError(`Functions are off for this run: the KEGG ortholog reference could not be loaded (${e?.message ?? e}). ` +
+        `Species profiling continues.`);
+      console.error(e);
+    }
+  } else {
+    // The pool outlives a run. A worker that loaded the reference last time
+    // would keep sketching this time, unasked, at roughly double the cost.
+    await Promise.all(rpcs.map((r) => r.funcOff().catch(() => {})));
+  }
 
   // Pick up already-done samples and replay them into the matrix without
   // re-running. Build the parallel-work queue from the rest.
@@ -2403,7 +2640,7 @@ async function runAll() {
       // by the number of streams sharing that link.
       if (s.origin === "ena") netActive++;
       try {
-        let tsv, reads;
+        let tsv, reads, func;
         function startWasmHeartbeat(label, reads) {
           s.frac = 1;
           const wasmT0 = performance.now();
@@ -2462,7 +2699,7 @@ async function runAll() {
               (p.net ? rate(bothBps) : "");
             renderFilesList();
           };
-          ({ tsv, reads } = s.origin === "ena"
+          ({ tsv, reads, func } = s.origin === "ena"
             ? await rpc.profileUrlsPe(r1Files.map(toUrlDesc), r2Files.map(toUrlDesc), cap,
               onProgress, abortCtrl.signal)
             : await rpc.profileFilesPe(r1Files, r2Files, cap, onProgress, abortCtrl.signal));
@@ -2484,7 +2721,7 @@ async function runAll() {
               (p.net ? rate(p.bps) : "");
             renderFilesList();
           };
-          ({ tsv, reads } = s.origin === "ena"
+          ({ tsv, reads, func } = s.origin === "ena"
             ? await rpc.profileUrls(seFiles.map(toUrlDesc), cap, onProgress, abortCtrl.signal,
                 basesCapFor(cap))
             : await rpc.profileFilesMulti(seFiles, cap, onProgress, abortCtrl.signal,
@@ -2517,6 +2754,13 @@ async function runAll() {
         // columns this page never parses, and reconstructing them from the
         // matrix would be inventing them.
         s.tsv = tsv;
+        // The second sketch, when it was asked for. Accumulated per sample the
+        // way the matrix is, so a run that is still going shows the functions of
+        // the samples that are done — the same rule the taxonomic table follows.
+        if (func?.profile && Object.keys(func.profile).length) {
+          funcProfiles = { ...(funcProfiles ?? {}), [s.sampleName]: func.profile };
+          s.funcHashes = func.hashes;
+        }
         sampleOrder.push(s.sampleName);
         mergeRowsIntoMatrix(matrix, s.sampleName, rows);
         // Show the matrix as it fills, rather than at the end. On a project of
@@ -2528,6 +2772,10 @@ async function runAll() {
           metaBySample: metaStore() };
         lastMatrix = matrixToTable(lastRaw.matrix, lastRaw.sampleOrder, lastRaw.ref, lastRaw.refBySample);
         renderMatrix(viewOf(lastMatrix), { done: completed + 1, total: totalTodo });
+        // Same rule for the other tab, and only when it is the one on screen:
+        // the functional table is expensive to build (13,509 orthologs rolled up
+        // over every sample) and nobody is looking at it.
+        if (funcWanted && !document.getElementById("funcPanel")?.classList.contains("hide")) refreshFunc();
         if (!verdict.ok) shortCount++;
         else if (rows.length === 0) emptyCount++;
         else okCount++;
@@ -2699,9 +2947,12 @@ function rerankMatrix() {
   renderMatrix(viewOf(lastMatrix));
   // An open figure is drawn from the matrix, so it has to follow it: leaving a
   // species-level pie beside a phylum-level table shows two different runs.
-  if (openFig) drawFigure(openFig, { toggle: false });
+  if (openFig) drawFigure(openFig);
 }
 document.getElementById("clusterPick")?.addEventListener("change", rerankMatrix);
+document.getElementById("funcClusterPick")?.addEventListener("change", () => {
+  if (!document.getElementById("funcPanel")?.classList.contains("hide")) refreshFunc();
+});
 
 // ---- figures -----------------------------------------------------------------
 //
@@ -2715,20 +2966,299 @@ let openFig = null;
 let metaGroups = new Map();
 const metaGroupOf = (sample) => metaGroups.get(sample) ?? null;
 
-// Two columns, any separator, header optional. Deliberately forgiving: the point
-// is to colour a plot, and refusing a file over a stray quote would be a worse
-// outcome than ignoring a row.
-function parseMetadata(text) {
-  const out = new Map();
-  for (const line of String(text).split(/\r?\n/)) {
-    if (!line.trim() || line.startsWith("#")) continue;
-    const cells = line.split(/[\t,;]/).map((c) => c.trim().replace(/^"|"$/g, ""));
-    if (cells.length < 2 || !cells[0] || !cells[1]) continue;
-    out.set(cells[0], cells[1]);
+// ---- where the groups come from ----------------------------------------------
+//
+// There used to be exactly one answer — a two-column CSV — which is a strange
+// thing to require of a page whose argument is that you should not have to open
+// another program. There are three now, and they all end in `metaGroups`, so the
+// ordination and the contrast plot read one map and know nothing about where it
+// was filled from:
+//
+//   "none"     nobody has said anything yet
+//   "field:X"  a field of the archive's own metadata, already in the session
+//   "custom"   made in the editor, sample by sample
+//   "csv"      the file, as before
+//
+// `customGroups` is kept apart from `metaGroups` so that switching to a metadata
+// field and back does not destroy an assignment somebody typed by hand.
+let groupSource = "none";
+let customGroups = new Map();
+
+// metaOf(), NOT metaStore(): the store is rebuilt from the ENA sample list, which
+// is empty for a session or the bundled example — where the archive's metadata
+// lives in lastRaw.metaBySample. Reading the store there offered an empty list of
+// fields on the one run that has the richest metadata of any.
+const metaFieldsFor = (samples) => groupFields(samples ?? [], (s) => metaOf(s) ?? {});
+
+/** Rebuild `metaGroups` from whatever the source currently is. */
+function applyGroupSource() {
+  const samples = lastMatrix?.samples ?? [];
+  if (groupSource === "custom") {
+    metaGroups = new Map(customGroups);
+  } else if (groupSource.startsWith("field:")) {
+    metaGroups = groupsFromField(samples, (s) => metaOf(s) ?? {},
+      groupSource.slice("field:".length));
+  } else if (groupSource === "none") {
+    metaGroups = new Map();
   }
-  // A header row names columns, not a sample — recognised by the first cell
-  // matching no sample rather than by guessing at its wording.
-  return out;
+  // "csv" leaves metaGroups exactly as the file set it: the file is the source,
+  // and rebuilding it from anything else would be inventing it.
+  contrastPair = null;   // the old pair may name groups that no longer exist
+  // The reader's ordering goes with it: a sort by q means nothing once the
+  // groups it was computed over have changed.
+  contrastSort = null;
+  // Someone who asked for the variable-rows view because they had no groups, and
+  // then made some, asked for the contrast. Leaving the fallback latched would
+  // hide the figure they had just done the work for.
+  contrastFallback = false;
+}
+
+// ---- the contrast figure has to ASK for what it needs -------------------------
+//
+// It used to substitute. With no groups it drew "most variable rows", which is a
+// real answer to a real question — and, under a tab labelled Contrast, an answer
+// that looks like the one that was asked for. Nothing said a group was missing
+// except a grey clause inside the picture, and the way in was a button marked
+// "Edit…" beside a dropdown reading "none".
+//
+// So it refuses instead, and the refusal carries the actions rather than
+// describing them: one click for the best metadata field this run has, one to
+// open the editor, and the old view still available by name.
+let contrastFallback = false;   // the reader asked for the variable-rows view
+
+const contrastable = (view) =>
+  groupList(view?.samples ?? [], metaGroups).filter((g) => g.n >= 2).length >= 2;
+
+function contrastRefusalHtml(view) {
+  const samples = view?.samples ?? [];
+  const fields = metaFieldsFor(samples);
+  const best = fields[0];
+  const list = groupList(samples, metaGroups);
+  const where = list.length === 0
+    ? "This run has none yet."
+    : list.length === 1
+      ? `This run has one group (${escapeHTML(list[0].name)}), and a contrast needs two.`
+      : `This run has ${list.length} groups but only ` +
+        `${list.filter((g) => g.n >= 2).length} with two or more samples in it.`;
+  return `<div class="fig-refusal">
+    <b>A contrast is between two groups of samples</b>
+    <span>${where} A group is any label you give to samples that belong together —
+      treated and control, before and after, one donor and another.</span>
+    <div class="kegg-gate-actions">
+      ${best ? `<button type="button" id="contrastByField">Group by ${escapeHTML(best.name)} ` +
+        `(${best.values} groups)</button>` : ""}
+      <button type="button" id="contrastMakeGroups" class="primary">Make groups\u2026</button>
+    </div>
+    <span class="kegg-gate-fine">${best
+      ? `${escapeHTML(best.name)} is what this run's own archive metadata offers. `
+      : `This run carries no metadata to group by, so the groups are yours to name. `}
+      <button type="button" class="linky" id="contrastVariable">Or show the most variable
+      rows instead</button></span>
+  </div>`;
+}
+
+/** Wire the refusal's buttons. Called wherever it has just been painted. */
+function wireContrastRefusal(root, view) {
+  root?.querySelector("#contrastByField")?.addEventListener("click", () => {
+    const best = metaFieldsFor(view?.samples ?? [])[0];
+    if (!best) return;
+    groupSource = `field:${best.name}`;
+    applyGroupSource();
+    redrawGroupedFigures();
+  });
+  root?.querySelector("#contrastMakeGroups")?.addEventListener("click", openGroupEditor);
+  root?.querySelector("#contrastVariable")?.addEventListener("click", () => {
+    contrastFallback = true;
+    redrawGroupedFigures();
+  });
+}
+
+/** Fill both source pickers from what this run can actually offer. */
+/**
+ * Show only the exports there is something behind.
+ *
+ * The menu used to be the taxonomic half's, so every entry always applied. It
+ * serves the whole card now: the function matrix exists only when functions were
+ * profiled, and a groups file only when there are groups. An entry offered and
+ * then refused with an error is a worse answer than an entry that is not there.
+ */
+function syncExportMenu() {
+  const funcOn = document.getElementById("funcPanel")?.classList.contains("hide") === false;
+  const g = document.getElementById("exportFuncGroup");
+  if (g) g.hidden = !funcOn;
+  const gr = document.getElementById("exportGroups");
+  if (gr) gr.hidden = !metaGroups.size;
+}
+
+function paintGroupControls(view) {
+  syncExportMenu();
+  const samples = view?.samples ?? [];
+  const fields = metaFieldsFor(samples);
+  const opts = [`<option value="none">none</option>`];
+  for (const f of fields) {
+    opts.push(`<option value="field:${escapeHTML(f.name)}">by ${escapeHTML(f.name)} ` +
+      `(${f.values} group${f.values === 1 ? "" : "s"}${f.missing ? `, ${f.missing} without` : ""})</option>`);
+  }
+  if (customGroups.size) opts.push(`<option value="custom">made here</option>`);
+  // Two entries, not one, and the reason is a trap rather than a nicety: a
+  // single "from a CSV…" that is BOTH the current state and the way to open the
+  // picker cannot be chosen twice — re-selecting the option already selected
+  // fires no change event, so a reader who had loaded one file could never load
+  // another. So the state is one entry, shown only when it is the state, and the
+  // action is a separate one that is always there.
+  if (groupSource === "csv") {
+    const placed = groupList(samples, metaGroups).reduce((a, g) => a + g.n, 0);
+    opts.push(`<option value="csv">from a CSV — ${placed} of ${samples.length} matched</option>`);
+  }
+  opts.push(`<option value="csv-load">load a CSV…</option>`);
+  for (const [wrapId, selId, on] of [
+    ["figGroupWrap", "figGroupSource", !funcVisible() && (openFig === "pcoa" || openFig === "contrast")],
+    ["funcGroupWrap", "funcGroupSource", funcVisible() && (openFuncFig === "pcoa" || openFuncFig === "contrast")],
+  ]) {
+    document.getElementById(wrapId)?.classList.toggle("hide", !on);
+    // "Make groups…" when there are none, "Edit groups…" once there are: the
+    // button that opens the editor is also the sentence that says whether this
+    // run has any, and "Edit…" answered neither question.
+    const edit = document.getElementById(wrapId.replace("Wrap", "Edit"));
+    // THE LABEL, NOT THE BUTTON. `textContent =` on the button threw away the
+    // icon the markup carries — every other control in this row has one, and
+    // this was the only one that lost it the first time the controls repainted,
+    // which is why it looked like it never had one. The span is there to be
+    // written into.
+    const editLabel = edit?.querySelector(".btn-label") ?? edit;
+    if (editLabel) {
+      editLabel.textContent = metaGroups.size ? "Edit groups\u2026" : "Make groups\u2026";
+    }
+    const sel = document.getElementById(selId);
+    if (!sel || !on) continue;
+    sel.innerHTML = opts.join("");
+    sel.value = [...sel.options].some((o) => o.value === groupSource) ? groupSource : "none";
+  }
+}
+
+for (const id of ["figGroupSource", "funcGroupSource"]) {
+  document.getElementById(id)?.addEventListener("change", (e) => {
+    if (e.target.value === "csv-load") {
+      // The file picker, not a source in itself: the source becomes "csv" only
+      // once a file has actually been read, or an abandoned dialog would leave
+      // the control claiming a grouping that does not exist.
+      e.target.value = groupSource;
+      document.getElementById("metaFile")?.click();
+      return;
+    }
+    groupSource = e.target.value;
+    applyGroupSource();
+    redrawGroupedFigures();
+  });
+}
+
+for (const id of ["figGroupEdit", "funcGroupEdit"]) {
+  document.getElementById(id)?.addEventListener("click", openGroupEditor);
+}
+
+/** Both halves may be showing a figure that reads groups. Redraw whichever is. */
+function redrawGroupedFigures() {
+  if (funcVisible()) refreshFunc(); else drawFigure(openFig);
+}
+
+// ---- the editor ---------------------------------------------------------------
+//
+// A dialog rather than a panel over the plot, and that is the whole design
+// decision: clicking a point opens what that sample is made of, and a "click
+// samples to group them" mode would take that gesture away for as long as it was
+// on. Groups are made here; the points stay what they were.
+function openGroupEditor() {
+  const dlg = document.getElementById("groupEdit");
+  if (!dlg) return;
+  const samples = lastMatrix?.samples ?? [];
+  // Editing starts from what is on screen, whatever put it there: switching from
+  // "by host_sex" into the editor should show those groups to adjust, not an
+  // empty table.
+  if (!customGroups.size) customGroups = new Map(metaGroups);
+
+  const field = dlg.querySelector("#groupFromField");
+  if (field) {
+    const fields = metaFieldsFor(samples);
+    field.innerHTML = fields.length
+      ? fields.map((f) => `<option value="${escapeHTML(f.name)}">${escapeHTML(f.name)} ` +
+        `(${f.values} groups)</option>`).join("")
+      : `<option value="">nothing to fill from — this run carries no metadata</option>`;
+    field.disabled = !fields.length;
+    const apply = dlg.querySelector("#groupApplyField");
+    if (apply) apply.disabled = !fields.length;
+  }
+
+  const paint = () => {
+    const list = dlg.querySelector("#groupList");
+    if (list) {
+      list.innerHTML = samples.map((s, i) => {
+        const g = customGroups.get(s) ?? "";
+        return `<label class="group-row">
+          <span class="group-sample" title="${escapeHTML(s)}">${escapeHTML(s)}</span>
+          <input type="text" data-group-for="${escapeHTML(s)}" value="${escapeHTML(g)}"
+                 list="groupNames" placeholder="—" aria-label="Group for ${escapeHTML(s)}">
+        </label>`;
+      }).join("") +
+        `<datalist id="groupNames">${groupList(samples, customGroups)
+          .map((g) => `<option value="${escapeHTML(g.name)}"></option>`).join("")}</datalist>`;
+    }
+    const note = dlg.querySelector("#groupEditNote");
+    if (note) note.textContent = groupSummary(samples, customGroups);
+  };
+  paint();
+
+  // One listener on the container rather than one per row: the rows are redrawn
+  // whenever the summary changes, and per-row listeners would be re-attached to
+  // elements that had just been replaced.
+  const list = dlg.querySelector("#groupList");
+  if (list && !list.dataset.wired) {
+    list.dataset.wired = "1";
+    list.addEventListener("input", (e) => {
+      const name = e.target?.dataset?.groupFor;
+      if (!name) return;
+      customGroups = assignGroup(customGroups, name, e.target.value);
+      groupSource = "custom";
+      const note = dlg.querySelector("#groupEditNote");
+      if (note) note.textContent = groupSummary(lastMatrix?.samples ?? [], customGroups);
+      applyGroupSource();
+      redrawGroupedFigures();
+    });
+  }
+  // ASSIGNED, not added: openGroupEditor runs on every opening, and
+  // addEventListener would stack a handler per opening. `once: true` was the
+  // first attempt at that and traded one bug for a worse one — the listener
+  // removed itself after the first click, so applying a second field, or
+  // clearing after applying, did nothing at all and looked like a dead button.
+  const saveBtn = dlg.querySelector("#groupSave");
+  if (saveBtn) saveBtn.onclick = () => {
+    // The editor's own map, not metaGroups: a reader who has just typed eight
+    // names and not yet closed the dialog means those, and metaGroups is only
+    // caught up once the source is applied.
+    const list = lastMatrix?.samples ?? [];
+    saveBlob(groupsCsvFrom(list, customGroups), "text/csv",
+      `peekmicrobiome-groups-${refSlug(lastMatrix?.ref)}.csv`);
+  };
+
+  const applyBtn = dlg.querySelector("#groupApplyField");
+  if (applyBtn) applyBtn.onclick = () => {
+    const f = dlg.querySelector("#groupFromField")?.value;
+    if (!f) return;
+    customGroups = groupsFromField(lastMatrix?.samples ?? [], (s) => metaOf(s) ?? {}, f);
+    groupSource = "custom";
+    applyGroupSource();
+    paint();
+    redrawGroupedFigures();
+  };
+  const clearBtn = dlg.querySelector("#groupClear");
+  if (clearBtn) clearBtn.onclick = () => {
+    customGroups = new Map();
+    groupSource = "none";
+    applyGroupSource();
+    paint();
+    redrawGroupedFigures();
+  };
+  dlg.onclose = () => paintGroupControls(lastMatrix ? viewOf(lastMatrix) : null);
+  dlg.showModal();
 }
 
 document.getElementById("metaFile")?.addEventListener("change", async (e) => {
@@ -2736,6 +3266,10 @@ document.getElementById("metaFile")?.addEventListener("change", async (e) => {
   if (!f) return;
   try {
     metaGroups = parseMetadata(await f.text());
+    // The file IS the source now, so the picker says so rather than still
+    // reading "none" over a plot that has just been coloured.
+    groupSource = "csv";
+    contrastPair = null;
     const known = lastMatrix?.samples?.filter((s) => metaGroups.has(s)).length ?? 0;
     const note = document.getElementById("figNote");
     if (note) {
@@ -2747,10 +3281,9 @@ document.getElementById("metaFile")?.addEventListener("change", async (e) => {
         : `no sample name in that file matches this run — the first column must ` +
           `be the sample name as shown here (e.g. ${lastMatrix?.samples?.[0] ?? "ERR…"})`;
     }
-    // toggle: false — the plain call reads as the tab being clicked again and
-    // CLOSES the plot, which is what loading groups did: the one action the
-    // caption under the ordination asks for made it disappear.
-    if (openFig === "pcoa") drawFigure("pcoa", { toggle: false });
+    // Redrawn, not closed: loading groups used to make the plot disappear —
+    // the one action the caption under the ordination asks for.
+    if (openFig === "pcoa") drawFigure("pcoa");
   } catch (err) {
     const note = document.getElementById("figNote");
     if (note) note.textContent = `could not read that file: ${err?.message ?? err}`;
@@ -2758,25 +3291,73 @@ document.getElementById("metaFile")?.addEventListener("change", async (e) => {
   e.target.value = "";
 });
 
-// `toggle: false` redraws whatever is open instead of closing it, which is what
 // a rank or clustering change needs: the figure on screen has to follow the
 // matrix under it, and a plain drawFigure(openFig) would read as the tab being
 // clicked again and shut it.
-function drawFigure(kind, { toggle = true } = {}) {
+// One plain sentence per figure, before the technical one.
+//
+// The captions under the figures are precise and they are written for someone
+// who already knows what a PCoA is; "PCoA" itself is four letters that mean
+// nothing to a clinician or a student. This says what the picture is FOR, in
+// words that assume nothing, and the existing caption follows with the numbers.
+// The contrast's test, computed once per (table, grouping) rather than per
+// redraw. It is EXACT — 4,307 orthologs take 470 ms — and it depends on the rows
+// and on who is in which group, on neither the width of the card nor the top-N.
+// Dragging the slider recomputed all of it on every tick, for numbers that could
+// not have changed.
+//
+// Keyed on what the answer actually depends on, and holding ONE entry: the
+// reader is looking at one table at a time, and a cache that grows with every
+// grain and grouping they try is a leak with extra steps.
+let statsCache = { key: "", stats: null };
+
+function contrastStatsFor(t, tag) {
+  const groups = [...metaGroups.entries()].sort().map(([k, v]) => `${k}=${v}`).join(",");
+  const key = [tag, t.samples.join("|"), t.rows.length, groups,
+    (contrastPair ?? []).join(">")].join("::");
+  if (statsCache.key === key) return statsCache.stats;
+  const stats = contrastStats(t, { groupOf: metaGroupOf, pair: contrastPair });
+  statsCache = { key, stats };
+  return stats;
+}
+
+const FIG_PLAIN = {
+  composition: "What each sample is made of, as a bar.",
+  alpha: "How many different things are in each sample, and how evenly.",
+  pcoa: "Samples that look alike sit close together. Distance is the whole message; the axes have no units.",
+  contrast: "Which rows differ most between two groups of samples.",
+  enterotype: "Where each sample sits between the three ways a gut community is usually dominated.",
+};
+
+function drawFigure(kind) {
   const canvas = document.getElementById("figCanvas");
   const note = document.getElementById("figNote");
   const dl = document.getElementById("figDownload");
   if (!canvas) return;
-  // Clicking the open tab closes it — the figures are an aside, not a mode.
-  if (!kind || (toggle && kind === openFig) || !lastMatrix?.rows?.length) {
+  // NOT a toggle any more. Clicking the tab that was already on used to blank
+  // the figure — the figures being "an aside, not a mode" — and it is a trap:
+  // the tab still looks selected, the area under it is empty, and nothing says
+  // why. It caught three separate test runs of this page's own bench before it
+  // was reported, which is about as clear a signal as a control can give.
+  //
+  // A tab bar is a radio group: one is always on, and clicking the one that is
+  // on does nothing. Closing is still possible and still useful — there is a ✕
+  // beside the figure for it. The `toggle` option every caller had to remember
+  // to pass is gone with the trap it existed to avoid.
+  if (!kind || !lastMatrix?.rows?.length) {
     openFig = null;
     canvas.classList.add("hide");
     canvas.innerHTML = "";
     dl?.classList.add("hide");
+    document.getElementById("figClose")?.classList.add("hide");
     pickedSample = null;
     pcoaZoom = null;
     paintZoomControls();
     paintTopN();
+    // openFig is null now, so this hides both pickers rather than leaving one
+    // floating over a closed figure.
+    paintContrastControls(null);
+    paintGroupControls(null);
     hideDetail();
     if (note) note.textContent = "";
     for (const b of document.querySelectorAll(".fig-tab")) b.classList.remove("is-on");
@@ -2810,19 +3391,40 @@ function drawFigure(kind, { toggle = true } = {}) {
   // would have been in — and Download SVG stays hidden, because a downloadable
   // picture of the word "no" is not a figure.
   const refusal = kind === "enterotype" ? enterotypeRefusal(view) : "";
-  const svg = refusal ? ""
+  // The contrast's refusal is not a sentence: it carries the two actions that
+  // resolve it, so it is built as markup rather than passed through the plain
+  // "Not this run" card below.
+  const needsGroups = kind === "contrast" && !contrastable(view) && !contrastFallback;
+  const svg = (refusal || needsGroups) ? ""
     : kind === "composition" ? compositionSvg(view, { width: w, height: h, topN: figTopN })
     : kind === "alpha" ? alphaSvg(view, { width: w, height: h })
+    // The groups the reader loaded, and only those. NOT the computed clusters:
+    // the clusters come out of these same abundances, so contrasting two of them
+    // would rank rows by the thing that defined the split and hand back the
+    // input as a finding.
+    : kind === "contrast"
+      ? contrastSvg(view, { width: w, height: h, topN: figTopN, groupOf: metaGroupOf,
+        // scale 1: the taxonomic matrix already holds percentages. The functional
+        // tables hold fractions and pass 100 — the same split paintMatrix carries.
+        unit: "taxa", pair: contrastPair, scale: 1, sort: contrastSort,
+        stats: contrastStatsFor(view, `taxo:${currentRank()}`) })
     : kind === "enterotype"
       ? enterotypeSvg(genusTable(), { width: w, height: h, groupOf: metaGroupOf })
       : ordinationSvg(view, w, h);
-  canvas.innerHTML = refusal
-    ? `<div class="fig-refusal"><b>Not this run</b><span>${escapeHTML(refusal)}</span></div>`
-    : svg;
-  dl?.classList.toggle("hide", !!refusal);
+  canvas.innerHTML = needsGroups
+    ? contrastRefusalHtml(view)
+    : refusal
+      ? `<div class="fig-refusal"><b>Not this run</b><span>${escapeHTML(refusal)}</span></div>`
+      : svg;
+  if (needsGroups) wireContrastRefusal(canvas, view);
+  // A downloadable picture of a question is not a figure.
+  dl?.classList.toggle("hide", !!refusal || needsGroups);
+  document.getElementById("figClose")?.classList.remove("hide");
   openFig = kind;
   paintZoomControls();
   paintTopN();
+  paintContrastControls(view);
+  paintGroupControls(view);
   for (const b of document.querySelectorAll(".fig-tab")) {
     b.classList.toggle("is-on", b.dataset.fig === kind);
   }
@@ -2831,19 +3433,36 @@ function drawFigure(kind, { toggle = true } = {}) {
   // too, because a figure is the thing that gets pasted into a slide with no
   // page around it.
   if (note) {
-    note.textContent = `${view.rows.length} ${RANK_LABELS[currentRank()].toLowerCase()}` +
+    note.textContent = `${FIG_PLAIN[kind] ?? ""} ` +
+      `${view.rows.length} ${RANK_LABELS[currentRank()].toLowerCase()}` +
       `${view.rows.length === 1 ? "" : currentRank() === "s" ? "" : ""} × ${view.samples.length} samples, ` +
       `against ${refShort(view.ref) || "the loaded catalogue"}` +
       (kind === "pcoa" ? " · hover a point to name it, click it for that sample · scroll over the plot to zoom, drag to pan"
         : kind === "enterotype" ? " · at genus rank, whatever the picker says · click a point for the genera behind it"
+        // The method is IN the figure, in the line under its title, where it
+        // travels with the picture. Saying it again here — at greater length —
+        // was the page explaining itself twice to the same reader.
+        : kind === "contrast" ? " · click a dot for that sample"
         : " · click a sample for what it is made of") +
-      (kind === "pcoa" && !metaGroups.size ? " · load metadata to colour by group" : "");
+      // Only where it is the whole story. On the contrast with no groups the
+      // card in the canvas already says this, at length and with the buttons
+      // that fix it, so repeating it in the caption is the page telling the
+      // reader twice and pointing "beside the figure" at something that is now
+      // IN the figure.
+      (kind === "pcoa" && !metaGroups.size
+        ? " · no groups yet — pick a source or make them, beside the figure" : "");
   }
 }
 
 for (const b of document.querySelectorAll(".fig-tab")) {
   b.addEventListener("click", () => drawFigure(b.dataset.fig));
 }
+document.getElementById("figClose")?.addEventListener("click", () => drawFigure(null));
+document.getElementById("funcFigClose")?.addEventListener("click", () => {
+  openFuncFig = null;
+  refreshFunc();
+});
+
 
 // ---- how many taxa are named -------------------------------------------------
 //
@@ -2855,30 +3474,61 @@ for (const b of document.querySelectorAll(".fig-tab")) {
 //
 // Kept for the session, across figures and redraws: someone who has decided
 // they want fifteen has decided it for the run, not for one click.
+//
+// ONE PER HALF, and not one shared. They were tied together on the argument that
+// a reader decides a number "for the run" — but a run has two tables of very
+// different shapes, and the number that suits one does not suit the other: ten
+// species is a legible bar and thirty pathways is still legible, because 468
+// species have a long tail and 102 pathways do not. Tying them made choosing
+// thirty on one side quietly rewrite the other.
 let figTopN = 10;
+let funcTopNValue = 10;
 let topNFrame = 0;
+const topNFor = (func) => (func ? funcTopNValue : figTopN);
 
-// Shown only where it does something: the bars, and the pie of an open sample.
-// The diversity chart with nothing open has no taxa to name, and a control that
-// does nothing is worse than one that is not there.
+// The two figures that NAME rows one by one — the composition bars and the
+// contrast lanes — plus the pie of an open sample. The ordination and the
+// diversity chart name none, and a slider that does nothing is worse than one
+// that is not there.
+const NAMES_ROWS = new Set(["composition", "contrast"]);
+
 function paintTopN() {
   document.getElementById("figTopN")
-    ?.classList.toggle("hide", !(openFig === "composition" || (openFig && pickedSample)));
+    ?.classList.toggle("hide", !(NAMES_ROWS.has(openFig) || (openFig && pickedSample)));
+  // The functional half asks the same question of its own figures.
+  const funcOn = !document.getElementById("funcPanel")?.classList.contains("hide") &&
+    (NAMES_ROWS.has(openFuncFig) || pickedSample);
+  document.getElementById("funcTopN")?.classList.toggle("hide", !funcOn);
 }
 
-document.getElementById("figTopNRange")?.addEventListener("input", (e) => {
-  figTopN = Math.max(1, Number(e.target.value) || 10);
-  const out = document.getElementById("figTopNOut");
-  if (out) out.textContent = String(figTopN);
+/** Each slider shows its own half's number. */
+function syncTopN() {
+  for (const [range, out, v] of [["figTopNRange", "figTopNOut", figTopN],
+                                 ["funcTopNRange", "funcTopNOut", funcTopNValue]]) {
+    const r = document.getElementById(range), o = document.getElementById(out);
+    if (r) r.value = String(v);
+    if (o) o.textContent = String(v);
+  }
+}
+
+for (const id of ["figTopNRange", "funcTopNRange"]) {
+document.getElementById(id)?.addEventListener("input", (e) => {
+  const n = Math.max(1, Number(e.target.value) || 10);
+  if (id === "funcTopNRange") funcTopNValue = n; else figTopN = n;
+  syncTopN();
   // A drag fires this by the pixel and each one redraws a figure over every row
   // of the matrix. Coalesced, so the value the drag ends on is the one drawn —
   // on a timer rather than an animation frame, which a tab in the background
   // never runs, leaving the figure showing a number the slider no longer says.
   clearTimeout(topNFrame);
   topNFrame = setTimeout(() => {
-    if (openFig) drawFigure(openFig, { toggle: false });
+    // Whichever half is on screen — and only that one, since each keeps its own
+    // number now.
+    if (funcVisible()) { if (openFuncFig) drawFuncFigure(openFuncFig); }
+    else if (openFig) drawFigure(openFig);
   }, 60);
 });
+}
 
 // ---- enterotypes ---------------------------------------------------------------
 //
@@ -2925,6 +3575,505 @@ function enterotypeRefusal(view) {
   return "";
 }
 
+// ---- functions ---------------------------------------------------------------
+//
+// Functions here are MEASURED, not inferred from the taxa. The alternative was
+// tempting and much cheaper — multiply the abundance of each reference genome by
+// the functions that genome is annotated with — but that profile is a
+// deterministic function of the species profile: two samples with the same taxa
+// necessarily get the same functions, so "same organisms, different capability"
+// is unrepresentable, and it is exactly the question a functional view is asked.
+// So the reads are sketched a second time, in amino-acid k-mers, against KEGG
+// orthologs.
+//
+// Which means a result profiled before this existed carries none, and neither
+// does a session saved then. The tab refuses with the reason, as the enterotype
+// tab does, rather than drawing an empty chart.
+let funcProfiles = null;    // sample -> { K01952: 0.0184, ... }
+// True while a run that asked for functions is going. Read by the Function
+// tab's refusal, so a run in progress says "still measuring" rather than the
+// "this page does not measure functions" sentence that predates the wiring.
+let funcWanted = false;
+// 13,509 KEGG ortholog sketches at k=11, from Zenodo 10045253 (CC BY 4.0).
+// See web/db/kegg/README.md for what it is and where it came from.
+const FUNC_REF_URL = "./db/kegg/ko-sketches-k11.ndjson.gz";
+let keggMap = null;         // web/db/kegg/ko-map.json, fetched once, on demand
+let funcGrain = "pathway";
+
+async function loadKeggMap() {
+  if (keggMap) return keggMap;
+  try {
+    const res = await fetch(`./db/kegg/ko-map.json?v=${WORKER_VERSION}`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    keggMap = await res.json();
+  } catch (e) {
+    // Names are a convenience; the identifiers are the measurement. Without the
+    // map the KO level still works, and the roll-ups say why they cannot.
+    keggMap = { ko: {}, koModules: {}, modules: {}, pathways: {}, missing: String(e.message || e) };
+  }
+  return keggMap;
+}
+
+// ---- KEGG is not a public database -------------------------------------------
+//
+// Its own terms say so in those words. Academic users may use KEGG freely;
+// non-academic use requires a commercial licence from Pathway Solutions. Every
+// identifier, name and roll-up this tab shows is KEGG's, so the tab asks once
+// which of those the reader is, and remembers the answer.
+//
+// The answer is kept in localStorage and goes nowhere — the page has no server
+// to send it to, which is the whole argument of the rest of it. It is an
+// acknowledgement, not a check: nothing here can verify who anyone is, and
+// pretending otherwise would be theatre. What it can do is make sure nobody
+// reads KEGG data here without having been told the terms.
+// ---- Gut Metabolic Modules ---------------------------------------------------
+//
+// The definitions are NOT shipped. VIB licenses them for academic,
+// non-commercial use and forbids transferring them outside the licensee's
+// institution, so committing them to a public repository that deploys to a
+// public site is the one thing the licence names. The reader brings their own
+// copy from github.com/raeslab/GMMs; it is read in this tab, like the groups
+// CSV, and not kept when the tab closes — which is also why the page does not
+// fetch it for them: the privacy notice promises that Zenodo and the EBI are the
+// only hosts contacted, and quietly adding a third would make that false.
+let gmmDefs = null;          // { modules, kos } — this session only
+let gmmName = "";            // where the definitions came from, so the version is named
+let gmmFetchError = "";      // why the automatic fetch failed, if it did
+
+const GMM_CONSENT_KEY = "peek-gmm-use";
+function gmmConsent() {
+  try { return localStorage.getItem(GMM_CONSENT_KEY) || ""; } catch { return ""; }
+}
+// 8 KB from the Raes lab's own repository, and NOT from this one.
+//
+// The distinction is the whole licence question. VIB licenses these definitions
+// for use inside one institution and forbids passing them on, so this project
+// ships none of them and never will. Fetching them, on the reader's instruction,
+// from the address their authors publish them at is a different act: the bytes
+// go from the Raes lab to the reader, and nothing of theirs sits on our server
+// or in our repository.
+//
+// Asking the reader to download a file by hand and open it with a picker was the
+// cautious reading of that, and it was too cautious: it turned a licence
+// question into a chore, which is how a feature gets abandoned rather than
+// respected. The question is still asked first and answered — and then the page
+// fetches, exactly as it fetches KEGG's ortholog map once that gate is answered.
+const GMM_URL = "https://raw.githubusercontent.com/raeslab/GMMs/master/GMMs.v1.07.txt";
+// How long the fetch above is given before the panel gives up and offers the
+// file picker instead. Long for an 8 KB file, short enough that nobody waits
+// twice — and the message quotes this number rather than repeating it, so the
+// two cannot drift apart.
+const GMM_TIMEOUT_MS = 20_000;
+let gmmLoading = null;
+
+function setGmmConsent(v) {
+  try { localStorage.setItem(GMM_CONSENT_KEY, v); } catch { /* private mode: ask again */ }
+  // The answer is what unlocks the fetch, so the fetch follows the answer rather
+  // than a second click on a second panel.
+  loadGmmDefs().then(refreshFunc);
+  refreshFunc();
+}
+
+/**
+ * The definitions, fetched once per page load. Never written to disk: they live
+ * in this tab and go with it, which is what "not passed on" means for a page.
+ *
+ * Resolves either way — a failure leaves `gmmDefs` null and the panel falls back
+ * to the file picker, which is the path that needs no network at all.
+ */
+function loadGmmDefs() {
+  if (gmmDefs) return Promise.resolve(gmmDefs);
+  if (gmmLoading) return gmmLoading;
+  gmmLoading = (async () => {
+    try {
+      // A DEADLINE, because the screen that precedes this one says "Fetching…"
+      // and has no other exit. A fetch that never settles — a captive portal, a
+      // proxy that accepts the connection and then holds it — leaves that
+      // sentence on screen for ever, and the reader has no way to reach the
+      // file picker that needs no network at all. Twenty seconds is long for an
+      // 8 KB file and short enough that nobody waits twice.
+      const ctl = new AbortController();
+      const deadline = setTimeout(() => ctl.abort(), GMM_TIMEOUT_MS);
+      let res;
+      try {
+        res = await fetch(GMM_URL, { cache: "no-store", signal: ctl.signal });
+      } finally {
+        clearTimeout(deadline);
+      }
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const parsed = parseGmms(await res.text());
+      if (!parsed.modules.length) throw new Error("no modules in what came back");
+      gmmDefs = parsed;
+      gmmName = "GMMs.v1.07.txt — raeslab/GMMs";
+    } catch (e) {
+      // Not an error banner: the reader has done nothing wrong, and there is a
+      // way through that needs no network. gmmLoadHtml() says both.
+      gmmDefs = null;
+      gmmName = "";
+      // The code alone is not an answer. 429 is the one a reader will actually
+      // meet — raw.githubusercontent.com rate-limits by network, so a shared
+      // institutional address hits it without anybody here doing anything — and
+      // it is the one where "Try again" is the wrong advice.
+      gmmFetchError = e?.name === "AbortError"
+        ? `nothing after ${Math.round(GMM_TIMEOUT_MS / 1000)} seconds`
+        : /HTTP 429/.test(String(e?.message ?? e))
+          ? "HTTP 429, too many requests — GitHub rate-limits by network address, " +
+            "so this is usually a shared connection rather than anything you did. " +
+            "It clears on its own; opening the file yourself does not wait"
+          : String(e?.message ?? e);
+      console.warn(`[gmm] ${GMM_URL}: ${gmmFetchError}`);
+    }
+    gmmLoading = null;
+    return gmmDefs;
+  })();
+  return gmmLoading;
+}
+
+function gmmGateHtml() {
+  return `<div class="fig-refusal kegg-gate">
+    <b>These definitions are licensed by VIB</b>
+    <span>Gut Metabolic Modules are curated by the Raes lab and distributed under VIB's
+      <a href="https://github.com/raeslab/GMMs/blob/master/LICENSE" target="_blank" rel="noopener">Academic
+      Non-commercial Software License</a>: free for academic, non-commercial use; any other use needs a
+      licence from VIB. This page ships none of them — answering fetches them from
+      <a href="https://github.com/raeslab/GMMs" target="_blank" rel="noopener">the Raes lab's own
+      repository</a> into this tab, where they stay.</span>
+    <div class="kegg-gate-actions">
+      <button type="button" id="gmmAcademic">I am an academic user</button>
+      <button type="button" id="gmmPermitted">I have a licence from VIB</button>
+    </div>
+    <span class="kegg-gate-fine">Kept in this browser. Change it under Settings.</span>
+  </div>`;
+}
+
+/** The panel shown once the terms are answered and before a file has arrived. */
+/**
+ * Only reached when the automatic fetch could not deliver — offline, a corporate
+ * proxy, the file renamed upstream. The manual path is kept for exactly that: it
+ * needs no network, and a licence the reader holds should not be defeated by a
+ * firewall.
+ */
+function gmmLoadHtml() {
+  return `<div class="fig-refusal">
+    <b>Could not fetch the GMM definitions</b>
+    <span>${gmmFetchError
+      ? `<code>raw.githubusercontent.com</code> answered ${escapeHTML(gmmFetchError)}. `
+      : ""}Download <code>GMMs.v1.07.txt</code> from
+      <a href="https://github.com/raeslab/GMMs" target="_blank" rel="noopener">github.com/raeslab/GMMs</a>
+      and open it here instead. It is read in this tab and goes nowhere — the same as the groups CSV —
+      and it is not stored, so it has to be opened again in a new tab.</span>
+    <div class="kegg-gate-actions">
+      <button type="button" id="gmmRetry">Try again</button>
+      <button type="button" id="gmmPick">Open GMMs.v1.07.txt…</button>
+    </div>
+    <span class="kegg-gate-fine">103 modules over 442 orthologs, curated for the human gut by
+      Vieira-Silva <i>et al.</i>, <i>Nat Microbiol</i> <b>1</b>, 16088 (2016).</span>
+  </div>`;
+}
+
+// The question, the key and the wording all live in kegg.js, so the single-sample
+// page asks exactly the same thing and one answer covers both. What stays here is
+// what happens AFTER the answer, which is this page's business.
+function setKeggConsent(v) {
+  storeKeggConsent(v);
+  // The gate is the whole Function panel, not a figure inside it: answering has
+  // to put the panel on screen, and the panel needs the map the reader has just
+  // agreed to be shown.
+  loadKeggMap().then(refreshFunc);
+}
+
+function functionRefusal(view) {
+  if (!funcProfiles || !Object.keys(funcProfiles).length) {
+    // Three different situations, three different sentences. Telling someone who
+    // has functions running that the page cannot measure them — which is what
+    // this said before the wiring existed — sends them to look for a problem
+    // that is not there.
+    if (funcWanted) {
+      return "Measuring. Each sample's functional profile appears here as it " +
+        "finishes — the amino-acid pass runs alongside the species pass, on the " +
+        "same reads.";
+    }
+    return "Functions were not measured for this run. They are read from the same " +
+      "FASTQs a second way — amino-acid k-mers against 13,509 KEGG orthologs " +
+      "(fmh-funprofiler) — and that pass is off unless \u201calso profile " +
+      "functions\u201d is ticked before the run, because it costs a 20 MB " +
+      "reference download and takes about four times as long per sample. The " +
+      "bundled example carries one already.";
+  }
+  const missing = (view?.samples ?? []).filter((s) => !funcProfiles[s]);
+  if (missing.length === (view?.samples ?? []).length) {
+    return "None of the samples on screen has a functional profile. " +
+      "They were profiled without the functional reference.";
+  }
+  // The GMM level asks its own question before it shows anything, because the
+  // definitions carry their own licence — and it asks BEFORE looking for the
+  // file, for the same reason the KEGG gate comes before the data check: a
+  // reader who has not answered must not be told "no file", which is a different
+  // sentence that skips the terms.
+  if (funcGrain === "gmm") {
+    if (!gmmConsent()) return "gate:gmm";
+    // Consent given and nothing in hand: either the fetch is running, or it has
+    // been tried and failed. Those are different sentences — one is a wait, the
+    // other is a way out.
+    if (!gmmDefs) {
+      if (gmmLoading) return "fetch:gmm";
+      if (!gmmFetchError) { loadGmmDefs().then(refreshFunc); return "fetch:gmm"; }
+      return "load:gmm";
+    }
+  }
+  if (keggMap?.missing && funcGrain !== "ko" && funcGrain !== "gmm") {
+    return `KEGG's module and pathway map could not be loaded (${keggMap.missing}), ` +
+      `so orthologs cannot be rolled up. The Orthologs (KO) level still works.`;
+  }
+  return "";
+}
+
+// The functional table, in the same { samples, rows } shape the taxonomic
+// figures take — which is why composition, diversity and the ordination need no
+// new plotting code to work on functions.
+// ---- what is inside a cell ----------------------------------------------------
+//
+// "0.88 %" answers how much without answering of what. A KEGG module and a gut
+// metabolic module are both SETS of orthologs, and a reader who clicks a cell is
+// asking which ones — in this sample, at what abundance. The ortholog level
+// needs none of this: a row that IS an ortholog has nothing inside it that its
+// own identifier does not already link to. The pathway level opens KEGG's
+// drawing of the map instead, which is a better answer than a list.
+let cellPopKey = "";
+
+const funcCellDetail = (t, r, c) => {
+  if (funcGrain !== "module" && funcGrain !== "gmm") return null;
+  return {
+    key: `${r.id}:${c}`,
+    hint: funcGrain === "gmm"
+      ? `${r.id} in ${t.samples[c]} — which of its steps were found`
+      : `${r.id} in ${t.samples[c]} — which orthologs it was measured from`,
+  };
+};
+
+/** The card, built when the cell is actually clicked. */
+function cellPopHtml(t, r, c) {
+  const sample = t.samples[c];
+  const prof = funcProfiles?.[sample] ?? {};
+  const pct = (v) => `${(v * 100).toFixed(v * 100 >= 0.01 ? 2 : 4)} %`;
+
+  if (funcGrain === "gmm") {
+    // The steps, in the module's own order, each with the alternative that was
+    // found — which is why a GMM cell can be empty while its orthologs are
+    // present: the module is a PATH, and a missing step breaks it.
+    const cov = r.coverage?.[c] ?? 0;
+    const steps = (r.steps ?? []).map((step, i) => {
+      const found = step.filter((alt) => alt.every((k) => prof[k] > 0));
+      const shown = (found.length ? found : step).map((alt) =>
+        alt.map((k) => `<code>${escapeHTML(k)}</code>`).join(" + ")).join(" or ");
+      return `<li class="${found.length ? "step-on" : "step-off"}">` +
+        `<span>step ${i + 1}</span> ${shown}` +
+        `<b>${found.length ? "found" : "missing"}</b></li>`;
+    }).join("");
+    return `<div class="cell-pop-body"><p class="info">` +
+      `${(cov * 100).toFixed(0)} % of this module's steps were found in this sample` +
+      `${r.values?.[c] > 0 ? "" : " — below the two thirds a value is reported at"}.</p>` +
+      `<ul class="cell-pop-list">${steps}</ul></div>`;
+  }
+
+  const kos = (r.kos ?? []).slice().sort((a, b) => (prof[b] ?? 0) - (prof[a] ?? 0));
+  const koLine = (k) => {
+    const url = keggEntryUrl(k);
+    const nm = keggMap?.ko && Object.prototype.hasOwnProperty.call(keggMap.ko, k)
+      ? keggMap.ko[k] : "";
+    return `<li><code>${url
+      ? `<a href="${escapeHTML(url)}" target="_blank" rel="noopener noreferrer">${escapeHTML(k)}</a>`
+      : escapeHTML(k)}</code> <span>${escapeHTML(nm)}</span>` +
+      `<b>${prof[k] > 0 ? pct(prof[k]) : "not in this sample"}</b></li>`;
+  };
+  // KEGG'S MODULE PAGE CANNOT BE COLOURED — probed, see moduleMapUrl — so the
+  // module is offered where it can be: on the pathway map that holds it, with
+  // only this module's detected orthologs lit, at this sample's abundances. The
+  // link is a link: it is followed on a click, never fetched, and it carries
+  // ortholog identifiers, so it is offered rather than opened.
+  let mapLine = "";
+  if (funcGrain === "module") {
+    const detected = kos.map((k) => ({ id: k, value: prof[k] ?? 0 }))
+      .filter((k) => k.value > 0)
+      .sort((a, b) => b.value - a.value);
+    // The same denominator the pathway cells use: the sample's own maximum, so
+    // the ramp reads within one sample rather than across the run.
+    let max = 0;
+    for (const v of Object.values(prof)) if (v > max) max = v;
+    const m = detected.length ? moduleMapUrl(r.id, detected, keggMap, { max }) : null;
+    const entry = keggEntryUrl(r.id);
+    const bits = [];
+    if (m) {
+      bits.push(`<a href="${escapeHTML(m.url)}" target="_blank" rel="noopener noreferrer">` +
+        `see it on ${escapeHTML(m.map)}, coloured by this sample</a>`);
+    }
+    if (entry) {
+      bits.push(`<a href="${escapeHTML(entry)}" target="_blank" rel="noopener noreferrer">` +
+        `KEGG's own diagram</a>`);
+    }
+    if (bits.length) {
+      mapLine = `<p class="info cell-pop-links">${bits.join(" · ")}` +
+        // Said plainly rather than left to be discovered: KEGG paints pathway
+        // maps and not module diagrams, so the second link is the module and the
+        // first is where the colour is possible.
+        (m ? "" : " — this module is on no pathway map") + `</p>`;
+    }
+  }
+
+  return `<div class="cell-pop-body"><p class="info">` +
+    `${kos.length} ortholog${kos.length === 1 ? "" : "s"} of this module were detected in ` +
+    `this run — their abundance in ${escapeHTML(sample)}:</p>` + mapLine +
+    `<ul class="cell-pop-list">${kos.map(koLine).join("")}</ul></div>`;
+}
+
+function closeCellPop() {
+  document.getElementById("cellPop")?.remove();
+  cellPopKey = "";
+}
+
+function openCellPop(t, r, c, anchorEl) {
+  const key = `${funcGrain}:${r.id}:${c}`;
+  const already = cellPopKey === key;
+  closeCellPop();
+  if (already) return;                 // a second click on the same cell closes it
+  cellPopKey = key;
+  const el = document.createElement("div");
+  el.id = "cellPop";
+  el.className = "cell-pop";
+  el.innerHTML =
+    `<div class="cell-pop-head"><strong>${escapeHTML(r.id)}</strong>` +
+    `<span>${escapeHTML(r.name ?? "")}</span>` +
+    `<span class="cell-pop-sample">${escapeHTML(t.samples[c])}</span>` +
+    `<button type="button" class="cell-pop-close" aria-label="Close">\u2715</button></div>` +
+    cellPopHtml(t, r, c);
+  document.body.appendChild(el);
+  const box = anchorEl.getBoundingClientRect();
+  const w = el.offsetWidth, h = el.offsetHeight;
+  // Below the cell where there is room, above it otherwise; never off an edge.
+  el.style.left = `${Math.max(8, Math.min(box.left, window.innerWidth - w - 8))}px`;
+  el.style.top = box.bottom + h + 12 < window.innerHeight
+    ? `${box.bottom + 6}px` : `${Math.max(8, box.top - h - 6)}px`;
+  el.querySelector(".cell-pop-close")?.addEventListener("click", closeCellPop);
+}
+
+// One listener for the whole matrix rather than one per cell: the body is
+// rebuilt on every redraw, and per-cell listeners would be attached to elements
+// that had just been replaced.
+document.getElementById("funcBody")?.addEventListener("click", (e) => {
+  const btn = e.target.closest?.(".cell-open");
+  if (!btn) return;
+  const [id, col] = (btn.dataset.cell ?? "").split(":");
+  const view = lastMatrix ? viewOf(lastMatrix) : null;
+  const t = view ? funcViewOf(funcTableFor(view, funcGrain, { floored: true })) : null;
+  const r = t?.rows.find((x) => x.id === id);
+  if (r) openCellPop(t, r, Number(col), btn);
+});
+document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeCellPop(); });
+// Closed on scroll, exactly as the tooltip is: the card is positioned against
+// the cell's box at the moment of the click and is `fixed`, so scrolling would
+// leave it floating over whatever happened to slide under it, still claiming to
+// describe a cell that is no longer there.
+window.addEventListener("scroll", closeCellPop, { passive: true, capture: true });
+document.addEventListener("click", (e) => {
+  if (!document.getElementById("cellPop")) return;
+  if (e.target.closest?.("#cellPop, .cell-open")) return;
+  closeCellPop();
+});
+
+function funcTableFor(view, grain = funcGrain, { floored = false } = {}) {
+  const samples = (view?.samples ?? []).filter((s) => funcProfiles?.[s]);
+  if (!samples.length) return { samples: [], rows: [] };
+  const t = grain === "ko" ? koTable(funcProfiles, samples, keggMap)
+    : grain === "module" ? moduleTable(funcProfiles, samples, keggMap)
+      : grain === "gmm" ? gmmTable(funcProfiles, samples, gmmDefs)
+        : pathwayRollup(funcProfiles, samples, keggMap);
+  // `floored` is asked for, never assumed. The MATRIX and its downloads take the
+  // floor — that is what it is for, a table a reader can scan — and the figures
+  // do not: Shannon and the ordination over a display threshold are answers to a
+  // question nobody asked, and richness in particular would just report the
+  // threshold back.
+  return floored ? floorRows(t, settings.funcMinPct ?? DEFAULT_SETTINGS.funcMinPct) : t;
+}
+
+
+/**
+ * The function matrix, as a delimited file that names what it is a matrix of.
+ *
+ * `sep` is honoured through `csvEscape`, exactly as the taxonomic export does,
+ * and NOT by splitting the TSV back apart on tabs and rejoining with commas —
+ * which is what this did until a review counted the damage: 436 of the 508 KEGG
+ * module names carry a comma, and 1,736 of the 13,476 ortholog names do, so the
+ * CSV a reader downloaded had more fields than its own header on most rows. A
+ * broken export is worse than none: it opens.
+ */
+function funcMatrixTsv(view, sep = "\t") {
+  const esc = csvEscape(sep);
+  // The file is what the table shows — the same rows, in the same order. A
+  // download that silently held rows the screen did not, or listed them
+  // differently, is two answers to one question.
+  const t = funcViewOf(funcTableFor(view, funcGrain, { floored: true }));
+  const level = funcGrain === "ko" ? "KEGG orthologs"
+    : funcGrain === "module" ? "KEGG modules"
+      : funcGrain === "gmm" ? `Gut Metabolic Modules (${gmmName || "your definitions"})`
+        : "KEGG pathways";
+  // ONE BRANCH PER LEVEL, and the GMM level had none: it fell through to
+  // pathwayCoverage and the file went out claiming a KEGG-map figure as its GMM
+  // coverage — 22.3% in a header while the panel beside the same table said 5%.
+  // The `!keggMap` short-circuit is not shared either: multi.js:3788 exempts the
+  // GMM level from the KEGG gate on purpose, so a GMM table renders with no KEGG
+  // map at all and would have exported "100.0% reaches a gmm".
+  const cov = funcGrain === "ko" ? 1
+    : funcGrain === "gmm" ? gmmCoverage(funcProfiles, t.samples, gmmDefs)
+      : !keggMap ? 1
+        : funcGrain === "module" ? moduleCoverage(funcProfiles, t.samples, keggMap)
+          : pathwayCoverage(funcProfiles, t.samples, keggMap);
+  const head = [
+    `# PeekMicrobiome - functional abundance, ${level}`,
+    `# measured from reads with FracMinHash on amino-acid k-mers (k=11), against KEGG orthologs`,
+    // Per grain, because only one of the three is a partition. The orthologs are:
+    // each is measured once and the column sums to 1. Modules and maps are not —
+    // an ortholog in three modules is evidence for all three — so the rows
+    // overlap and a reader adding them up gets more than the sample.
+    funcGrain === "ko"
+      // "summing to 1" is only true of the WHOLE ortholog table. With a floor it
+      // is a claim the file contradicts on its own rows, which is the worst kind.
+      ? `# values are each ortholog's share of the sample's matched functional signal` +
+        (t.hidden ? `, and the rows here do not sum to 1: see the floor below` : `, summing to 1`)
+      // A GMM VALUE IS NOT A SHARE. It is the median of the ortholog abundances
+      // along the module's best-covered path, so it is not a share of anything
+      // and a column must not be added up — measured on the shipped example, a
+      // GMM column sums to about 0.019, not to more than 1. The screen says this
+      // (multi.js, funcNote); the exported header said the opposite.
+      : funcGrain === "gmm"
+        ? `# values are the median ortholog abundance along each module's covered path. ` +
+          `NOT SHARES: a column does not sum to 1 and adding it up means nothing`
+        : `# values are each row's share of the sample's matched functional signal. ROWS OVERLAP: an ` +
+          `ortholog in several ${funcGrain === "module" ? "module" : "pathway map"}s counts in each, ` +
+          `so a column sums to more than 1`,
+    funcGrain === "ko" ? null
+      : funcGrain === "gmm"
+        ? `# the GMM catalogue covers ${(cov * 100).toFixed(1)}% of the measured signal`
+        : `# ${(cov * 100).toFixed(1)}% of the measured signal reaches a ` +
+          `${funcGrain === "module" ? "module" : "pathway map"}; the rest has none`,
+    // The floor travels with the file. Opened a year later, a table missing
+    // three quarters of its rows with nothing saying so is a table nobody can
+    // reproduce or trust.
+    t.hidden
+      ? `# floor: rows are here when at least one sample reaches ${t.floor}% — ` +
+        `${t.hidden} row(s) hidden, holding ${(t.carried * 100).toFixed(2)}% of the table`
+      : `# floor: none — every row is here`,
+    `# exported: ${new Date().toISOString()}`,
+  ].filter(Boolean);
+  const rows = t.rows.map((r) =>
+    // No identifier for the not-on-a-map bucket, exactly as the table on screen
+    // shows none: `_none` is this page's own token and the column is headed `id`,
+    // every other row of which can be looked up on KEGG.
+    [r.id === NO_PATHWAY ? "" : (r.id ?? r.name), r.name,
+      ...r.values.map((v) => v.toFixed(6))].map(esc).join(sep));
+  return [...head, ["id", "name", ...t.samples].map(esc).join(sep), ...rows].join("\n") + "\n";
+}
+
+
 // The table at genus rank, whatever the picker says, built from the same
 // matrixToTable the page uses everywhere else so there is one aggregation and
 // not two.
@@ -2966,6 +4115,16 @@ function specimenNote(samples) {
 // does not: the layout is computed once per matrix and every frame of a drag
 // reuses it. Panning an 85-sample PCoA would otherwise solve it sixty times a
 // second.
+// WHICH HALF the ordination on screen belongs to. Only one panel is visible at a
+// time, so the zoom, the colouring and the layout cache below are shared rather
+// than duplicated — and switching halves changes `viewKey`, which resets the
+// window, because a window onto the taxonomic ordination means nothing on the
+// functional one.
+const funcVisible = () =>
+  document.getElementById("funcPanel")?.classList.contains("hide") === false;
+const activeFigId = () => (funcVisible() ? "funcCanvas" : "figCanvas");
+const activeOpenFig = () => (funcVisible() ? openFuncFig : openFig);
+
 let pcoaZoom = null;      // {x, y, k} or null for the whole thing
 let pcoaFit = null;       // {key, layout} — the ordination, cached against redraws
 let figView = null;       // the view the open figure was drawn from
@@ -3028,40 +4187,114 @@ function ordinationSvg(view, w, h) {
   });
 }
 
-document.getElementById("figColour")?.addEventListener("change", (e) => {
-  pcoaColour = e.target.value;
-  if (openFig === "pcoa") drawFigure("pcoa", { toggle: false });
-});
+for (const id of ["figColour", "funcColour"]) {
+  document.getElementById(id)?.addEventListener("change", (e) => {
+    pcoaColour = e.target.value;
+    // Both selects show the one choice, so the two halves cannot disagree.
+    for (const other of ["figColour", "funcColour"]) {
+      const el = document.getElementById(other);
+      if (el && el.value !== pcoaColour) el.value = pcoaColour;
+    }
+    if (activeOpenFig() === "pcoa") {
+      if (funcVisible()) drawFuncFigure("pcoa"); else drawFigure("pcoa");
+    }
+  });
+}
 
 // Redraw the plot alone, at the size it already has. drawFigure() measures an
 // empty card and repaints the panel beside it; neither can happen on every frame
 // of a drag, and neither needs to — a zoom changes the window and nothing else.
 function redrawPcoa() {
-  const canvas = document.getElementById("figCanvas");
-  if (!canvas || openFig !== "pcoa" || !figView) return;
+  const canvas = document.getElementById(activeFigId());
+  if (!canvas || activeOpenFig() !== "pcoa" || !figView) return;
   const old = canvas.querySelector("svg");
   const w = Number(old?.getAttribute("width")) || Math.max(320, canvas.clientWidth - 20);
   const h = Number(old?.getAttribute("height")) || Math.max(300, canvas.clientHeight - 20);
   canvas.innerHTML = ordinationSvg(figView, w, h);
-  wireFigure(canvas, figView);
+  wireFigure(canvas, figView, funcVisible() ? FUNC_SURFACE : TAXO_SURFACE);
   paintZoomControls();
 }
 
+// Which two groups the contrast is between. Shared by both halves, like the
+// top-N: someone who has decided they are comparing M048 with M055 has decided
+// it for the run, not for one tab. Null until a run has groups.
+let contrastPair = null;
+// Which of the contrast's two right-hand columns the reader sorted by, and which
+// way. null is the figure's own order: largest difference first, which is what it
+// is for. Kept beside the pair because the two are invalidated together.
+let contrastSort = null;
+
+/**
+ * Fill both pickers from the groups this view actually has, and show them only
+ * on the figure that uses them.
+ *
+ * Re-read every redraw rather than kept in sync by hand: a session can be
+ * loaded, a groups CSV replaced, a run cleared, and a picker still offering a
+ * group that no longer exists would contrast a name against nothing.
+ */
+function paintContrastControls(view) {
+  const groups = contrastGroups(view ?? { samples: [] }, metaGroupOf);
+  // Two groups of at least two samples, or there is nothing to contrast and the
+  // figure says so itself rather than through an empty pair of dropdowns.
+  const usable = groups.filter((g) => g.n >= 2);
+  if (contrastPair && !contrastPair.every((n) => usable.some((g) => g.name === n))) {
+    contrastPair = null;
+  }
+  if (!contrastPair && usable.length >= 2) contrastPair = [usable[0].name, usable[1].name];
+  for (const [wrapId, aId, bId, on] of [
+    ["figContrastWrap", "figContrastA", "figContrastB", !funcVisible() && openFig === "contrast"],
+    ["funcContrastWrap", "funcContrastA", "funcContrastB", funcVisible() && openFuncFig === "contrast"],
+  ]) {
+    document.getElementById(wrapId)?.classList.toggle("hide", !on || usable.length < 2);
+    if (!on) continue;
+    for (const [id, pick] of [[aId, 0], [bId, 1]]) {
+      const sel = document.getElementById(id);
+      if (!sel) continue;
+      sel.innerHTML = usable.map((g) =>
+        `<option value="${escapeHTML(g.name)}">${escapeHTML(g.name)} (n=${g.n})</option>`).join("");
+      if (contrastPair) sel.value = contrastPair[pick];
+    }
+  }
+}
+
+for (const [aId, bId, pick] of [["figContrastA", "figContrastB", 0], ["funcContrastA", "funcContrastB", 1]]) {
+  for (const [id, slot] of [[aId, 0], [bId, 1]]) {
+    document.getElementById(id)?.addEventListener("change", (e) => {
+      if (!contrastPair) return;
+      const other = contrastPair[1 - slot];
+      // Picking the group that is already on the other side would contrast a
+      // group with itself: every difference zero, every row dropped, an empty
+      // figure with no explanation. Swap instead, which is what the click meant.
+      contrastPair = slot === 0 ? [e.target.value, e.target.value === other ? contrastPair[0] : other]
+        : [e.target.value === other ? contrastPair[1] : other, e.target.value];
+      if (funcVisible()) refreshFunc(); else drawFigure(openFig);
+    });
+  }
+}
+
 function paintZoomControls() {
-  const box = document.getElementById("figZoom");
-  if (!box) return;
-  box.classList.toggle("hide", openFig !== "pcoa");
-  document.getElementById("figColourWrap")?.classList.toggle("hide", openFig !== "pcoa");
   const k = pcoaZoom?.k ?? 1;
-  const out = document.getElementById("figZoomK");
-  if (out) out.textContent = `×${k.toFixed(1)}`;
-  box.querySelector('[data-zoom="reset"]')?.toggleAttribute("disabled", Math.abs(k - 1) < 0.01);
-  box.querySelector('[data-zoom="out"]')?.toggleAttribute("disabled", k <= PCOA_MIN_ZOOM + 1e-9);
-  // Only the ordination pans, and only while it is the figure on screen: the
-  // zoom survives a trip to the composition tab, and the composition must not
-  // come back with a grab cursor and a finger that cannot scroll the page.
-  document.getElementById("figCanvas")
-    ?.classList.toggle("can-pan", openFig === "pcoa" && k > 1.001);
+  // Both halves, every time: the controls of the half that is NOT on screen have
+  // to go away, or leaving the Function tab with its ordination open leaves a
+  // zoom readout floating over the taxonomic toolbar.
+  for (const [zoomId, colourId, canvasId, on] of [
+    ["figZoom", "figColourWrap", "figCanvas", !funcVisible() && openFig === "pcoa"],
+    ["funcZoom", "funcColourWrap", "funcCanvas", funcVisible() && openFuncFig === "pcoa"],
+  ]) {
+    const box = document.getElementById(zoomId);
+    box?.classList.toggle("hide", !on);
+    document.getElementById(colourId)?.classList.toggle("hide", !on);
+    if (box && on) {
+      const out = box.querySelector(".fig-zoom-k");
+      if (out) out.textContent = `×${k.toFixed(1)}`;
+      box.querySelector('[data-zoom="reset"]')?.toggleAttribute("disabled", Math.abs(k - 1) < 0.01);
+      box.querySelector('[data-zoom="out"]')?.toggleAttribute("disabled", k <= PCOA_MIN_ZOOM + 1e-9);
+    }
+    // Only the ordination pans, and only while it is the figure on screen: the
+    // zoom survives a trip to the composition tab, and the composition must not
+    // come back with a grab cursor and a finger that cannot scroll the page.
+    document.getElementById(canvasId)?.classList.toggle("can-pan", on && k > 1.001);
+  }
 }
 
 /**
@@ -3099,7 +4332,10 @@ function plotGeom(svg) {
 // Zoom by `factor`, keeping `p` — the point under the pointer, or the middle of
 // the window for a button — where it is.
 function zoomBy(factor, p = null) {
-  const canvas = document.getElementById("figCanvas");
+  // The plot on screen, not the taxonomic one by name — the buttons of the
+  // functional half read ×1.0 for ever otherwise, because the geometry is read
+  // off an SVG that is not there.
+  const canvas = document.getElementById(activeFigId());
   const g = plotGeom(canvas?.querySelector("svg"));
   if (!g) return;
   const k0 = pcoaZoom?.k ?? 1;
@@ -3119,7 +4355,11 @@ function zoomBy(factor, p = null) {
   redrawPcoa();
 }
 
-const figCanvasEl = document.getElementById("figCanvas");
+// Both canvases carry the same gestures. `el` is the one the listener is on, so
+// nothing below has to ask which half it is in — the handlers already gate on
+// activeOpenFig(), and a hidden canvas receives no events.
+const FIG_CANVASES = ["figCanvas", "funcCanvas"]
+  .map((id) => document.getElementById(id)).filter(Boolean);
 
 // The button has no pointer to zoom about, so it uses the sample that is open
 // beside the plot if there is one: the middle of the ordination is usually where
@@ -3131,7 +4371,7 @@ function zoomFocus() {
   return p ? { x: p.x, y: p.y } : null;
 }
 
-for (const b of document.querySelectorAll("#figZoom [data-zoom]")) {
+for (const b of document.querySelectorAll("#figZoom [data-zoom], #funcZoom [data-zoom]")) {
   b.addEventListener("click", () => {
     if (b.dataset.zoom === "reset") { pcoaZoom = null; redrawPcoa(); return; }
     const inward = b.dataset.zoom === "in";
@@ -3153,9 +4393,10 @@ for (const b of document.querySelectorAll("#figZoom [data-zoom]")) {
 // The plot is still not a hole a scroll disappears into: at the floor, let go
 // and scroll again and the page moves.
 let wheelAt = 0;
-figCanvasEl?.addEventListener("wheel", (e) => {
-  if (openFig !== "pcoa") return;
-  const g = plotGeom(figCanvasEl.querySelector("svg"));
+for (const el of FIG_CANVASES) {
+el.addEventListener("wheel", (e) => {
+  if (activeOpenFig() !== "pcoa") return;
+  const g = plotGeom(el.querySelector("svg"));
   if (!g || !g.over(e.clientX, e.clientY)) return;
   // Lines and pages, not just pixels: Firefox reports a wheel in lines.
   const dy = e.deltaMode === 1 ? e.deltaY * 16 : e.deltaMode === 2 ? e.deltaY * 400 : e.deltaY;
@@ -3169,23 +4410,25 @@ figCanvasEl?.addEventListener("wheel", (e) => {
   if (stuck) return;                      // the tail of a gesture that has run out of zoom
   zoomBy(Math.exp(-dy * 0.0018), g.at(e.clientX, e.clientY));
 }, { passive: false });
+}
 
 // Drag to pan, once there is something outside the window to drag into view. The
 // capture is on the card, not on the plot: the plot is replaced by a new one on
 // every frame, and a pointer captured by an element that no longer exists stops
 // reporting halfway through the gesture.
 let figPan = null;
-figCanvasEl?.addEventListener("pointerdown", (e) => {
-  if (openFig !== "pcoa" || e.button !== 0 || !((pcoaZoom?.k ?? 1) > 1.001)) return;
+for (const el of FIG_CANVASES) {
+el.addEventListener("pointerdown", (e) => {
+  if (activeOpenFig() !== "pcoa" || e.button !== 0 || !((pcoaZoom?.k ?? 1) > 1.001)) return;
   if (e.target.closest?.(".pcoa-pt")) return;         // that is a click on a sample
-  const g = plotGeom(figCanvasEl.querySelector("svg"));
+  const g = plotGeom(el.querySelector("svg"));
   if (!g || !g.over(e.clientX, e.clientY)) return;
   figPan = { x: e.clientX, y: e.clientY, from: g.centre(), perPx: g.perPx };
-  figCanvasEl.setPointerCapture(e.pointerId);
-  figCanvasEl.classList.add("is-panning");
+  el.setPointerCapture(e.pointerId);
+  el.classList.add("is-panning");
   hideTip();
 });
-figCanvasEl?.addEventListener("pointermove", (e) => {
+el.addEventListener("pointermove", (e) => {
   if (!figPan) return;
   e.preventDefault();
   // Drag right and the points follow the pointer right, which means the window
@@ -3200,17 +4443,18 @@ figCanvasEl?.addEventListener("pointermove", (e) => {
 const endPan = (e) => {
   if (!figPan) return;
   figPan = null;
-  figCanvasEl?.classList.remove("is-panning");
-  try { figCanvasEl?.releasePointerCapture(e.pointerId); } catch { /* already gone */ }
+  el.classList.remove("is-panning");
+  try { el.releasePointerCapture(e.pointerId); } catch { /* already gone */ }
 };
-figCanvasEl?.addEventListener("pointerup", endPan);
-figCanvasEl?.addEventListener("pointercancel", endPan);
+el.addEventListener("pointerup", endPan);
+el.addEventListener("pointercancel", endPan);
 // Back to every sample. Not on a point: two clicks there are open-then-close.
-figCanvasEl?.addEventListener("dblclick", (e) => {
-  if (openFig !== "pcoa" || !pcoaZoom || e.target.closest?.(".pcoa-pt")) return;
+el.addEventListener("dblclick", (e) => {
+  if (activeOpenFig() !== "pcoa" || !pcoaZoom || e.target.closest?.(".pcoa-pt")) return;
   pcoaZoom = null;
   redrawPcoa();
 });
+}
 
 // ---- the figures, made answerable -------------------------------------------
 //
@@ -3225,6 +4469,46 @@ figCanvasEl?.addEventListener("dblclick", (e) => {
 let pickedSample = null;
 let hoverSample = null;
 
+// WHICH HALF a click happened in. Taxonomy and Function ask a point the same
+// question — "this sample sits apart; apart in WHAT?" — so they share every line
+// of the machinery below and differ only in these five facts. Threaded as an
+// argument with the taxonomic surface as the default, so the side that was here
+// first is untouched by the side that arrived second.
+const TAXO_SURFACE = {
+  canvas: "figCanvas", panel: "figDetail",
+  unit: "taxa", slug: "composition",
+  // The enterotype audit is a statement about gut GENERA. There is no enterotype
+  // of an ortholog, and printing one under a functional pie would be the
+  // taxonomic panel showing through.
+  enterotype: true,
+  // What a sample is made of, on this side. The functional surface answers at
+  // the ortholog level whatever the matrix picker says, for the reason the
+  // diversity figure does: it is the level that is a partition.
+  view: () => (lastMatrix ? viewOf(lastMatrix) : null),
+};
+const FUNC_SURFACE = {
+  canvas: "funcCanvas", panel: "funcDetail",
+  unit: "orthologs", slug: "functions",
+  enterotype: false,
+  // TWO tables, because the panel asks two questions of one sample and they do
+  // not have the same right answer.
+  //
+  // `view` — what the NUMBERS are computed on: the orthologs, always. Shannon
+  // and the nearest-neighbour distances need each row measured once, and modules
+  // and maps overlap.
+  //
+  // `pie` — what the sample is MADE of, at the level the reader is looking at.
+  // Pinned to the orthologs it was 93 % grey "other orthologs (2241)": a
+  // functional profile is flat, so no ortholog is 2 % of it, and a pie of ten
+  // slices under a tenth of a disc says nothing a reader can use. At the pathway
+  // level the same sample is legible. Both are true; they answer different
+  // questions, and the panel labels which is which.
+  view: () => (lastMatrix ? funcTableFor(viewOf(lastMatrix), "ko") : null),
+  pie: () => (lastMatrix ? funcTableFor(viewOf(lastMatrix), funcGrain) : null),
+  pieUnit: () => (funcGrain === "ko" ? "orthologs" : funcGrain === "module" ? "modules"
+    : funcGrain === "gmm" ? "gut metabolic modules" : "pathways"),
+};
+
 const FIG_INK = "#275662";
 const sampleSlug = (s) => String(s).replace(/[^A-Za-z0-9._-]+/g, "_").slice(0, 60) || "sample";
 
@@ -3238,12 +4522,22 @@ function paintPoint(el) {
     if (hit) hit.setAttribute("fill-opacity", picked ? "0.13" : hot ? "0.06" : "0");
     return;
   }
+  if (el.classList.contains("contrast-pt")) {
+    // Its own sizes: the ordination's 5.5 -> 8 would swallow a contrast lane,
+    // where eighteen dots share a row 26 px tall and the marks are 3.2.
+    el.setAttribute("r", picked ? "6" : hot ? "5" : "3.2");
+    el.setAttribute("stroke", picked ? FIG_INK : el.getAttribute("fill"));
+    el.setAttribute("stroke-opacity", "1");
+    el.setAttribute("stroke-width", picked ? "2" : hot ? "1.5" : "1");
+    el.setAttribute("fill-opacity", picked || hot ? "0.9" : "0.55");
+    return;
+  }
   el.setAttribute("r", picked || hot ? "8" : "5.5");
   el.setAttribute("stroke", picked ? FIG_INK : "#ffffff");
   el.setAttribute("stroke-width", picked ? "2.5" : hot ? "2" : "1");
 }
 const repaintPoints = (root) => {
-  for (const el of root.querySelectorAll(".pcoa-pt, .sample-row")) paintPoint(el);
+  for (const el of root.querySelectorAll(".pcoa-pt, .contrast-pt, .sample-row")) paintPoint(el);
 };
 
 // The point a keyboard-painted tooltip belongs to. A pointer tooltip is hidden
@@ -3270,7 +4564,9 @@ const hideTip = () => {
   document.getElementById("figTip")?.classList.add("hide");
 };
 
-// The one line worth having before the click: the dominant taxon and its share.
+// The one line worth having before the click: the dominant row and its share.
+// `species` on the taxonomic side, `label` on the functional one — the same
+// fallback figures.js uses, and for the same reason.
 function topTaxonOf(view, name) {
   const c = view.samples.indexOf(name);
   if (c < 0) return null;
@@ -3279,15 +4575,38 @@ function topTaxonOf(view, name) {
     const v = r.values[c] || 0;
     if (v <= 0) continue;
     total += v;
-    if (!best || v > best.v) best = { label: r.species, v };
+    if (!best || v > best.v) best = { label: r.species ?? r.label ?? r.name ?? "", v };
   }
   return best ? { ...best, share: best.v / total } : null;
 }
 
-function wireFigure(canvas, view) {
+function wireFigure(canvas, view, surface = TAXO_SURFACE) {
   const svg = canvas.querySelector("svg");
   if (!svg) return;
   hoverSample = null;
+
+  // The contrast's two right-hand columns reorder the rows on a click, the same
+  // three-state cycle the matrix headers use: descending, ascending, then back
+  // to the figure's own order — largest difference first, which is what the
+  // figure is for and what a reader must be able to get back to without
+  // reloading. The redraw goes through the surface's own refresh so that the
+  // functional half re-reads its level and the taxonomic half its rank; calling
+  // drawFigure directly here would draw the taxonomic figure over the
+  // functional canvas.
+  for (const th of svg.querySelectorAll(".contrast-head")) {
+    const key = th.dataset.sort;
+    const cycle = () => {
+      contrastSort = nextSort(contrastSort, key);
+      if (surface === FUNC_SURFACE) refreshFunc(); else drawFigure(openFig);
+    };
+    th.addEventListener("click", cycle);
+    // A handle that answers the mouse and not the keyboard is a handle half the
+    // readers cannot reach; it carries role="button" and tabindex, so it owes
+    // them Enter and Space.
+    th.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" || e.key === " ") { e.preventDefault(); cycle(); }
+    });
+  }
 
   // `e` may be a real pointer event or a point element — focus has no
   // coordinates, and the tooltip has to go somewhere.
@@ -3322,7 +4641,7 @@ function wireFigure(canvas, view) {
   svg.addEventListener("pointerdown", (e) => { touch = fromFinger(e); });
   svg.addEventListener("pointermove", (e) => {
     touch = fromFinger(e);
-    const name = e.target.closest?.(".pcoa-pt, .sample-row")?.getAttribute("data-sample") ?? null;
+    const name = e.target.closest?.(".pcoa-pt, .contrast-pt, .sample-row")?.getAttribute("data-sample") ?? null;
     if (name !== hoverSample) {
       hoverSample = name;
       repaintPoints(svg);
@@ -3335,9 +4654,9 @@ function wireFigure(canvas, view) {
     hideTip();
   });
   svg.addEventListener("click", (e) => {
-    const name = e.target.closest?.(".pcoa-pt, .sample-row")?.getAttribute("data-sample");
+    const name = e.target.closest?.(".pcoa-pt, .contrast-pt, .sample-row")?.getAttribute("data-sample");
     if (!name) return;
-    if (name === pickedSample) closePie(); else showPie(view, name);
+    if (name === pickedSample) closePie(surface); else showPie(view, name, surface);
     repaintPoints(svg);
     // The pointer has not moved, so nothing else would redraw the tooltip — and
     // it is still offering "click for the full composition" for the sample that
@@ -3348,7 +4667,7 @@ function wireFigure(canvas, view) {
   // Space for the click — the points carry tabindex only while the plot is
   // small enough for that to be a reasonable number of stops (see pcoaSvg).
   svg.addEventListener("focusin", (e) => {
-    const pt = e.target.closest?.(".pcoa-pt, .sample-row");
+    const pt = e.target.closest?.(".pcoa-pt, .contrast-pt, .sample-row");
     if (!pt) return;
     hoverSample = pt.getAttribute("data-sample");
     repaintPoints(svg);
@@ -3361,10 +4680,10 @@ function wireFigure(canvas, view) {
   });
   svg.addEventListener("keydown", (e) => {
     if (e.key !== "Enter" && e.key !== " ") return;
-    const name = e.target.closest?.(".pcoa-pt, .sample-row")?.getAttribute("data-sample");
+    const name = e.target.closest?.(".pcoa-pt, .contrast-pt, .sample-row")?.getAttribute("data-sample");
     if (!name) return;
     e.preventDefault();   // Space would scroll the page out from under the plot
-    if (name === pickedSample) closePie(); else showPie(view, name);
+    if (name === pickedSample) closePie(surface); else showPie(view, name, surface);
     repaintPoints(svg);
     paintTip(name, e.target);
   });
@@ -3372,19 +4691,19 @@ function wireFigure(canvas, view) {
   repaintPoints(svg);
 }
 
-function closePie() {
+function closePie(surface = TAXO_SURFACE) {
   pickedSample = null;
-  showDetailPrompt();
+  showDetailPrompt(surface);
   paintTopN();
-  const canvas = document.getElementById("figCanvas");
+  const canvas = document.getElementById(surface.canvas);
   if (canvas) repaintPoints(canvas);
 }
 
 // The right half while no sample is open. Not blank and not absent: absent is
 // what used to make the figure jump when a point was clicked, and blank is a
 // question nobody asked. It says what the half is for.
-function showDetailPrompt() {
-  const panel = document.getElementById("figDetail");
+function showDetailPrompt(surface = TAXO_SURFACE) {
+  const panel = document.getElementById(surface.panel);
   if (!panel) return;
   panel.innerHTML =
     `<div class="fig-detail-prompt">` +
@@ -3400,15 +4719,15 @@ function showDetailPrompt() {
 
 // Closing the figures closes the panel with them — there is nothing left for it
 // to be beside.
-function hideDetail() {
-  const panel = document.getElementById("figDetail");
+function hideDetail(surface = TAXO_SURFACE) {
+  const panel = document.getElementById(surface.panel);
   if (!panel) return;
   panel.classList.add("hide");
   panel.innerHTML = "";
 }
 
-function showPie(view, name) {
-  const panel = document.getElementById("figDetail");
+function showPie(view, name, surface = TAXO_SURFACE) {
+  const panel = document.getElementById(surface.panel);
   if (!panel) return;
   pickedSample = name;
   const group = metaGroupOf(name);
@@ -3417,33 +4736,39 @@ function showPie(view, name) {
     `<strong>${escapeHTML(name)}</strong>` +
     (group ? `<span class="info">${escapeHTML(group)}</span>` : "") +
     `<span class="fig-detail-actions">` +
-    `<button type="button" id="pieDownload">Download SVG</button>` +
-    `<button type="button" id="pieClose" aria-label="Close this sample">✕</button>` +
+    `<button type="button" class="pie-download">Download SVG</button>` +
+    `<button type="button" class="pie-close" aria-label="Close this sample">✕</button>` +
     `</span></div>` +
     `<div class="fig-detail-body"></div>` +
-    factsHtml(view, name);
+    factsHtml(view, name, surface);
   panel.classList.remove("hide");
-  fitPie(panel, view, name);
+  fitPie(panel, surface.pie ? (surface.pie() ?? view) : view, name, surface);
   paintTopN();
-  document.getElementById("pieClose")?.addEventListener("click", () => {
-    closePie();
+  // WITHIN THE PANEL, never by id. Both halves render this same head, so as soon
+  // as a sample is open on each, `pieClose` and `pieDownload` exist twice and
+  // getElementById returns the taxonomic one: the functional panel's own ✕ and
+  // Download SVG got no listener at all, and the taxonomic ones got a second
+  // listener closing over the wrong panel. Measured: 0 downloads from the
+  // Function panel's button, and its ✕ did nothing.
+  panel.querySelector(".pie-close")?.addEventListener("click", () => {
+    closePie(surface);
     hideTip();
   });
-  document.getElementById("pieDownload")?.addEventListener("click", () => {
+  panel.querySelector(".pie-download")?.addEventListener("click", () => {
     const svg = panel.querySelector(".fig-detail-body")?.innerHTML;
-    if (svg) saveBlob(svg, "image/svg+xml", `composition_${sampleSlug(name)}.svg`);
+    if (svg) saveBlob(svg, "image/svg+xml", `${surface.slug}_${sampleSlug(name)}.svg`);
   });
   for (const b of panel.querySelectorAll("[data-metric]")) {
     b.addEventListener("click", () => {
       neighbourMetric = b.dataset.metric;
-      showPie(view, name);
+      showPie(view, name, surface);
     });
   }
   // A neighbour is a sample: opening it is the same thing as clicking its point.
   for (const b of panel.querySelectorAll("[data-jump]")) {
     b.addEventListener("click", () => {
-      showPie(view, b.dataset.jump);
-      const canvas = document.getElementById("figCanvas");
+      showPie(view, b.dataset.jump, surface);
+      const canvas = document.getElementById(surface.canvas);
       if (canvas) repaintPoints(canvas);
     });
   }
@@ -3461,7 +4786,7 @@ function showPie(view, name) {
  * neighbour list out of the bottom of it, which is the one part of the panel
  * nobody scrolls to find.
  */
-function fitPie(panel, view, name) {
+function fitPie(panel, view, name, surface = TAXO_SURFACE) {
   const body = panel.querySelector(".fig-detail-body");
   if (!body) return;
   const foot = panel.querySelector(".pie-facts") ?? body;
@@ -3471,13 +4796,47 @@ function fitPie(panel, view, name) {
   const padB = parseFloat(getComputedStyle(panel).paddingBottom) || 0;
   const room = Math.floor(panel.clientHeight - used - padB - 4);
   body.innerHTML = pieSvg(view, name, {
-    topN: figTopN,
+    // The half this panel belongs to, not always the taxonomic one: the pie
+    // beside the functional figures names pathways, and it should name as many
+    // of them as that half's own slider asks for.
+    topN: topNFor(surface === FUNC_SURFACE),
+    unit: surface.pieUnit ? surface.pieUnit() : surface.unit,
     width: Math.max(240, body.clientWidth),
     // A floor, because a phone-sized panel would otherwise get a pie the size of
     // its own legend; a ceiling, because a stacked card is 600 px tall and a
     // 600 px disc is not more informative than a 400 px one.
     height: Math.max(180, Math.min(440, room)),
   });
+  wirePie(body);
+}
+
+/**
+ * Name a slice under the pointer, at once.
+ *
+ * The slices carry a `<title>`, which is what a downloaded SVG needs — but in
+ * the page a native title is a second's wait and a system tooltip, and the rare
+ * taxa are the whole reason this exists: a hundred and ten wedges nobody can
+ * read is a hundred and ten wedges nobody can ask about. The page's own tooltip
+ * answers on the first pixel, in the page's own type.
+ */
+function wirePie(body) {
+  const svg = body?.querySelector("svg");
+  if (!svg) return;
+  const name = (e) => e.target?.closest?.(".pie-slice");
+  svg.addEventListener("pointermove", (e) => {
+    const el = name(e);
+    if (!el) { hideTip(); return; }
+    // Touch has no hover: a finger would leave the tooltip printed over the disc
+    // with nothing to dismiss it, exactly as on the plots.
+    if (e.pointerType === "touch" || e.pointerType === "pen") { hideTip(); return; }
+    showTip(
+      `<strong>${escapeHTML(el.getAttribute("data-taxon") ?? "")}</strong>` +
+      `<span>${escapeHTML(el.getAttribute("data-share") ?? "")} of this sample</span>` +
+      (el.getAttribute("data-rest")
+        ? `<span class="fig-tip-hint">among the ones pooled as “other”</span>` : ""),
+      e);
+  });
+  svg.addEventListener("pointerleave", hideTip);
 }
 
 // The rest of the panel, and the reason the panel is as tall as the plot beside
@@ -3569,26 +4928,37 @@ function enterotypeHtml(name) {
   return out;
 }
 
-function factsHtml(view, name) {
+function factsHtml(view, name, surface = TAXO_SURFACE) {
   const f = sampleFacts(view, name, { metric: neighbourMetric });
   if (!f) return "";
   const stat = (v, label, title) =>
     `<div class="pie-stat" title="${escapeHTML(title)}"><b>${v}</b><span>${label}</span></div>`;
   let out = `<div class="pie-facts"><div class="pie-stats">` +
-    stat(f.richness.toLocaleString(), "taxa detected",
+    stat(f.richness.toLocaleString(), `${surface.unit} detected`,
       `Rows with an abundance above zero in this sample, out of ${view.rows.length} in the matrix.`) +
-    stat(f.effective.toFixed(1), "effective taxa",
-      `e^Shannon (H = ${f.shannon.toFixed(2)}): how many equally-abundant taxa would give ` +
-      `this diversity. Fewer than the count above, because the abundances are uneven.`) +
+    stat(f.effective.toFixed(1), `effective ${surface.unit}`,
+      `e^Shannon (H = ${f.shannon.toFixed(2)}): how many equally-abundant ${surface.unit} would give ` +
+      `this diversity. Fewer than the count above, because the abundances are uneven. ` +
+      `Inverse Simpson, which all but ignores the rare tail, is ${f.inverseSimpson.toFixed(1)}.`) +
     stat(`${f.rank}<span class="of"> / ${f.of}</span>`, "by diversity",
-      `1 is the most diverse sample of the ${f.of} on screen, by effective taxa.`) +
-    `</div>` + enterotypeHtml(name) + metaHtml(name);
+      `1 is the most diverse sample of the ${f.of} on screen, by effective ${surface.unit}.`) +
+    `</div>` +
+    // When the pie is drawn at another level than the numbers are computed at,
+    // say so. Three tiles reading "orthologs" under a disc of pathways is two
+    // answers presented as one.
+    (surface.pieUnit && surface.pieUnit() !== surface.unit
+      ? `<div class="pie-note info">The disc is ${escapeHTML(surface.pieUnit())}, at the level ` +
+        `chosen above; the three numbers are over the ${escapeHTML(surface.unit)}, which are ` +
+        `measured once each — ${escapeHTML(surface.pieUnit())} overlap, and a diversity index ` +
+        `over categories that share members is not one.</div>`
+      : "") +
+    (surface.enterotype ? enterotypeHtml(name) : "") + metaHtml(name);
 
   // Not on the enterotype tab: "which samples is this one nearest" is the
   // ordination's question, it is one tab away, and the panel is a fixed box that
   // the pole audit already spends 250 px of. Something had to go and this is the
   // part that is drawn twice.
-  if (f.nearest.length && openFig !== "enterotype") {
+  if (f.nearest.length && !(surface.enterotype && openFig === "enterotype")) {
     // The distances are the FULL ones. The ordination is a projection of them
     // onto two axes and says so in its own labels; these are what it projects.
     const m = METRICS[f.metric];
@@ -3634,7 +5004,7 @@ let figResize = null;
 addEventListener("resize", () => {
   if (!openFig) return;
   clearTimeout(figResize);
-  figResize = setTimeout(() => { if (openFig) drawFigure(openFig, { toggle: false }); }, 200);
+  figResize = setTimeout(() => { if (openFig) drawFigure(openFig); }, 200);
 });
 
 // The tooltip is positioned in the viewport, so a scroll slides the plot out
@@ -3686,6 +5056,30 @@ document.getElementById("exportAs")?.addEventListener("change", (e) => {
   // restarted. Checked before the panel is painted, since the panel is what the
   // figure is measured against.
   if (pickedSample && !view.samples.includes(pickedSample)) closePie();
+  if (kind === "tsv" || kind === "csv") {
+    // The two that were buttons of their own until the toolbar was folded into
+    // one menu. Same function, same file, one slot instead of three.
+    downloadMatrix(kind === "tsv" ? "\t" : ",", kind);
+    return;
+  }
+  if (kind === "functsv" || kind === "funccsv") {
+    downloadFuncMatrix(kind === "functsv" ? "\t" : ",", kind === "functsv" ? "tsv" : "csv");
+    return;
+  }
+  if (kind === "groups") {
+    // The way back out. Groups could be READ from a CSV since the first version
+    // and made in the page since the editor landed, but a grouping made here —
+    // eighteen samples clicked into two arms — existed only in this tab, and the
+    // only way to keep it was to write the file by hand in another program. It
+    // is the same two columns the page reads, so it goes straight back in, and
+    // it travels to whatever else the reader's analysis runs in.
+    saveBlob(groupsCsv(view.samples), "text/csv", `peekmicrobiome-groups-${slug}.csv`);
+    return;
+  }
+  if (kind === "session") {
+    saveSession();
+    return;
+  }
   if (kind === "sylph") {
     // Straight from what sylph wrote, so every column survives — including the
     // ones this page never reads.
@@ -3714,18 +5108,22 @@ document.getElementById("exportAs")?.addEventListener("change", (e) => {
   }
 });
 
-document.getElementById("saveSession")?.addEventListener("click", () => {
+function saveSession() {
   if (!lastRaw) { showError("Nothing to save yet — no sample has been profiled."); return; }
   saveBlob(toSession({
     ref: lastRaw.ref, sampleOrder: lastRaw.sampleOrder, matrix: lastRaw.matrix,
     refBySample: lastRaw.refBySample, sampleMeta: lastRaw.metaBySample,
+    funcProfiles,
+    // Only the hand-made ones. A grouping by metadata field is recomputed on
+    // open from the metadata that is saved beside it.
+    groups: customGroups,
     rank: currentRank(),
     savedAt: new Date().toISOString(),
     // Named for what it is. Saving while the example is on screen writes the
     // example out, and a file called session_human-gut.json would be indexed a
     // month later as somebody's own run.
   }), "application/json", `${demoOn ? "example_" + DEMO_STUDY + "_" : "session_"}${refSlug(lastRaw.ref)}.json`);
-});
+}
 
 // Putting a saved matrix back on screen. Shared by the file picker and by the
 // bundled example, so the example cannot drift into being a mock of the results:
@@ -3733,6 +5131,14 @@ document.getElementById("saveSession")?.addEventListener("click", () => {
 function applySession(st) {
   lastRaw = { matrix: st.matrix, sampleOrder: st.sampleOrder, ref: st.ref,
     refBySample: st.refBySample, metaBySample: st.sampleMeta ?? new Map() };
+  // Groups the reader made, back as they were — and selected, since a session
+  // that carries them was saved by somebody who wanted them.
+  customGroups = st.groups?.size ? new Map(st.groups) : new Map();
+  if (customGroups.size) { groupSource = "custom"; applyGroupSource(); }
+  // Null, not {}: the Function tab distinguishes "this run measured no
+  // functions" from "it measured them and found none", and only one of those is
+  // a reason to explain rather than to draw.
+  funcProfiles = st.funcProfiles ?? null;
   const pick = document.getElementById("rankPick");
   if (pick && st.rank) pick.value = st.rank;
   lastMatrix = matrixToTable(lastRaw.matrix, lastRaw.sampleOrder, lastRaw.ref, lastRaw.refBySample);
@@ -3742,7 +5148,10 @@ function applySession(st) {
   // A figure left open was drawn from the table that has just been replaced.
   // Redrawn rather than left there: the SVG of the previous run beside the new
   // matrix is two different results under one heading.
-  if (openFig) drawFigure(openFig, { toggle: false });
+  if (openFig) drawFigure(openFig);
+  // Same rule one level up: if the Function panel is the one on screen, it is
+  // showing the orthologs of the run that has just been replaced.
+  if (!document.getElementById("funcPanel")?.classList.contains("hide")) refreshFunc();
 }
 
 // One input, two ways in: the row inside the results card, and the button in the
@@ -3841,8 +5250,11 @@ async function loadDemo() {
 
     if (!preDemo) {
       preDemo = {
-        lineage, taxonomy, ambiguousNames, metaGroups,
+        lineage, taxonomy, ambiguousNames, metaGroups, groupSource, customGroups,
         lastRaw, lastMatrix, openFig, rank: currentRank(),
+        // The example ships its own orthologs. Without this, clearing it would
+        // leave them in the Function tab beside whatever was on screen before.
+        funcProfiles,
       };
     }
 
@@ -3872,6 +5284,11 @@ async function loadDemo() {
     if (stale()) return;
 
     metaGroups = parseMetadata(groupsText);
+    // The example ships its own groups file, so the picker says so: it read
+    // "none" over a plot coloured by six donors, which is the same inconsistency
+    // the CSV path had.
+    groupSource = "csv";
+    contrastPair = null;
     // Before applySession, which paints the step strip: the strip asks demoOn
     // whether to call this the example, and would otherwise announce it as a
     // finished run of yours for as long as nothing else refreshed it.
@@ -3881,7 +5298,7 @@ async function loadDemo() {
     // Opened rather than merely offered: the ordination with its groups coloured
     // is the one view that says in a glance what the example is for, and a tab
     // nobody clicks shows nothing.
-    drawFigure("pcoa", { toggle: false });
+    drawFigure("pcoa");
     els.results.scrollIntoView({ block: "start", behavior: "smooth" });
   } catch (err) {
     showError(`Could not load the example: ${err?.message ?? err}. ` +
@@ -3900,15 +5317,37 @@ function paintDemoBanner(st) {
   // the header row as an entry of its own, and every group it names for a sample
   // this session does not have would be counted here as a subject.
   const groups = new Set(st.sampleOrder.map((s) => metaGroupOf(s)).filter(Boolean)).size;
+  // A <details>, because on a narrow screen this paragraph was a whole screen of
+  // reading between the page and its own results — measured at 420 px, where the
+  // banner alone filled the viewport before the tab bar. The line that MUST be
+  // met is the first one, and it is the summary; the rest is there for whoever
+  // wants it.
   el.innerHTML =
-    `<div><strong>This is the example, not your data.</strong> ${n} public runs of ` +
+    `<details class="demo-fold" open><summary><strong>This is the example, not your data.</strong> ` +
+    `${n} public runs of ${DEMO_STUDY}, already profiled.</summary>` +
+    `<div>${n} public runs of ` +
     `<a href="https://www.ebi.ac.uk/ena/browser/view/${DEMO_STUDY}" target="_blank" ` +
     `rel="noopener noreferrer">${DEMO_STUDY}</a> — ${groups || "six"} volunteers in Singapore, ` +
     `each of whom gave a stool sample three times over eight weeks while eating one of three ` +
     `cooking oils in a blinded trial. Profiled with this page against ` +
     `${escapeHTML(st.ref?.label ?? "a catalogue")} and saved. The numbers are real measurements, ` +
     `but nothing was computed on your computer just now: profile the same accessions from the ` +
-    `ENA panel above and they come back.</div>` +
+    `ENA panel above and they come back.` +
+    // Only when there is one. The example shipped taxonomy alone for a year, and
+    // a banner promising a tab that refuses is worse than a banner that is quiet.
+    //
+    // And it must not inherit the sentence before it: "profile the same accessions
+    // and they come back" was true of the taxonomy and false of the functions for
+    // as long as that half could only be computed by a script. Since the page grew
+    // the second sketch it is true of both, and this sentence says so — a banner
+    // still describing the old limitation would send a reader looking for a
+    // control that is right there on the page.
+    (st.funcProfiles && Object.keys(st.funcProfiles).length
+      ? ` The Function tab is the same reads read a second way — KEGG orthologs, ` +
+        `at the same depth. Tick <em>also profile functions</em> before a run and ` +
+        `this page measures that half too.`
+      : "") +
+    `</div></details>` +
     `<button type="button" id="demoClear">Clear the example</button>`;
   el.classList.remove("hide");
   document.getElementById("demoClear")?.addEventListener("click", () => clearDemo());
@@ -3929,8 +5368,14 @@ function clearDemo({ wipe = true } = {}) {
   // catalogue's genomes.
   if (back) {
     ({ lineage, taxonomy, ambiguousNames, metaGroups } = back);
+    // Where the groups came from goes back with them. Without this the picker
+    // kept saying "from a CSV…" over a cleared page with no groups in it.
+    groupSource = back.groupSource ?? "none";
+    customGroups = back.customGroups ?? new Map();
   } else {
     metaGroups = new Map();
+    groupSource = "none";
+    customGroups = new Map();
   }
   if (!wipe) return;
 
@@ -3938,34 +5383,80 @@ function clearDemo({ wipe = true } = {}) {
   // is the usual case.
   lastRaw = back?.lastRaw ?? null;
   lastMatrix = back?.lastMatrix ?? null;
+  funcProfiles = back?.funcProfiles ?? null;
   const pick = document.getElementById("rankPick");
   if (pick) pick.value = back?.rank ?? "s";
   if (lastMatrix) {
     renderMatrix(viewOf(lastMatrix));
     els.results.classList.remove("hide");
-    drawFigure(back?.openFig ?? null, { toggle: false });
+    drawFigure(back?.openFig ?? null);
   } else {
     drawFigure(null);
     els.results.classList.add("hide");
     const note = document.getElementById("figNote");
     if (note) note.textContent = "";
   }
+  if (!document.getElementById("funcPanel")?.classList.contains("hide")) refreshFunc();
   refreshSteps();
 }
 
 document.getElementById("demoLoad")?.addEventListener("click", loadDemo);
 
-document.getElementById("figDownload")?.addEventListener("click", () => {
-  const svg = document.getElementById("figCanvas")?.innerHTML;
-  if (!svg || !openFig) return;
-  const blob = new Blob([svg], { type: "image/svg+xml" });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = `${openFig}_${refSlug(lastMatrix?.ref)}.svg`;
-  document.body.appendChild(a); a.click(); document.body.removeChild(a);
-  setTimeout(() => URL.revokeObjectURL(url), 60_000);
-});
+/**
+ * Two SVGs into one, side by side.
+ *
+ * A figure and the sample panel beside it are what a reader looked at; saving
+ * them apart and re-assembling them in another program is work the page can do
+ * once. Both are complete documents with their own viewBox, so each goes into a
+ * translated group and the outer box is their sum — no scaling, so a 900-pixel
+ * plot stays 900 pixels wide and the type keeps its size.
+ */
+function sideBySideSvg(a, b, gap = 24) {
+  const box = (svg) => {
+    const m = /viewBox="([\d.\-]+) +([\d.\-]+) +([\d.\-]+) +([\d.\-]+)"/.exec(svg);
+    return m ? { w: Number(m[3]), h: Number(m[4]) } : { w: 0, h: 0 };
+  };
+  const A = box(a), B = box(b);
+  if (!A.w || !B.w) return a || b;
+  const w = A.w + gap + B.w, h = Math.max(A.h, B.h);
+  // The inner <svg> elements are kept whole rather than unwrapped: each carries
+  // its own font-family and font-size, and hoisting their children would leave
+  // them inheriting the outer document's.
+  const place = (svg, x) => `<g transform="translate(${x},0)">${svg}</g>`;
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}" ` +
+    `viewBox="0 0 ${w} ${h}"><rect width="${w}" height="${h}" fill="#ffffff"/>` +
+    place(a, 0) + place(b, A.w + gap) + `</svg>`;
+}
+
+/** Wire one figure's "save as SVG" menu. Both halves have one; they differ only
+ *  in which elements they read and what the file is called. */
+function wireSvgPick(selId, canvasId, panelId, nameOf) {
+  const sel = document.getElementById(selId);
+  if (!sel) return;
+  sel.addEventListener("change", () => {
+    const want = sel.value;
+    sel.value = "";
+    if (!want) return;
+    const figure = document.getElementById(canvasId)?.querySelector("svg")?.outerHTML ?? "";
+    const panel = document.getElementById(panelId)?.querySelector(".fig-detail-body svg")?.outerHTML ?? "";
+    // Offered but empty is a worse answer than offered and refused: with no
+    // sample open there is no right-hand panel to save, and silently writing the
+    // figure under a name that says "both" would be the wrong file.
+    if (want !== "figure" && !panel) {
+      showError("No sample is open beside the figure — click a point, a bar or a row first.");
+      return;
+    }
+    const svg = want === "figure" ? figure
+      : want === "panel" ? panel
+        : sideBySideSvg(figure, panel);
+    if (!svg) return;
+    saveBlob(svg, "image/svg+xml", `${nameOf()}-${want}.svg`);
+  });
+}
+wireSvgPick("figSvgPick", "figCanvas", "figDetail",
+  () => `${openFig ?? "figure"}_${refSlug(lastMatrix?.ref)}`);
+wireSvgPick("funcSvgPick", "funcCanvas", "funcDetail",
+  () => `peekmicrobiome-function-${openFuncFig}`);
 document.getElementById("rankPick")?.addEventListener("change", rerankMatrix);
 const canAggregate = () => taxonomy.rankKeys.length > 0;
 
@@ -4035,6 +5526,163 @@ function matrixToTable(matrix, sampleOrder, ref, refBySample = new Map(), { rank
 // fills, and the summary has to say so — a matrix that looks finished but holds
 // 3 of 85 samples is worse than no matrix at all, because it will be exported
 // and read as the whole thing.
+/**
+ * The abundance matrix — ONE renderer, both halves.
+ *
+ * Taxonomy and Function are the same table of the same shape asked two
+ * questions, and the page says so by drawing them with the same code rather
+ * than with two functions that happen to agree today. They agreed for about a
+ * day: the functional one had one header row instead of two, no heat colour, no
+ * identifier column and three decimals instead of two, and every one of those
+ * was invisible until the two were seen side by side.
+ *
+ * What differs is passed in, and it is exactly four things: what a row IS
+ * (species / pathway), what identifies it (a genome accession / a KEGG entry),
+ * where that identifier can be looked up (MGnify / KEGG), and what the columns
+ * were measured against. Everything else — the sticky header, the second header
+ * row naming the reference per column, the heat scale, the two decimals, the
+ * empty cell for absent rather than "0.00" for trace — is shared by
+ * construction.
+ *
+ *   rows      [{ name, id, values }]  the name is the first column, the
+ *             identifier the second — never both in one cell, which is what
+ *             passing kegg.js's `label` here produced: "map01100 — Metabolic
+ *             pathways" beside a column already reading "map01100".
+ *   scale     multiplier onto a percentage: 1 for sylph's own %, 100 for a
+ *             functional fraction. The heat scale reads percentages.
+ *   urlOf     (id) => string | null. Null renders the identifier unlinked,
+ *             which is what a genome with no MGnify page and a `_none` bucket
+ *             both need.
+ */
+// The citation notice folds after it has been read once. It is correct and it
+// matters — it is also 150 px off the top of the page on every visit, met once
+// and scrolled past for ever after. Open the first time so a first-time reader
+// still meets it; remembered closed after that, in this browser only.
+{
+  const cite = document.getElementById("noticeCite");
+  if (cite) {
+    let seen = false;
+    try { seen = localStorage.getItem("peek-cite-read") === "1"; } catch { /* private mode */ }
+    cite.open = !seen;
+    cite.addEventListener("toggle", () => {
+      if (cite.open) return;
+      try { localStorage.setItem("peek-cite-read", "1"); } catch { /* private mode */ }
+    });
+  }
+}
+
+
+// ---- searching and sorting a matrix -------------------------------------------
+//
+// One state per half, because the two tables are asked different questions and a
+// search typed into one has no meaning in the other. Both live here rather than
+// in paintMatrix, which is a renderer and should hold no memory.
+let taxoFind = "", funcFind = "";
+let taxoSort = null, funcSort = null;   // { col, dir } or null for the table's own order
+
+document.getElementById("matrixFind")?.addEventListener("input", (e) => {
+  taxoFind = e.target.value;
+  if (lastMatrix) renderMatrix(viewOf(lastMatrix));
+});
+document.getElementById("funcFind")?.addEventListener("input", (e) => {
+  funcFind = e.target.value;
+  refreshFunc();
+});
+// Delegated, because the header row is rebuilt on every redraw and listeners
+// attached to the old one would be attached to elements that no longer exist.
+document.getElementById("matrixHead")?.addEventListener("click", (e) => {
+  const th = e.target.closest?.("th[data-sort-col]");
+  if (!th) return;
+  taxoSort = nextSort(taxoSort, Number(th.dataset.sortCol));
+  if (lastMatrix) renderMatrix(viewOf(lastMatrix));
+});
+document.getElementById("funcHead")?.addEventListener("click", (e) => {
+  const th = e.target.closest?.("th[data-sort-col]");
+  if (!th) return;
+  funcSort = nextSort(funcSort, Number(th.dataset.sortCol));
+  refreshFunc();
+});
+
+function paintMatrix(headEl, bodyEl, {
+  samples, rows, nameHead, idHead, subHead, subCells, scale = 1, urlOf = () => null,
+  linkTitle = (id) => String(id), cellUrl = null, cellTitle = () => "",
+  cellDetail = null, find = "", sort = null, unit = "rows", noteEl = null,
+}) {
+  if (!headEl || !bodyEl) return;
+  // Searched and sorted HERE rather than by the callers, so both matrices get
+  // both for free and cannot drift apart in how they interpret either.
+  // A sort on a column this table does not have: a run with fewer samples than
+  // the last one, a session opened over another. arrangeRows would read
+  // `values[7]` as 0 for every row and hand back an alphabetical table with no
+  // arrow anywhere to say why.
+  const sortCol = sort?.col != null && sort.col < samples.length ? sort.col : null;
+  const arranged = arrangeRows(rows, { find, sortCol, sortDir: sort?.dir });
+  rows = arranged.rows;
+  if (noteEl) noteEl.textContent = arrangeNote(arranged, unit);
+  const mark = (c) => (sortCol === c ? (sort.dir === "asc" ? " ↑" : " ↓") : "");
+  headEl.innerHTML = `
+    <tr>
+      <th>${escapeHTML(nameHead)}</th>
+      <th>${escapeHTML(idHead)}</th>
+      ${samples.map((s, c) => `<th class="sortable" data-sort-col="${c}" ` +
+        `aria-sort="${sortCol === c ? (sort.dir === "asc" ? "ascending" : "descending") : "none"}" ` +
+        `title="${escapeHTML(s)} — click to sort by this sample">${escapeHTML(s)}` +
+        `<span class="sort-mark">${mark(c)}</span></th>`).join("")}
+    </tr>
+    <tr class="matrix-ref-row">
+      <th></th><th>${escapeHTML(subHead)}</th>${subCells}
+    </tr>`;
+
+  bodyEl.innerHTML = rows.map((r) => {
+    const id = r.id ?? "";
+    // A row may name its own destination. Most cannot — an accession or an
+    // identifier is all there is to go on — but a KEGG pathway row knows which
+    // orthologs were found on it, and that turns a link to an entry page into a
+    // link to the map with those boxes coloured in.
+    const url = r.url ?? (id ? urlOf(id) : null);
+    const code = id ? `<code>${escapeHTML(id)}</code>` : "—";
+    return `
+    <tr>
+      <td class="species" title="${escapeHTML(r.name)}">${escapeHTML(r.name)}</td>
+      <td>${url
+        ? `<a href="${escapeHTML(url)}" target="_blank" rel="noopener noreferrer"
+             title="${escapeHTML(linkTitle(id))}">${code}</a>`
+        : code}</td>
+      ${r.values.map((v, c) => {
+        const pct = v * scale;
+        // Present-but-trace reads "0.00" on a tinted cell; absent is an empty,
+        // untinted one. Two different facts, two different cells.
+        const text = pct > 0 ? pct.toFixed(2) : "";
+        const bg = pct > 0 ? heatColor(pct) : "transparent";
+        // A cell is a row AND a column, which is exactly what a KEGG map needs:
+        // this pathway, in THIS sample. The tab that used to list those links
+        // was the same table with the columns thrown away — ordered, moreover,
+        // by a quantity that barely differs between samples (two of them share
+        // 9.6 of their top 10 pathways), so its sample picker changed nothing.
+        const href = pct > 0 && cellUrl ? cellUrl(r, c) : null;
+        // A cell that HAS a detail says so by being a button. Which cells have
+        // one depends on what a row is: a row that is a SET of orthologs — a
+        // KEGG module, a gut metabolic module — can be opened to see the set,
+        // and one that IS an ortholog has nothing to open that its identifier
+        // does not already link to.
+        //
+        // Offered on empty cells too, where there is a detail: an empty GMM cell
+        // is the interesting one, because the detail says how many of the
+        // module's steps were found and therefore why it is empty.
+        const detail = cellDetail ? cellDetail(r, c) : null;
+        const body = href
+          ? `<a href="${escapeHTML(href)}" target="_blank" rel="noopener noreferrer" ` +
+            `title="${escapeHTML(cellTitle(r, c))}">${text}</a>`
+          : detail
+            ? `<button type="button" class="cell-open" data-cell="${escapeHTML(detail.key)}" ` +
+              `title="${escapeHTML(detail.hint)}">${text || "·"}</button>`
+            : text;
+        return `<td class="num" style="background:${bg}">${body}</td>`;
+      }).join("")}
+    </tr>`;
+  }).join("");
+}
+
 function renderMatrix({ samples, rows, ref, refs, mixed }, progress = null) {
   const rankWrap = document.getElementById("rankPickWrap");
   if (rankWrap) rankWrap.classList.toggle("hide", !canAggregate());
@@ -4074,33 +5722,23 @@ function renderMatrix({ samples, rows, ref, refs, mixed }, progress = null) {
     const short = r ? refShort(r) : "—";
     return `<th class="matrix-ref" title="${escapeHTML(short)}">${escapeHTML(r?.label || r?.file || "—")}</th>`;
   }).join("");
-  els.matrixHead.innerHTML = `
-    <tr>
-      <th>${escapeHTML(RANK_LABELS[currentRank()] ?? "Species")}</th>
-      <th>${currentRank() === "s" || !canAggregate() ? "Genome" : "Genomes"}</th>
-      ${samples.map(s => `<th title="${escapeHTML(s)}">${escapeHTML(s)}</th>`).join("")}
-    </tr>
-    <tr class="matrix-ref-row">
-      <th></th><th>profiled against</th>${refCells}
-    </tr>`;
 
-  els.matrixBody.innerHTML = rows.map(r => `
-    <tr>
-      <td class="species" title="${escapeHTML(r.species)}">${escapeHTML(r.species)}</td>
-      <td>${(() => {
-        const u = mgnifyGenomeUrl(r.genome);
-        const code = `<code>${escapeHTML(r.genome)}</code>`;
-        return u
-          ? `<a href="${escapeHTML(u)}" target="_blank" rel="noopener noreferrer"
-               title="Open ${escapeHTML(r.genome)} on MGnify">${code}</a>`
-          : code;
-      })()}</td>
-      ${r.values.map(v => {
-        const display = v > 0 ? v.toFixed(2) : "";
-        const bg = v > 0 ? heatColor(v) : "transparent";
-        return `<td class="num" style="background:${bg}">${display}</td>`;
-      }).join("")}
-    </tr>`).join("");
+  paintMatrix(els.matrixHead, els.matrixBody, {
+    find: taxoFind,
+    sort: taxoSort,
+    unit: RANK_LABELS[currentRank()].toLowerCase(),
+    noteEl: document.getElementById("matrixFindNote"),
+    samples,
+    // The shared renderer reads `name` and `id`; here they are the species name
+    // and the genome accession it was measured on.
+    rows: rows.map((r) => ({ name: r.species, id: r.genome, values: r.values })),
+    nameHead: RANK_LABELS[currentRank()] ?? "Species",
+    idHead: currentRank() === "s" || !canAggregate() ? "Genome" : "Genomes",
+    subHead: "profiled against",
+    subCells: refCells,
+    urlOf: (g) => mgnifyGenomeUrl(g),
+    linkTitle: (g) => `Open ${g} on MGnify`,
+  });
 
   const partial = progress && progress.done < progress.total;
   els.resultsSummary.textContent =
@@ -4120,8 +5758,9 @@ function heatColor(pct) {
 
 // ---- export ------------------------------------------------------------------
 
-els.downloadTsv.addEventListener("click", () => downloadMatrix("\t", "tsv"));
-els.downloadCsv.addEventListener("click", () => downloadMatrix(",", "csv"));
+// The two download buttons became entries in the Export menu — one verb, one
+// control, instead of three slots in a toolbar that had too many. downloadMatrix
+// is still the one function that writes them; the exportAs handler calls it.
 
 // An exported matrix has to stand on its own: opened months later, on another
 // computer, it must still say which catalogue produced it. That is not
@@ -4192,14 +5831,528 @@ function paintOverall(doneCount, totalCount, currentFracIn) {
   els.bar.parentElement?.setAttribute("aria-valuenow", String(Math.round(overall)));
 }
 
+/**
+ * Bytes, in the units the things this page names are published in.
+ *
+ * DECIMAL, not binary. Every figure a reader can check this against is decimal:
+ * Zenodo lists the human-gut catalogue at 454.0 MB, `web/db/biomes.json` carries
+ * its exact byte count, and the ENA reports FASTQ sizes the same way. Dividing by
+ * 1024 and writing "MB" made the page offer a "433.0 MB" download for the very
+ * file Zenodo calls 454.0 MB — a 4.6% gap the reader cannot explain and would
+ * reasonably read as the wrong file.
+ */
 function fmtBytes(n) {
-  if (!Number.isFinite(n)) return "—";
-  if (n < 1024) return `${n} B`;
-  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
-  if (n < 1024 * 1024 * 1024) return `${(n / 1024 / 1024).toFixed(1)} MB`;
-  return `${(n / 1024 / 1024 / 1024).toFixed(2)} GB`;
+  if (!Number.isFinite(n)) return "\u2014";
+  if (n < 1e3) return `${n} B`;
+  if (n < 1e6) return `${(n / 1e3).toFixed(1)} kB`;
+  if (n < 1e9) return `${(n / 1e6).toFixed(1)} MB`;
+  return `${(n / 1e9).toFixed(2)} GB`;
 }
 
 function escapeHTML(s) {
   return String(s).replace(/[&<>"']/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;" }[c]));
 }
+
+// ---- the functional half -----------------------------------------------------
+//
+// Symmetrical with the taxonomic half above — its own matrix, its own downloads,
+// its own figures — and separate from it on purpose: the rows are not the same
+// kind of thing, and one table carrying both would be a matrix of two different
+// units under one heading.
+//
+// The figures are NOT the same four. Composition, diversity and the ordination
+// carry over unchanged, because kegg.js hands back the same { samples, rows }
+// shape they already take. Enterotype does not: there is no enterotype of a
+// pathway. In its place, the KEGG map — which is the one figure that has no
+// taxonomic counterpart.
+let openFuncFig = "composition";
+
+function showResultsTab(which) {
+  const taxo = document.getElementById("taxoPanel");
+  const func = document.getElementById("funcPanel");
+  if (!taxo || !func) return;
+  taxo.classList.toggle("hide", which !== "taxo");
+  func.classList.toggle("hide", which !== "func");
+  for (const b of document.querySelectorAll(".res-tab")) {
+    b.classList.toggle("is-on", b.dataset.res === which);
+  }
+  // Each side is redrawn when it BECOMES visible. An SVG is sized from
+  // clientWidth, and a hidden panel measures 0 — so a figure repainted while its
+  // half was off screen came back at the 320x300 floor and stayed there, a
+  // postage stamp in a full-width card, until something resized the window. That
+  // is now a state that cannot persist: whatever was drawn small is drawn again
+  // at the size it actually has.
+  if (which === "func") refreshFunc();
+  else if (openFig) drawFigure(openFig);
+}
+
+for (const b of document.querySelectorAll(".res-tab")) {
+  b.addEventListener("click", async () => {
+    // The names and the roll-ups live in a file. Fetched once, before anything
+    // is drawn, so no figure is ever painted with bare identifiers and then
+    // silently repainted with names under the reader.
+    if (b.dataset.res === "func" && keggConsent()) await loadKeggMap();
+    showResultsTab(b.dataset.res);
+  });
+}
+
+/** Everything the functional panel shows, from whatever state there is. */
+function refreshFunc() {
+  const canvas = document.getElementById("funcCanvas");
+  const head = document.getElementById("funcHead");
+  const body = document.getElementById("funcBody");
+  const summary = document.getElementById("funcSummary");
+  const bar = document.getElementById("funcToolbar");
+  if (!canvas) return;
+
+  // Everything that offers to hand the reader something — the level picker, the
+  // two downloads, Download SVG, the figure note — has to go with the table it
+  // describes. Blanked here and restored below, once, so a state that returns
+  // early cannot leave one of them behind: Download TSV stayed clickable under
+  // "Nothing measured here" and wrote a header quoting a coverage figure for a
+  // profile that did not exist.
+  const methodRef = document.getElementById("funcMethodRef");
+  const blank = () => {
+    if (head) head.innerHTML = "";
+    if (body) body.innerHTML = "";
+    if (summary) summary.textContent = "";
+    // Blanked with the rest: the sentence describes numbers, and there are none.
+    if (methodRef) { methodRef.textContent = ""; methodRef.classList.add("hide"); }
+    document.getElementById("funcContrastWrap")?.classList.add("hide");
+    document.getElementById("funcGroupWrap")?.classList.add("hide");
+    bar?.classList.add("hide");
+    document.getElementById("funcFigDownload")?.classList.add("hide");
+    const note = document.getElementById("funcFigNote");
+    if (note) note.textContent = "";
+    hideDetail(FUNC_SURFACE);
+    const cn = document.getElementById("funcClusterNote");
+    if (cn) cn.textContent = "";
+    for (const b of document.querySelectorAll(".func-tab")) b.classList.add("hide");
+  };
+
+  // The licence question comes before the data question. A reader who has not
+  // answered must not be told "nothing was measured": that is a different
+  // sentence, and it skips the terms.
+  if (!keggConsent()) {
+    canvas.classList.remove("hide");
+    canvas.innerHTML = keggGateHtml();
+    canvas.querySelector("#keggAcademic")?.addEventListener("click", () => setKeggConsent("academic"));
+    canvas.querySelector("#keggLicensed")?.addEventListener("click", () => setKeggConsent("licensed"));
+    blank();
+    return;
+  }
+
+  // Names and roll-ups live in a file. Without it every KO falls into "no
+  // module" and the panel would draw that as a finding rather than as a missing
+  // download, so fetch it first and come back.
+  if (!keggMap) { blank(); loadKeggMap().then(refreshFunc); return; }
+
+  const view = lastMatrix ? viewOf(lastMatrix) : null;
+  const why = functionRefusal(view);
+  if (why) {
+    canvas.classList.remove("hide");
+    // Two of the refusals are not "nothing measured" — they are a question and a
+    // request. Printing them under that heading would tell a reader their data
+    // is empty when what is missing is an answer or a file.
+    if (why === "gate:gmm") {
+      canvas.innerHTML = gmmGateHtml();
+      canvas.querySelector("#gmmAcademic")?.addEventListener("click", () => setGmmConsent("academic"));
+      canvas.querySelector("#gmmPermitted")?.addEventListener("click", () => setGmmConsent("permitted"));
+    } else if (why === "fetch:gmm") {
+      // Said rather than left blank: 8 KB over a slow link is a moment of nothing
+      // happening, and a panel that goes quiet after a click reads as a click
+      // that did not register.
+      canvas.innerHTML = `<div class="fig-refusal"><b>Fetching the GMM definitions</b>` +
+        `<span>From the Raes lab's own repository, into this tab.</span></div>`;
+    } else if (why === "load:gmm") {
+      canvas.innerHTML = gmmLoadHtml();
+      canvas.querySelector("#gmmPick")?.addEventListener("click",
+        () => document.getElementById("gmmFile")?.click());
+      canvas.querySelector("#gmmRetry")?.addEventListener("click", () => {
+        gmmFetchError = "";
+        loadGmmDefs().then(refreshFunc);
+        refreshFunc();
+      });
+    } else {
+      canvas.innerHTML = `<div class="fig-refusal"><b>Nothing measured here</b>` +
+        `<span>${escapeHTML(why)}</span></div>`;
+    }
+    blank();
+    // The level picker stays reachable, or the only way out of the GMM level is
+    // to answer a question the reader may have opened it by accident.
+    if (why === "gate:gmm" || why === "load:gmm" || why === "fetch:gmm") {
+      bar?.classList.remove("hide");
+    }
+    return;
+  }
+  bar?.classList.remove("hide");
+  // What these numbers are, and what the method misses — the functional half's
+  // answer to the taxonomic half's "Profiled against …", and shown for the same
+  // reason. The GMM level is measured the same way and gets the same sentence;
+  // what changes there is only which definitions the identifiers mean, and the
+  // matrix's own column heads say that.
+  if (methodRef) {
+    methodRef.textContent = FUNC_METHOD_NOTE;
+    methodRef.classList.add("db-ref-long");
+    methodRef.classList.remove("hide");
+  }
+  for (const b of document.querySelectorAll(".func-tab")) b.classList.remove("hide");
+  renderFuncMatrix(view);
+  drawFuncFigure(openFuncFig);
+}
+
+/**
+ * Similarity ordering for the functional table — the same control the taxonomic
+ * toolbar has, and a better question on this side: functions that rise and fall
+ * together across samples are a pathway acting as a unit, which a list ordered
+ * by mean abundance hides completely.
+ *
+ * A VIEW, never the data. Applied after the floor, so what is clustered is what
+ * is on screen — clustering rows the reader cannot see would spend the row
+ * budget on them and order the visible ones by their company.
+ */
+function funcViewOf(table) {
+  if (!document.getElementById("funcClusterPick")?.checked || !table?.rows?.length) return table;
+  const t0 = performance.now();
+  const out = clusterTable(table);
+  const ms = performance.now() - t0;
+  const note = document.getElementById("funcClusterNote");
+  if (note) {
+    note.textContent = out.clustered.rows
+      ? `rows and samples ordered by similarity (${ms.toFixed(0)} ms)`
+      : `samples ordered by similarity; ${table.rows.length} rows is past the ` +
+        `${CLUSTER_MAX_ROWS}-row limit, so rows stay in abundance order — raise the ` +
+        `function floor in Settings to bring them under it`;
+  }
+  // clusterTable returns a fresh object, so the floor's own fields — how many
+  // rows it hid and what they carried — would be dropped on the way to the
+  // summary that prints them.
+  return { ...table, ...out };
+}
+
+function renderFuncMatrix(view) {
+  syncExportMenu();
+  const head = document.getElementById("funcHead");
+  const body = document.getElementById("funcBody");
+  const summary = document.getElementById("funcSummary");
+  const t = funcViewOf(funcTableFor(view, funcGrain, { floored: true }));
+  if (!head || !body) return;
+
+  // Drawn by the taxonomic matrix's own renderer, so the two are the same table
+  // asked two questions rather than two tables that look alike. The KEGG entry
+  // goes exactly where the genome accession goes on the other side, linked the
+  // same way, in the same <code>.
+  // The open cell card describes a row of the table about to be replaced. Left
+  // standing across a level change it said "M00001" over a table of pathways.
+  closeCellPop();
+  paintMatrix(head, body, {
+    find: funcFind,
+    sort: funcSort,
+    unit: funcGrain === "ko" ? "orthologs" : funcGrain === "module" ? "modules"
+      : funcGrain === "gmm" ? "gut metabolic modules" : "pathways",
+    noteEl: document.getElementById("funcFindNote"),
+    samples: t.samples,
+    // `name`, not `label`: the identifier has a column of its own here, so the
+    // combined form kegg.js keeps for figure legends would print it twice.
+    // And no identifier at all for the not-on-a-map bucket — it needs a key to
+    // group by, but "_none" printed in a column of map00010s hands the reader
+    // kegg.js's own token in the shape of something to look up.
+    rows: t.rows.map((r) => ({
+      name: r.name,
+      id: r.id === NO_PATHWAY ? "" : r.id,
+      // Carried through: the cell link needs to know which orthologs put this
+      // profile on this map. The identifier column keeps the plain entry page —
+      // the COLOURED map is per sample, so it belongs on the cell, which is the
+      // one place that names both a pathway and a sample.
+      kos: r.kos,
+      values: r.values,
+    })),
+    nameHead: funcGrain === "ko" ? "Ortholog" : funcGrain === "module" ? "Module"
+      : funcGrain === "gmm" ? "Gut metabolic module" : "Pathway",
+    idHead: funcGrain === "gmm" ? "GMM" : "KEGG",
+    subHead: "measured against",
+    // The functional counterpart of "profiled against <catalogue>". One reference
+    // for every column, and named rather than assumed: the numbers are shares of
+    // what matched THIS set of orthologs and of nothing else.
+    //
+    // For GMMs the reference is the FILE THE READER OPENED, and naming it is not
+    // decoration: MF0088 is "butyrate production I" in GMMs.v1.07 and a different
+    // module entirely in the Raes lab's own GOmixer set, where not one of the 103
+    // identifiers keeps its name. An MF number with no version beside it answers
+    // "which process is this?" with a token whose meaning depends on a file the
+    // column never names.
+    subCells: t.samples.map(() => (funcGrain === "gmm"
+      ? `<th class="matrix-ref" title="Gut Metabolic Modules, from the definitions you opened ` +
+        `(${escapeHTML(gmmName)}). Identifiers are only meaningful against that file.">` +
+        `${escapeHTML(gmmName || "your GMM definitions")}</th>`
+      : `<th class="matrix-ref" title="KEGG orthologs, sketched from the reads in amino-acid ` +
+        `k-mers (k=11) — fmh-funprofiler">KEGG orthologs</th>`)).join(""),
+    // The profiler's fractions sum to one; the taxonomic column is already a
+    // percentage. The heat scale reads percentages, so this is where they meet.
+    scale: 100,
+    urlOf: funcGrain === "gmm" ? () => null : keggEntryUrl,
+    linkTitle: (id) => `Open ${id} on KEGG`,
+    // Every cell of the pathway table opens THAT map for THAT sample, coloured
+    // by that sample's own ortholog abundances. A cell is a row and a column,
+    // which is exactly what a coloured map needs — and it is why the two tabs
+    // that tried to be this list were both the table again.
+    //
+    // The scale is the SAMPLE's own most abundant ortholog: a map is read on its
+    // own, and against the whole run's maximum every map but one comes out
+    // uniformly pale.
+    cellUrl: funcGrain !== "pathway" ? null : (r, c) => {
+      const prof = funcProfiles?.[t.samples[c]] ?? {};
+      let max = 0;
+      for (const v of Object.values(prof)) if (v > max) max = v;
+      const kos = (r.kos ?? [])
+        .map((k) => ({ id: k.id, value: prof[k.id] ?? 0 }))
+        .filter((k) => k.value > 0)
+        .sort((a, b) => b.value - a.value);
+      return keggMapUrl(r.id, kos, { max })?.url ?? null;
+    },
+    // A module row is a SET of orthologs, so its cell can be opened to see the
+    // set. A pathway row opens KEGG's coloured map instead (cellUrl above), and
+    // an ortholog row has nothing inside it that its own identifier does not
+    // already link to.
+    cellDetail: (r, c) => funcCellDetail(t, r, c),
+    cellTitle: (r, c) => {
+      // Three families, three cases, and only one is still a caveat.
+      //   011xx  KEGG draws them in its own palette AND offers a grey base, so
+      //          the link asks for grey: 2,473,946 coloured pixels become
+      //          119,352, nearly all of them ours.
+      //   012xx  drawn in KEGG's colours with NO grey variant — its own script
+      //          gates the option on mapno matching /^011/ — so ours compete.
+      //   the rest  line art on white, where a colour simply reads.
+      const noGrey = /^map012\d\d$/.test(r.id);
+      return `Open ${r.id} on KEGG for ${t.samples[c]}, coloured by this sample's ` +
+        `ortholog abundances on a log scale` +
+        (noGrey ? " — an overview map, which KEGG draws in its own colours and " +
+          "offers no grey version, so ours read less clearly there" : "");
+    },
+  });
+
+  if (summary) {
+    const level = funcGrain === "ko" ? "orthologs" : funcGrain === "module" ? "modules"
+      : funcGrain === "gmm" ? "gut metabolic modules" : "pathways";
+    // The number that must travel with every functional view: most orthologs
+    // belong to no module, so a rolled-up table speaks for a fraction of what
+    // was measured and has to say which fraction. And it is a DIFFERENT number
+    // per level — 28 of the 508 modules appear on no map, so module coverage
+    // overstates what a pathway view can speak for, and the GMM catalogue is
+    // 442 orthologs against the ~4,300 a gut profile reports.
+    const cov = funcGrain === "ko" ? 1
+      : funcGrain === "module" ? moduleCoverage(funcProfiles, t.samples, keggMap)
+        : funcGrain === "gmm" ? gmmCoverage(funcProfiles, t.samples, gmmDefs)
+          : pathwayCoverage(funcProfiles, t.samples, keggMap);
+    // Worded like the taxonomic summary — "N rows across M samples" — because it
+    // sits in the same place in the same toolbar. Plus the one thing a reader
+    // must not assume about a rolled-up level: the rows are not a partition.
+    const missing = (view?.samples ?? []).filter((s) => !funcProfiles?.[s]).length;
+    summary.textContent =
+      `${t.rows.length} ${level} across ${t.samples.length} sample${t.samples.length === 1 ? "" : "s"}` +
+      // What the floor took out, and what it was carrying. A filtered table that
+      // does not say so is a table claiming to be the measurement — and the
+      // second number is the one that matters: 3,500 hidden rows holding 4% of
+      // the signal is noise removed, holding 40% would be the answer removed.
+      (t.hidden
+        ? ` (${t.hidden.toLocaleString()} more below ${t.floor}%, holding ` +
+          `${(t.carried * 100).toFixed(1)}% of the table)`
+        : "") +
+      (funcGrain === "ko"
+        ? (t.hidden ? "" : " — every measured ortholog, summing to 100%")
+        : funcGrain === "gmm"
+          // Not "reaches a module": a GMM value is the median along its covered
+          // path, so the column is not a share of anything and adding it up is
+          // meaningless. What the percentage says is how much of the measured
+          // signal this catalogue can see at all.
+          ? ` — the GMM catalogue covers ${(cov * 100).toFixed(0)}% of the measured signal; ` +
+            `values are the median along each module's covered path, not shares`
+          : ` — ${(cov * 100).toFixed(0)}% of the measured signal reaches a ` +
+            `${funcGrain === "module" ? "module" : "pathway map"}; rows overlap, so they do not add to 100%`) +
+      // A run where only some samples carry a profile shows a subset. Saying so
+      // beats a table that quietly has fewer columns than the one next door.
+      (missing ? ` · ${missing} sample${missing === 1 ? " has" : "s have"} no functional profile and ${missing === 1 ? "is" : "are"} not shown` : "");
+  }
+}
+
+function drawFuncFigure(kind) {
+  const canvas = document.getElementById("funcCanvas");
+  const dl = document.getElementById("funcFigDownload");
+  const note = document.getElementById("funcFigNote");
+  if (!canvas) return;
+  // Every pixel this draws is KEGG's. The terms are asked in refreshFunc, and
+  // this is the only function that can paint them, so it refuses on its own too
+  // rather than trusting every future caller to have gone through the gate.
+  if (!keggConsent() || !keggMap) return;
+  // Closed: the ✕ beside the tabs sets openFuncFig to null, which is the only
+  // way to shut a figure now that the tab bar is a radio group.
+  if (!kind) {
+    canvas.classList.add("hide");
+    canvas.innerHTML = "";
+    dl?.classList.add("hide");
+    document.getElementById("funcFigClose")?.classList.add("hide");
+    hideDetail(FUNC_SURFACE);
+    if (note) note.textContent = "";
+    for (const b of document.querySelectorAll(".func-tab")) b.classList.remove("is-on");
+    return;
+  }
+  const view = lastMatrix ? viewOf(lastMatrix) : null;
+  const t = funcTableFor(view, funcGrain);
+  canvas.classList.remove("hide");
+  canvas.innerHTML = "";
+  document.getElementById("funcFigClose")?.classList.remove("hide");
+
+  // The panel FIRST, then the measurement. It sits beside the canvas and takes
+  // half the row, so drawing before it appears sizes the figure to a width it is
+  // about to lose — a 440 px SVG in a 460 px box with the rest of the card empty
+  // under it.
+  wireFigure(canvas, funcTableFor(view, "ko"), FUNC_SURFACE);
+  if (pickedSample && t.samples.includes(pickedSample)) {
+    showPie(funcTableFor(view, "ko"), pickedSample, FUNC_SURFACE);
+  } else {
+    showDetailPrompt(FUNC_SURFACE);
+  }
+  const w = Math.max(320, Math.floor(canvas.clientWidth - 20));
+  const h = Math.max(300, Math.floor(canvas.clientHeight - 20));
+  openFuncFig = kind;
+  // What a row IS, at the level on screen. The taxonomic figures name their rows
+  // "taxa" in a legend and in a heading, and left at their default a chart of
+  // KEGG pathways says "effective number of taxa" and calls its grey remainder
+  // "other taxa" — the previous figure's caption showing through this one.
+  const unit = funcGrain === "ko" ? "orthologs" : funcGrain === "module" ? "modules"
+    : funcGrain === "gmm" ? "gut metabolic modules" : "pathways";
+  canvas.innerHTML =
+    // Diversity is computed on the ORTHOLOGS whatever level is on screen, and
+    // that is not a shortcut. Shannon needs a partition: p_i over disjoint
+    // categories summing to one. Orthologs are that — each measured once. Modules
+    // and maps are not: an ortholog in three modules is in all three, the column
+    // sums to 1.49, and -Σp·ln p over those numbers is not a diversity index, it
+    // is arithmetic on a quantity with no meaning. Drawing it under the word
+    // "Diversity" because a picker happened to be set to Modules would be a
+    // figure that changes what it measures when the reader changes what they
+    // look at.
+    kind === "alpha" ? alphaSvg(funcTableFor(view, "ko"), { width: w, height: h, unit: "orthologs" })
+    // The SAME ordination code as the taxonomic half — the cached layout, the
+    // zoom window, the colouring by groups or by computed clusters. Drawn with
+    // pcoaSvg directly it had none of them, which is not a design: it is the
+    // half that was built second.
+    //
+    // And the clusters say something here. Taxonomically they recover all six
+    // people without being told who is who (k=5, silhouette 0.84, nobody split);
+    // functionally they do not (k=3, 0.66 over the orthologs, 0.49 over the
+    // modules, with one and two people split). Reading those two plots side by
+    // side IS the functional-redundancy result.
+    : kind === "pcoa" ? ordinationSvg(t, w, h)
+    // Drawn at the level on screen, unlike Diversity: "which pathways differ"
+    // is a well-posed question over overlapping categories — a difference in a
+    // pathway's abundance is a difference whether or not its orthologs are
+    // counted elsewhere too — where an entropy over them is not.
+    : kind === "contrast"
+      // Same refusal as the taxonomic half, from the same function: a contrast
+      // with no groups must ask for them rather than quietly draw the other
+      // figure, and it must ask in the half the reader is looking at.
+      ? (contrastable(t) || contrastFallback
+        ? contrastSvg(t, { width: w, height: h, topN: funcTopNValue, groupOf: metaGroupOf, unit,
+          pair: contrastPair, scale: 100, sort: contrastSort,
+          stats: contrastStatsFor(t, `func:${funcGrain}`) })
+        : contrastRefusalHtml(t))
+    : compositionSvg(t, { width: w, height: h, topN: funcTopNValue, otherLabel: `other ${unit}` });
+  const funcNeedsGroups = kind === "contrast" && !contrastable(t) && !contrastFallback;
+  if (funcNeedsGroups) wireContrastRefusal(canvas, t);
+  dl?.classList.toggle("hide", funcNeedsGroups);
+  // What the open plot was drawn from, so a zoom or a pan can redraw it without
+  // going back through the whole panel.
+  if (kind === "pcoa") figView = t;
+  paintZoomControls();
+  paintTopN();
+  paintContrastControls(t);
+  paintGroupControls(t);
+  syncTopN();
+  // "Top 10 taxa" over a chart of KEGG pathways is the other half's caption.
+  const unitOut = document.getElementById("funcTopNUnit");
+  if (unitOut) unitOut.textContent = unit;
+  // Re-wired after the redraw: the listeners were attached to the SVG that has
+  // just been replaced. The same two gestures as the taxonomic figures — hover
+  // names the mark, a click opens what that sample is made of. Without them the
+  // functional points carried tabindex and an aria-label offering to open a
+  // composition, and nothing was listening.
+  wireFigure(canvas, funcTableFor(view, "ko"), FUNC_SURFACE);
+  for (const b of document.querySelectorAll(".func-tab")) {
+    b.classList.toggle("is-on", b.dataset.ffig === kind);
+  }
+  if (note) {
+    // What a rolled-up level costs the figure, said under the figure. The
+    // orthologs are a partition — each measured once, the column summing to one
+    // — and modules and maps are not: an ortholog in three modules is evidence
+    // for all three. So a composition bar reaching the right-hand edge is the
+    // renormalisation doing that, not the pathways accounting for the sample,
+    // and e^Shannon over overlapping categories is a spread, not a count of
+    // things present.
+    const overlap = funcGrain !== "ko";
+    const plain = FIG_PLAIN[kind] ? `${FIG_PLAIN[kind]} ` : "";
+    note.textContent = plain + (kind === "composition"
+        ? `${t.rows.length} rows, measured from the reads in amino-acid k-mers` +
+          (overlap ? ` · each bar is renormalised, because ${unit} overlap and do not sum to the sample`
+            : " · every measured ortholog, summing to the whole")
+        : kind === "alpha"
+          ? `Shannon over the orthologs, which are measured once each and sum to one` +
+            (overlap ? ` — not over ${unit}, which overlap: an index over categories that ` +
+              `share members is not a diversity index` : "")
+          : kind === "contrast"
+            ? `${t.rows.length} rows · click a dot for that sample`
+          : `${t.rows.length} rows, measured from the reads in amino-acid k-mers` +
+            (overlap ? ` · ${unit} overlap` : ""));
+  }
+}
+
+for (const b of document.querySelectorAll(".func-tab")) {
+  // Through refreshFunc, not straight into drawFuncFigure: the gate and the
+  // refusal both live in refreshFunc, and a button that draws KEGG data on its
+  // own is a way past them. The buttons are hidden in those states now, but a
+  // control whose safety depends on being invisible is one stylesheet away from
+  // being a hole.
+  b.addEventListener("click", () => { openFuncFig = b.dataset.ffig; refreshFunc(); });
+}
+
+document.getElementById("funcGrain")?.addEventListener("change", (e) => {
+  funcGrain = e.target.value;
+  refreshFunc();
+});
+
+// The definitions, read here and kept nowhere. `e.target.value = ""` so opening
+// the same file twice still fires — a reader who edited it would otherwise get
+// silence.
+document.getElementById("gmmFile")?.addEventListener("change", async (e) => {
+  const f = e.target.files?.[0];
+  e.target.value = "";
+  if (!f) return;
+  try {
+    const parsed = parseGmms(await f.text());
+    if (!parsed.modules.length) throw new Error("no modules in it");
+    gmmDefs = parsed;
+    gmmName = f.name;
+  } catch (err) {
+    gmmDefs = null;
+    gmmName = "";
+    showError(`Could not read ${f.name} as GMM definitions: ${err?.message ?? err}. ` +
+      `It should be the tab-delimited GMMs.v1.07.txt from github.com/raeslab/GMMs.`);
+  }
+  refreshFunc();
+});
+
+/** The same file, from the grouping the figures are drawn with. */
+const groupsCsv = (samples) => groupsCsvFrom(samples, metaGroups);
+
+/** The function matrix, at the level on screen. Called by the Export menu. */
+function downloadFuncMatrix(sep, ext) {
+  const view = lastMatrix ? viewOf(lastMatrix) : null;
+  if (!view) return;
+  const level = funcGrain === "ko" ? "orthologs" : funcGrain === "module" ? "modules" : "pathways";
+  // The separator goes IN, so every field is escaped for it. Writing the TSV
+  // and swapping tabs for commas afterwards is what broke most rows of the CSV.
+  const text = funcMatrixTsv(view, sep);
+  saveBlob(text, sep === "\t" ? "text/tab-separated-values" : "text/csv",
+    `peekmicrobiome-functions-${level}.${ext}`);
+}
+
+

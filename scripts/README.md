@@ -312,6 +312,38 @@ name, plus the accession when GTDB gives that name to several representatives. A
 matrix with duplicate labels is rejected by the demo builder and by downstream
 tools.
 
+## `funcprofile_ena_runs.mjs` — the same runs, read a second way
+
+The Function tab needs a KEGG ortholog profile for every sample the Taxonomy tab
+shows, and it has to come from the **same runs at the same depth** — otherwise
+the two tabs are two experiments under one heading. This script is the other half
+of `profile_ena_runs.mjs`: same imports, same streaming, same 3,000,000-read cap,
+but each read goes into a sourmash protein sketch (six-frame translation,
+k = 11 amino acids, scaled 1000) instead of the sylph profiler, and the sketch is
+prefetched against the KEGG KO signatures the way *fmh-funprofiler* does.
+
+```bash
+scripts/funprofiler/fixtures.sh            # once: the KO sketches, ~98 MB from Zenodo
+node scripts/funcprofile_ena_runs.mjs --out data/func SRR14473825 SRR14473824 …
+node scripts/funcprofile_ena_runs.mjs --out data/func --matrix func_matrix_human-gut.tsv …
+```
+
+One file per accession, and an accession that already has one is skipped, so the
+job survives interruption and can be split across several processes over disjoint
+lists — eighteen runs is about an hour of downloading, and the EBI portal API
+does occasionally answer one of them with something that is not JSON. Re-running
+picks up exactly what is missing.
+
+`--matrix` merges those per-run files into one table in the shape the page's own
+*Download TSV* writes at the ortholog level, header and all. That merged file is
+the tracked one — `func_matrix_human-gut.tsv`, 4,307 orthologs × 18 samples — for
+the same reason `abundance_matrix_human-gut.tsv` is tracked: nobody should have
+to re-download 3.4 GiB to rebuild the demo.
+
+On the eighteen shipped runs each sample yields 190,000–320,000 hashes and
+2,100–2,950 orthologs, and **23 % of the measured signal reaches a KEGG module** —
+which is why every rolled-up view in the page prints that share beside itself.
+
 ## `build_demo_session.py` — the worked example the page ships
 
 Rebuilds `web/demo/gut-demo.session.json` and `web/demo/gut-demo.groups.csv`
@@ -329,8 +361,36 @@ attribute of the sample XML. Anything that looks like a repeat sample deserves
 that check before it is shipped as one.
 
 ```bash
-python3 scripts/build_demo_session.py abundance_matrix_human-gut.tsv
+node scripts/session_to_matrix.mjs --out abundance_matrix_human-gut.tsv
+python3 scripts/build_demo_session.py abundance_matrix_human-gut.tsv --func func_matrix_human-gut.tsv
+python3 scripts/build_demo_session.py --only-func func_matrix_human-gut.tsv
 ```
+
+`--func` folds in the functional half; `--only-func` adds it to the session
+**already on disk** and changes nothing else. The second mode exists because the
+two halves were measured a year apart, and for a while it was the only honest
+operation available: the tracked `abundance_matrix_human-gut.tsv` was the
+*previous* demo's, eighty-four `ERR` columns of PRJEB83730, so a full rebuild
+would not have reproduced the shipped taxonomy — it would have replaced it.
+
+That hole is closed. `node scripts/session_to_matrix.mjs --out
+abundance_matrix_human-gut.tsv` writes the shipped session's own numbers back out
+in the export format, using `refCommentLines` from `web/biomes.js` — the page's
+own header writer — so the file cannot drift from what *Download TSV* produces.
+The tracked matrix is now that file, and a full rebuild from it reproduces the
+shipped session exactly: every key, every value, checked field by field. The only
+difference is the ORDER of the top-level keys, because `--only-func` appends
+`funcProfiles` where a full build writes it beside the matrix.
+
+So the first command below is now the canonical one, and `--only-func` is for
+patching a functional re-measurement into a session whose taxonomy has not
+changed. Both verify the same things: eighteen columns or none, every column
+summing to one, bare `K…` identifiers, and the same read cap as the page's own
+default.
+
+`session_to_matrix.mjs` is a repair, not a source of truth. If these runs are
+ever profiled again, the export from THAT run replaces the file and the script
+goes back in the drawer.
 
 It refuses to write anything it cannot vouch for: a matrix profiled against
 another catalogue, a `k`/`c` that is not 31/200, a genome count that disagrees

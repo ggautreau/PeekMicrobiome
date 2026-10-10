@@ -1,0 +1,38 @@
+/* tslint:disable */
+/* eslint-disable */
+export const memory: WebAssembly.Memory;
+export const __wbg_computeparameters_free: (a: number, b: number) => void;
+export const __wbg_funcprofiler_free: (a: number, b: number) => void;
+export const __wbg_kmerminhash_free: (a: number, b: number) => void;
+export const __wbg_signature_free: (a: number, b: number) => void;
+export const computeparameters_new_with_params: () => number;
+export const computeparameters_set_dayhoff: (a: number, b: number) => void;
+export const computeparameters_set_hp: (a: number, b: number) => void;
+export const computeparameters_set_ksizes: (a: number, b: number, c: number) => void;
+export const computeparameters_set_num: (a: number, b: number) => void;
+export const computeparameters_set_protein: (a: number, b: number) => void;
+export const computeparameters_set_scaled: (a: number, b: number) => void;
+export const computeparameters_set_seed: (a: number, b: number) => void;
+export const computeparameters_set_track_abundance: (a: number, b: number) => void;
+export const funcprofiler_add_references_json: (a: number, b: number, c: number, d: number, e: number) => [number, number, number];
+export const funcprofiler_len: (a: number) => number;
+export const funcprofiler_new: () => number;
+export const funcprofiler_profile: (a: number, b: number, c: number) => [number, number, number, number];
+export const kmerminhash_add_sequence_js: (a: number, b: number, c: number) => [number, number];
+export const kmerminhash_count_common_js: (a: number, b: number) => [bigint, number, number];
+export const kmerminhash_new_with_scaled: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => number;
+export const kmerminhash_size_js: (a: number) => number;
+export const kmerminhash_to_json: (a: number) => [number, number, number, number];
+export const signature_add_from_file: (a: number, b: any, c: number) => [number, number];
+export const signature_add_sequence_js: (a: number, b: number, c: number) => [number, number];
+export const signature_new_from_params: (a: number) => number;
+export const signature_size: (a: number) => number;
+export const signature_to_json: (a: number) => [number, number, number, number];
+export const __wbindgen_malloc: (a: number, b: number) => number;
+export const __wbindgen_realloc: (a: number, b: number, c: number, d: number) => number;
+export const __wbindgen_exn_store: (a: number) => void;
+export const __externref_table_alloc: () => number;
+export const __wbindgen_externrefs: WebAssembly.Table;
+export const __externref_table_dealloc: (a: number) => void;
+export const __wbindgen_free: (a: number, b: number, c: number) => void;
+export const __wbindgen_start: () => void;

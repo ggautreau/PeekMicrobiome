@@ -41,9 +41,29 @@ is worth more than any manufactured separation.
 The arms are BLINDED. The record says A, B and C and never which oil each is;
 this script and the page must not name them.
 
+THE FUNCTION TAB
+----------------
+The same eighteen runs also carry a KEGG ortholog profile, produced by
+scripts/funcprofile_ena_runs.mjs from the SAME accessions at the SAME read cap.
+Pass --func with the matrix it wrote and the profiles are folded into the
+session; leave it out and the demo ships taxonomy only, which is what it did
+before this existed. Half a Function tab is refused outright: eighteen runs or
+none, so the tab can never show a subset while looking like the whole study.
+
+--only-func adds that half to the session ALREADY ON DISK and changes nothing
+else. It exists because the two halves were measured a year apart: the taxonomic
+matrix this script was last run on is not in the repository (the tracked
+abundance_matrix_human-gut.tsv is the previous demo's, PRJEB83730, and its
+columns are ERR accessions), so a full rebuild today would not reproduce the
+shipped taxonomy — it would replace it. Adding the functional half without
+touching numbers nobody re-measured is the honest operation. Every guard below
+runs either way.
+
 USAGE
 -----
     python3 scripts/build_demo_session.py path/to/abundance_matrix_human-gut.tsv
+    python3 scripts/build_demo_session.py matrix.tsv --func func_matrix_human-gut.tsv
+    python3 scripts/build_demo_session.py --only-func func_matrix_human-gut.tsv
 
 Writes web/demo/gut-demo.session.json and web/demo/gut-demo.groups.csv.
 """
@@ -102,6 +122,11 @@ DEMO_RUNS = [
 # from. Checked against it rather than assumed.
 K, C = 31, 200
 
+# The page's own default, and the cap both halves of the demo must have used. A
+# functional profile read deeper — or shallower — than the taxonomic one would
+# make the two tabs two different experiments while looking like one.
+FUNC_CAP = 3000000
+
 
 def die(msg) -> NoReturn:
     sys.exit(f"build_demo_session.py: {msg}")
@@ -125,6 +150,135 @@ def read_matrix(path):
     return header, cols[2:], rows[1:]
 
 
+def read_func_profiles(func_matrix):
+    """The KEGG ortholog matrix for DEMO_RUNS, or a hard stop.
+
+    The file scripts/funcprofile_ena_runs.mjs --matrix writes, which is also the
+    file the page's own download button writes at the ortholog level: a
+    commented header, then `id name <one column per run>`. Returns
+    { run: { K01952: 0.0184, ... } } — the shape web/kegg.js reads.
+    """
+    p = pathlib.Path(func_matrix)
+    if not p.is_file():
+        die(f"--func {p} is not a file (it wants the matrix, not the per-run directory)")
+
+    header, rows = [], []
+    for line in p.read_text(encoding="utf-8").splitlines():
+        if line.startswith("#"):
+            header.append(line)
+        elif line.strip():
+            rows.append(line.split("\t"))
+    joined = "\n".join(header)
+    if not rows or rows[0][:2] != ["id", "name"]:
+        die(f"{p} does not start with the id/name columns this script expects")
+    cols = rows[0][2:]
+
+    # The header is not decoration: it records at what depth and against which
+    # reference these columns were computed, and both have to be the same for
+    # all eighteen or the columns are not comparable.
+    m = re.search(r"^# reads per sample: capped at (\d+)", joined, re.M)
+    if not m:
+        die(f"{p} does not record its read cap")
+    cap = int(m.group(1))
+    if cap != FUNC_CAP:
+        die(f"{p} was capped at {cap} reads, not the page's default {FUNC_CAP} — "
+            f"a visitor profiling these accessions would not reproduce it")
+    m = re.search(r"^# reference: (\S+), (\d+) KO signatures", joined, re.M)
+    if not m:
+        die(f"{p} does not record its reference")
+    ref_name, ref_n = m.group(1), int(m.group(2))
+    depths = {}
+    m = re.search(r"^# reads sketched: (.*)$", joined, re.M)
+    if m:
+        for kv in m.group(1).split(";"):
+            run, _, n = kv.strip().partition("=")
+            if n.isdigit():
+                depths[run] = int(n)
+
+    # Eighteen columns or none. A Function tab covering a subset of the samples
+    # on screen would look like the whole study while describing part of it.
+    missing = [r for r in DEMO_RUNS if r not in cols]
+    if missing:
+        die(f"{p} has no column for {len(missing)} of {len(DEMO_RUNS)} runs "
+            f"({', '.join(missing[:4])}{'…' if len(missing) > 4 else ''}) — finish "
+            f"scripts/funcprofile_ena_runs.mjs, or build the demo without --func")
+    stray = [c for c in cols if c not in DEMO_RUNS]
+    if stray:
+        die(f"{p} also holds {', '.join(stray[:4])}, which the demo does not include")
+
+    at = {run: 2 + cols.index(run) for run in DEMO_RUNS}
+    profiles = {run: {} for run in DEMO_RUNS}
+    for r in rows[1:]:
+        ko = r[0].strip()
+        if not re.fullmatch(r"K\d+", ko):
+            die(f"{p}: {ko!r} is not a KEGG ortholog identifier — the ko: prefix "
+                f"must be stripped before this file is written, or nothing joins "
+                f"to the KEGG map")
+        for run in DEMO_RUNS:
+            v = float(r[at[run]])
+            if v <= 0:
+                continue
+            # Four significant digits. The profiler's own numbers are ratios of
+            # small integers, and at 300,000 hashes the fourth digit is already
+            # below one shared hash — the rest is bytes the page downloads for
+            # nothing.
+            profiles[run][ko] = float(f"{v:.4g}")
+
+    for run, row in profiles.items():
+        if not row:
+            die(f"{run}: the functional column is empty")
+        total = sum(row.values())
+        if abs(total - 1.0) > 0.01:
+            die(f"{run}: the functional profile sums to {total:.4f}, not 1 — "
+                f"these are meant to be renormalised fractions")
+
+    return profiles, {"cap": cap, "reference": ref_name, "signatures": ref_n,
+                      "reads": depths or {r: cap for r in DEMO_RUNS}}
+
+
+def func_demo_block(func_meta):
+    """What the `demo` block says about the functional half, in one place."""
+    return {
+        "method": "fmh-funprofiler (Hera et al. 2024): FracMinHash on six-frame "
+                  "translated reads, protein k=11, scaled=1000, then prefetch "
+                  "against the KEGG KO sketches of Zenodo record 10045253",
+        "reference": f"{func_meta['reference']} — {func_meta['signatures']} KEGG orthologs",
+        "reads": (f"the same {func_meta['cap']:,} read cap as the taxonomic profile, "
+                  f"on the same runs").replace(",", " "),
+        "builtBy": "scripts/funcprofile_ena_runs.mjs",
+    }
+
+
+def patch_func(func_matrix) -> NoReturn:
+    """Add the functional half to the session on disk, and touch nothing else."""
+    out_json = OUT_DIR / "gut-demo.session.json"
+    if not out_json.exists():
+        die(f"{out_json} does not exist — build the demo first")
+    session = json.loads(out_json.read_text(encoding="utf-8"))
+
+    # The half being added has to be about the samples already there. A session
+    # rebuilt on other runs, with functional columns from these, would look
+    # entirely coherent and be two studies.
+    if session.get("samples") != list(DEMO_RUNS):
+        die(f"{out_json} is not the {len(DEMO_RUNS)}-run demo this script builds — "
+            f"it holds {len(session.get('samples', []))} samples")
+
+    profiles, func_meta = read_func_profiles(func_matrix)
+    session["funcProfiles"] = profiles
+    session.setdefault("demo", {})["function"] = func_demo_block(func_meta)
+    out_json.write_text(json.dumps(session, indent=1) + "\n", encoding="utf-8")
+
+    sizes = [len(p) for p in profiles.values()]
+    reads = func_meta["reads"]
+    print(f"{out_json.relative_to(REPO)}  {out_json.stat().st_size:,} B")
+    print(f"  taxonomy:  untouched — {len(session['matrix'])} rows x "
+          f"{len(session['samples'])} samples")
+    print(f"  function:  {len(profiles)} runs x {min(sizes)}–{max(sizes)} KEGG "
+          f"orthologs, {min(reads.values()):,}–{max(reads.values()):,} reads "
+          f"sketched (cap {func_meta['cap']:,})")
+    sys.exit(0)
+
+
 def biome_entry():
     cat = json.loads(BIOMES.read_text(encoding="utf-8"))
     for group in cat.get("groups", []):
@@ -137,8 +291,26 @@ def biome_entry():
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("matrix", help="an abundance matrix exported by PeekMicrobiome")
+    ap.add_argument("matrix", nargs="?",
+                    help="an abundance matrix exported by PeekMicrobiome")
+    ap.add_argument("--func", metavar="TSV", default=None,
+                    help="the functional matrix written by "
+                         "scripts/funcprofile_ena_runs.mjs --matrix; adds the Function tab")
+    ap.add_argument("--only-func", metavar="TSV", default=None,
+                    help="add that functional matrix to the session already on disk "
+                         "and leave its taxonomy untouched")
     args = ap.parse_args()
+
+    if args.only_func:
+        if args.matrix or args.func:
+            die("--only-func rebuilds nothing else: give it the functional matrix alone")
+        patch_func(args.only_func)
+    if not args.matrix:
+        die("give an abundance matrix, or --only-func to add the functional half alone")
+
+    func_profiles, func_meta = (None, None)
+    if args.func:
+        func_profiles, func_meta = read_func_profiles(args.func)
 
     header, samples, rows = read_matrix(args.matrix)
 
@@ -262,6 +434,11 @@ def main():
         "label": biome["label"],
         "catalogue": f"MGnify {biome['catalogue']} {biome['version']}".strip(),
         "version": biome["version"],
+        # Which GTDB release MGnify generated the species names with, where its
+        # own README states it — the same field makeDbRef() stamps on a live run.
+        # "" for the catalogues whose README does not say, and the page then says
+        # nothing rather than printing a guessed citation.
+        "gtdb": biome.get("gtdb", ""),
         "species": biome["species"],
         "file": biome["file"],
         "url": biome["url"],
@@ -287,6 +464,11 @@ def main():
         # a run profiled from the ENA panel shows. Read back by fromSession() as
         # an optional key: a session saved before this existed still opens.
         "sampleMeta": sample_meta,
+        # The Function tab's numbers, keyed exactly like the taxonomic columns.
+        # null rather than {} when there are none: fromSession() reads the
+        # difference between "this session has no functional profile" and "every
+        # sample came back empty", and so does the tab.
+        "funcProfiles": func_profiles,
         "rank": "s",
         # Ignored by fromSession(), which validates only what it reads. Here so
         # the file explains itself when it is opened on its own.
@@ -302,6 +484,9 @@ def main():
             "builtBy": "scripts/build_demo_session.py",
         },
     }
+
+    if func_meta:
+        session["demo"]["function"] = func_demo_block(func_meta)
 
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     out_json = OUT_DIR / "gut-demo.session.json"
@@ -322,6 +507,15 @@ def main():
           f"{len(subjects)} groups")
     print(f"  reference: {ref['label']} — {ref['catalogue']}, {genomes} genomes, k={k}, c={c}")
     print(f"  exported:  {exported}")
+    if func_profiles and func_meta:
+        sizes = [len(p) for p in func_profiles.values()]
+        reads = func_meta["reads"]
+        print(f"  function:  {len(func_profiles)} runs x "
+              f"{min(sizes)}–{max(sizes)} KEGG orthologs, "
+              f"{min(reads.values()):,}–{max(reads.values()):,} reads sketched "
+              f"(cap {func_meta['cap']:,})")
+    else:
+        print("  function:  none — build with --func to add the Function tab")
 
 
 if __name__ == "__main__":

@@ -34,6 +34,18 @@ const WORKER = "web/sylph-worker.js";
 const INDEX = "web/index.html";
 const README = "README.md";
 
+// The pure modules added since the functional half landed. They are tested by
+// their own benches rather than by the ENA suite, and nothing checked whether
+// those benches bite — a p-value that is wrong by a factor of two looks exactly
+// like one that is right.
+const TABLEVIEW = "web/table-view.js";
+const STATS = "web/stats.js";
+const GROUPS = "web/groups.js";
+const KEGG = "web/kegg.js";
+const FIGURES = "web/figures.js";
+const FUNCSKETCH = "web/func-sketch.js";
+const GMM = "web/gmm.js";
+
 const SUITE = "node-suite.mjs";
 const WIRING = "wiring.mjs";
 
@@ -222,6 +234,97 @@ const MUTATIONS = [
     expect: /ended at 40 % is NOT a pass|shortfall is named/,
   },
 
+  // ---- the pure modules, and the benches that are supposed to hold them ------
+  {
+    name: "sort: drop the tie-break, so equal rows come back in engine order",
+    file: TABLEVIEW, bench: "../../web/table-view.test.mjs",
+    why: "300 rows at zero in the sorted column reshuffle between two renders of the same data",
+    from: `      return String(a.species ?? a.name ?? "").localeCompare(String(b.species ?? b.name ?? ""));`,
+    to: `      return 0;`,
+    expect: /ties break on the name/,
+  },
+  {
+    name: "sort: no third click, so there is no way back to the table's own order",
+    file: TABLEVIEW, bench: "../../web/table-view.test.mjs",
+    why: "a reader who sorted by one sample can only get the ranking back by reloading",
+    from: `  if (current.dir === "desc") return { col, dir: "asc" };
+  return { col: null, dir: "desc" };`,
+    to: `  return { col, dir: current.dir === "desc" ? "asc" : "desc" };`,
+    expect: /a third gives the table its own order back/,
+  },
+  {
+    name: "Mann-Whitney: make the two-sided p one-sided",
+    file: STATS, bench: "../../web/stats.test.mjs",
+    why: "every p in the contrast is half what it should be, and a q of 0.06 reads as 0.03",
+    from: `    const p = Math.min(1, 2 * Math.min(le / all, ge / all));`,
+    to: `    const p = Math.min(1, Math.min(le / all, ge / all));`,
+    expect: /perfect separation at 3 v 3 gives exactly 0\.1/,
+  },
+  {
+    name: "Benjamini-Hochberg: correct for nothing",
+    file: STATS, bench: "../../web/stats.test.mjs",
+    why: "q becomes p, and 468 rows of uncorrected p-values are 23 false findings at 0.05",
+    from: `    prev = Math.min(prev, (ps[i] * order.length) / (k + 1));`,
+    to: `    prev = Math.min(prev, ps[i]);`,
+    expect: /BH is monotone and matches the worked example/,
+  },
+  {
+    name: "group fields: offer the ones with a distinct value per sample",
+    file: GROUPS, bench: "../../web/groups.test.mjs",
+    why: "the picker fills with sample_accession and the two fields that split the run are lost in it",
+    from: `    if (n < 2 || n >= samples.length) continue;`,
+    to: `    if (n < 2) continue;`,
+    expect: /nor is one with a distinct value per sample/,
+  },
+  {
+    name: "module rows: forget which orthologs they were measured from",
+    file: KEGG, bench: "../../web/kegg.test.mjs",
+    why: "a module cell opens to an empty list, answering how much without answering of what",
+    from: `        row.kos.add(ko);`,
+    to: `        void ko;`,
+    expect: /a module row carries the orthologs detected in it/,
+  },
+  {
+    name: "legend: budget the columns at the width text was assumed to have",
+    file: FIGURES, bench: "../../web/fastq-trim.parity.test.mjs",
+    why: "the right-hand legend column runs 26 px past the viewBox and the figure clips its own key",
+    from: `Math.floor((colW - 19) / 6.6)`,
+    to: `Math.floor((colW - 20) / 5.6)`,
+    expect: /stays inside the figure's own frame/,
+  },
+  {
+    name: "contrast: assume one unit, whatever the caller says",
+    file: FIGURES, bench: "../../web/fastq-trim.parity.test.mjs",
+    why: "the taxonomic matrix already holds percentages, so every difference is printed 100x too big",
+    from: `  const pc = (v) => v * scale;`,
+    to: `  const pc = (v) => v * 100;`,
+    expect: /in the unit the caller says the values are in/,
+  },
+  {
+    name: "contrast: measure the range from zero instead of from the smallest value",
+    file: FIGURES, bench: "../../web/fastq-trim.parity.test.mjs",
+    why: "'most variable' silently becomes 'most abundant', which is the one thing the figure exists not to do",
+    from: `    const hi = Math.max(...r.values), lo = Math.min(...r.values);`,
+    to: `    const hi = Math.max(...r.values), lo = 0;`,
+    expect: /ranks by spread across samples/,
+  },
+  {
+    name: "protein sketch: one parser for both mates",
+    file: FUNCSKETCH, bench: "../../web/func-sketch.test.mjs",
+    why: "interleaved mates lose the FASTQ record phase — 247 hashes of 1,054, with nothing thrown",
+    from: `      const st = parserFor(stream);`,
+    to: `      const st = parserFor(0);`,
+    expect: /interleaved mates give the same profile/,
+  },
+  {
+    name: "GMM: report a value however few of the module's steps were found",
+    file: GMM, bench: "../../web/gmm.test.mjs",
+    why: "a module is a path; one step found out of eight would be reported as the module being present",
+    from: `      if (coverage[i] >= minCoverage && path.length) values[i] = median(path);`,
+    to: `      if (path.length) values[i] = median(path);`,
+    expect: /coverage|steps/,
+  },
+
   // ---- what the pages say and do (source-level bench) ------------------------
   {
     name: "database card: drop the Zenodo paragraph",
@@ -239,7 +342,7 @@ const MUTATIONS = [
     name: "README: take the database row out of the network table",
     file: README, bench: WIRING,
     why: "the table would say a local FASTQ costs no network traffic, which is false",
-    from: `| **Load database** (any published biome) | the catalogue you picked coming *down* from \`zenodo.org\`, once, then cached on your computer — 433 MB for the human-gut default, 12 MB to 2.8 GB for the others | Zenodo sees your IP address and which of these files you asked for |`,
+    from: `| **Load database** (any published biome) | the catalogue you picked coming *down* from \`zenodo.org\`, once, then cached on your computer — 454 MB for the human-gut default, 13 MB to 3.0 GB for the others | Zenodo sees your IP address and which of these files you asked for |`,
     to: ``,
     expect: /names the Zenodo download in its network table/,
   },
@@ -372,6 +475,57 @@ const abs = (rel) => path.join(REPO, rel);
 for (const rel of new Set(SELECTED.map((m) => m.file ?? ENA))) {
   ORIGINALS.set(rel, fs.readFileSync(abs(rel), "utf8"));
 }
+
+// THE ORIGINAL HAS TO BE THE COMMITTED FILE, and neither of these checks is
+// hypothetical. A run killed mid-mutation — a timeout, a Ctrl-C, a terminated
+// shell — leaves `if (false)` in the source. The next run reads THAT as its
+// original, patches it, puts it back, and reports "sources restored: yes". The
+// damage is laundered: two guards sat disabled in the working tree, one of them
+// the allow-list that keeps this page from fetching a URL off any host, and the
+// only trace was two mutations reporting that the code they patch had moved —
+// which reads as drift in the source rather than as a missing guard.
+{
+  // The precise check, and a hard stop: a mutation whose `from` is gone and
+  // whose `to` is present is not drift, it is this bench's own leftover. Nothing
+  // else writes `if (false)` where a guard used to be.
+  const leftover = SELECTED.filter((m) => {
+    const src = ORIGINALS.get(m.file ?? ENA) ?? "";
+    // editsOf() is defined below and gives the same [from, to] pairs the run
+    // uses, so this cannot check a different edit from the one applied.
+    const pairs = m.edits ?? [[m.from, m.to]];
+    return pairs.some(([from, to]) => from && to && !src.includes(from) && src.includes(to));
+  });
+  if (leftover.length) {
+    console.error(`These guards are ALREADY REMOVED in the working tree — a killed run of ` +
+      `this bench left its own patch behind:\n` +
+      leftover.map((m) => `  ${m.name}  (${m.file ?? ENA})`).join("\n") +
+      `\n\nRestore them (git checkout -- <file>) before running: this bench would ` +
+      `otherwise treat the damaged file as the original and report it restored.`);
+    process.exit(2);
+  }
+
+  // The broad check, and only a warning: a dirty file is normal while the code
+  // is being worked on, and CI runs on a clean checkout where this never prints.
+  // Refusing here would make every local run pass an override flag, and a guard
+  // everyone routinely overrides is not a guard.
+  const dirty = [...ORIGINALS.keys()].filter((rel) => {
+    try {
+      execFileSync("git", ["diff", "--quiet", "--", rel], { cwd: REPO, stdio: "ignore" });
+      return false;
+    } catch { return true; }
+  });
+  if (dirty.length) {
+    console.log(`note: ${dirty.join(", ")} differ${dirty.length === 1 ? "s" : ""} from git. ` +
+      `This bench restores what it FOUND, not what was committed.`);
+  }
+}
+
+// A copy on disk as well as in memory, and it survived a rewrite of the block
+// above only by being put back: dropping it left `fs.rmSync(BACKUP)` at the
+// bottom throwing ReferenceError after a complete, correct run — the sources
+// were restored and the verdict never printed. It is the last resort if this
+// process is killed in a way that runs neither the finally nor the signal
+// handlers (SIGKILL, a power cut): the originals are still readable here.
 const BACKUP = path.join(os.tmpdir(), `ena-mutations-${process.pid}`);
 fs.mkdirSync(BACKUP, { recursive: true });
 for (const [rel, src] of ORIGINALS) fs.writeFileSync(path.join(BACKUP, rel.replace(/\//g, "_")), src);
@@ -390,6 +544,61 @@ function runBench(bench) {
 
 const editsOf = (m) => m.edits ?? [[m.from, m.to]];
 
+// THE ROOT CAUSE of the laundering above: the `finally` at the bottom restores
+// the sources, and a SIGNAL does not run it. `node mutations.mjs | head` is
+// enough — head closes the pipe, node dies of SIGPIPE mid-mutation, and `if
+// (false)` stays in the file. So the restore is also wired to every way this
+// process can be told to stop.
+//
+// Registered BEFORE the first write, and it re-reads nothing: ORIGINALS is
+// already in memory, which is the only copy that can be trusted once the file on
+// disk is the mutated one.
+// WHAT WE LAST WROTE to each file, so the restore can tell "this is my patch"
+// from "somebody edited this while I was running".
+const LAST_WRITTEN = new Map();
+const write = (rel, text) => { LAST_WRITTEN.set(rel, text); fs.writeFileSync(abs(rel), text); };
+
+// ONLY restore what we put there. This bench rewrites README.md, index.html,
+// multi.js, sylph-worker.js and ena.js, and a full run takes eight minutes — long
+// enough for somebody to edit one of them. Restoring blindly throws that work
+// away, silently, and git then reports the file unmodified: it happened twice
+// here, and the only symptom was an edit that "did not take".
+//
+// BOTH restore paths go through this. Putting the check only on the end-of-run
+// restore left the one that actually runs constantly — after every single
+// mutation — still clobbering, which a race test caught immediately.
+const restoreOne = (rel, src, { quiet = false } = {}) => {
+  const now = fs.readFileSync(abs(rel), "utf8");
+  if (now === src) { LAST_WRITTEN.delete(rel); return true; }
+  const mine = LAST_WRITTEN.get(rel);
+  // `undefined` means WE HAVE NOT WRITTEN THIS FILE — not that anything goes.
+  // The first version of this check read it as "no patch of mine to compare
+  // against, so restore", which put back the original over an edit made while
+  // the bench was running but before it reached that file's mutation. A file we
+  // never touched is not ours to restore.
+  if (mine === undefined || now !== mine) {
+    if (!quiet) {
+      console.error(`\n*** ${rel} was edited while this bench was running, and this ` +
+        `bench rewrites it. Leaving it exactly as you left it — the mutation that was ` +
+        `in flight may still be in there, so check it (git diff -- ${rel}). ***`);
+    }
+    return false;
+  }
+  fs.writeFileSync(abs(rel), src);
+  LAST_WRITTEN.delete(rel);
+  return true;
+};
+
+const restoreAll = () => {
+  for (const [rel, src] of ORIGINALS) {
+    try { restoreOne(rel, src); } catch { /* nothing better to do while dying */ }
+  }
+};
+for (const sig of ["SIGINT", "SIGTERM", "SIGHUP", "SIGPIPE"]) {
+  process.on(sig, () => { restoreAll(); process.exit(130); });
+}
+process.on("uncaughtException", (e) => { restoreAll(); console.error(e); process.exit(1); });
+
 let holes = 0;
 try {
   for (const m of SELECTED) {
@@ -402,19 +611,45 @@ try {
       if (!mutated.includes(from)) { applied = false; break; }
       mutated = mutated.replace(from, to);
     }
+    // THE HOLE THE GUARD BELOW DID NOT COVER, and it cost a working feature.
+    // The restore checks that the file is still OUR patch before putting the
+    // original back — but nothing checked before WRITING the patch. So an edit
+    // made while this bench was running, before it reached that file, was
+    // overwritten by the mutation and then "restored" to the pre-edit original,
+    // which the guard could not tell from a clean run. Seven changes to
+    // multi.js vanished that way, with the log reporting success.
+    //
+    // So: refuse to mutate a file that is neither the original nor our own last
+    // patch. Somebody is working in it.
+    {
+      const now = fs.readFileSync(abs(rel), "utf8");
+      const mine = LAST_WRITTEN.get(rel);
+      if (now !== original && (mine === undefined || now !== mine)) {
+        console.log(`\n### ${m.name}   (${rel} → ${bench})`);
+        console.log(`    SKIPPED — ${rel} changed while this bench was running. ` +
+          `Not touching it.`);
+        holes++;
+        continue;
+      }
+    }
     console.log(`\n### ${m.name}   (${rel} → ${bench})`);
     console.log(`    (removing it means: ${m.why})`);
     if (!applied) {
-      console.log(`    SKIP — the code it patches has moved; update this file`);
+      // "The code has moved" was the only explanation this offered, and it sent
+      // a reader looking for a refactor when the truth was that the guard was
+      // ALREADY GONE — the text to patch was missing because someone (a killed
+      // run of this very bench) had patched it out and left it there.
+      console.log(`    SKIP — the text this patches is not in ${rel}. Either the code ` +
+        `moved and this file needs updating, or the guard is already gone.`);
       holes++;
       continue;
     }
-    fs.writeFileSync(abs(rel), mutated);
+    write(rel, mutated);
     let out, failed, timedOut;
     try {
       ({ out, failed, timedOut } = runBench(bench));
     } finally {
-      fs.writeFileSync(abs(rel), original);
+      restoreOne(rel, original);
     }
     const failLines = out.split("\n").filter((l) => l.startsWith("FAIL"));
     const caught = failed && (timedOut || failLines.some((l) => m.expect.test(l)));
@@ -430,7 +665,7 @@ try {
     }
   }
 } finally {
-  for (const [rel, src] of ORIGINALS) fs.writeFileSync(abs(rel), src);
+  restoreAll();
 }
 
 let restored = 0;

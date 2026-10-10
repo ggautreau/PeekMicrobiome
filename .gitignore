@@ -24,6 +24,10 @@ scripts/ena-test/fx/
 target/
 pkg/
 node_modules/
+# scripts/build_funprofiler_wasm.sh emits a 64-bit build too, used only to
+# measure it against the 32-bit one (docs/todo.md). The page loads
+# web/funprofiler-pkg/ alone, so the 64-bit one would be deployed for nothing.
+web/funprofiler-pkg64/
 # NOTE: Cargo.lock is deliberately NOT ignored. This crate is built as a
 # deployed artifact, not published as a library, and leaving it out let
 # dependency resolution drift until the wasm32 build stopped compiling
@@ -41,3 +45,9 @@ sylph-survey/sylph/
 # python
 __pycache__/
 *.pyc
+
+# The Application Note draft. It is written in this repository and must not be
+# published from it: PeekMicrobiome's GitHub is the site's source, deployed to
+# Pages on every push to main, and a manuscript in it is a manuscript online.
+# Ignored rather than merely "not added", because `git add -A` does not ask.
+docs/paper/

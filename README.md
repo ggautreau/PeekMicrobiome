@@ -21,9 +21,10 @@ file of yours, no read, no file name and no result is ever uploaded, in any mode
 | Step | What crosses the network | What the other side learns |
 |---|---|---|
 | **Drop a FASTQ** | nothing | nothing |
-| **Load database** (any published biome) | the catalogue you picked coming *down* from `zenodo.org`, once, then cached on your computer — 433 MB for the human-gut default, 12 MB to 2.8 GB for the others | Zenodo sees your IP address and which of these files you asked for |
+| **Load database** (any published biome) | the catalogue you picked coming *down* from `zenodo.org`, once, then cached on your computer — 454 MB for the human-gut default, 13 MB to 3.0 GB for the others | Zenodo sees your IP address and which of these files you asked for |
 | **Load database** (bundled 6 MB / local `.syldb`) | nothing beyond the site itself | nothing |
 | **Paste an ENA accession** | the accession, then the public FASTQ files coming *down* from the EBI | the EBI sees your IP address and which accessions you asked for |
+| **Open the Gut Metabolic Modules level**, after answering its licence question | 8 KB of definitions coming *down* from `raw.githubusercontent.com` — the Raes lab's own repository, never this one | GitHub sees your IP address and that you asked for that file |
 
 Loading a database is **required before anything can be profiled**, including a purely local
 FASTQ, so the Zenodo row applies to everyone who does not pick the bundled or a local database —
@@ -104,11 +105,14 @@ node scripts/ena-test/fixtures.mjs     # ~8 MiB from the EBI, once
 
 ## What you get back
 
+Two halves, in two tabs: **which organisms**, and **which functions**. They are two questions, not
+two views of one table, so they get one tab each and neither is a sub-panel of the other.
+
 One row per taxon, one column per sample, cells in taxonomic (relative) abundance. Downloadable
 as TSV or CSV, and as the formats other tools read — sylph's own TSV, MetaPhlAn, BIOM 1.0 — plus
 a session file that puts the whole result back on screen later.
 
-Four figures are drawn from whatever is on screen, as inline SVG: no plotting library, no DOM and
+Five figures are drawn from whatever is on screen, as inline SVG: no plotting library, no DOM and
 no fetch anywhere in `web/figures.js`, which is what makes every one of them testable in plain
 node and downloadable as a file you can paste into a manuscript.
 
@@ -131,6 +135,56 @@ node and downloadable as a file you can paste into a manuscript.
   — `Phocaeicola` carries 56 % of the Bacteroides pole on the example, and bare `Ruminococcus` is
   empty in every sample.
 
+- **Contrast** — which rows differ between two groups of samples, ranked by the **difference in mean
+  abundance** and tested by a two-sided **Mann-Whitney**, exact by permutation, with
+  **Benjamini-Hochberg** across every row of the table rather than across the ten on screen. Rows
+  stay ordered by effect, not by p: at nine samples a group a p-value ordering is mostly an ordering
+  of how many zeros a row has. Every sample is drawn as its own dot — the spread and the overlap a
+  q summarises away — and clicking one opens that sample, as on the ordination.
+
+  **The figure states what the test cannot do.** At three samples a group there are only
+  C(6,3) = 20 ways to split them, so the smallest two-sided p the test can return is 0.1: *nothing*
+  can reach 0.05, however cleanly the groups separate, and a column of q near 1 is arithmetic rather
+  than a finding. The caption says so, with the number, whenever the groups are that small. At nine
+  a side the floor is 2/48,620 and significance is attainable — though on the shipped example,
+  split by sex, the smallest q over 468 species is 0.058 and nothing survives the correction.
+
+  Which two groups is a picker, because "the two largest" is a coin toss when six groups have three
+  samples each.
+
+### Making the groups
+
+The ordination colours by groups and the contrast plot is about them, so there are three ways to
+have some, and all three end in the same map:
+
+- **A field of the archive's own metadata.** A run that came from the ENA already carries what it
+  needs — the bundled example splits nine and nine on `host_sex` without anybody typing anything.
+  Only fields that actually split the run are offered: one value for every sample groups nothing,
+  and a distinct value per sample groups nothing either.
+- **The editor**, sample by sample, for everything else — a local FASTQ carries no metadata at all.
+  Type any name beside a sample; repeat it for the ones that belong together. It says as you go
+  whether what you have made can be contrasted, because one group of six cannot.
+- **A two-column CSV**, as before.
+
+If a run has no groups, the **Contrast** figure says so and offers both: one button for the best
+metadata field it found, one that opens the editor. It used to draw "most variable rows" instead —
+a real answer to a different question, under a tab labelled Contrast, with nothing saying a group
+was missing. That view is still there, by name, under the buttons.
+
+It is a dialog, not a mode over the plot, and that is deliberate: **clicking a point opens what that
+sample is made of**, and a "click samples to group them" mode would take that gesture away for as
+long as it was on. Groups made by hand are saved with the session; groups derived from a metadata
+field are not, because the field is saved beside them and deriving it again costs nothing.
+
+In that panel the pie draws **every** taxon, not only the named ones: the rare tail keeps its grey
+and its single "other taxa (110)" legend row, but each of those hundred and ten is its own wedge
+with its own share, and hovering one names it. They were a single grey slice before — a hundred and
+ten measurements with nothing to ask of them.
+
+**The matrix can be searched and sorted.** Type a name or an identifier to filter it — 468 species
+is not a list anyone scrolls — and click a sample's column to rank by that sample; a third click
+gives the table its own order back. Both halves have both.
+
 Clicking a point, a bar or a row opens that sample beside the figure: what it is made of, how
 diverse it is, which samples it is really nearest — over every row of the matrix, not the
 two-dimensional shadow of them the ordination draws — and what the archive says it is, when it
@@ -138,6 +192,44 @@ came from one.
 
 Every figure carries the catalogue in its caption, for the same reason the matrix does: these are
 abundances relative to one catalogue and to nothing else.
+
+### The functional half
+
+Tick **also profile functions** before a run and the same reads are read a second way, in the same
+pass: translated in six frames and sketched as **amino-acid** k-mers (k=11, scaled 1000), then
+matched against 13,509 KEGG ortholog sketches. This is
+[fmh-funprofiler](https://doi.org/10.1093/bioinformatics/btae397) (Hera *et al.*, *Bioinformatics*
+**40**, ii165, 2024) in the browser, beside sylph, in the same worker.
+
+It is **measured, not inferred**: nothing here predicts function from the species that were found.
+And it is off by default, because it is not cheap — a 20 MB reference download once, 38 MB of
+WebAssembly memory in every worker, and **about four to five times as long per sample** (measured:
+2.4 s against 11 s on 200,000 reads in Chrome, same file and same database). On runs streamed from
+the ENA the download usually still dominates. A cost that size has to be a choice.
+
+What it does not do is stated on the tab, in the same voice as the biome warning: the method finds
+about **60 % of a sample's orthologs overall and about 85 % of the abundant ones**, so a function
+missing from the table is not necessarily missing from the sample.
+
+The orthologs roll up into KEGG modules and pathways, and each row links to KEGG — a pathway cell
+opens that map on kegg.jp **coloured by that sample's own ortholog abundances**. Two things the
+interface says out loud because they are easy to read wrongly: the roll-ups **overlap** (an ortholog
+in three modules is evidence for all three, so the columns do not add to 100 %), and diversity is
+therefore computed over the orthologs whatever level is on screen — an entropy over categories that
+share members is not a diversity index.
+
+**A cell can be opened.** At the module and gut-metabolic-module levels, clicking a number says what
+it was measured from: for a KEGG module, the orthologs detected in it and their abundance in *that*
+sample, each linking to KEGG; for a gut metabolic module, its steps — which were found and which were
+missing, which is why a cell can be empty while its orthologs are present, since the module is a path
+and one broken step breaks it. An ortholog row has nothing inside it that its own identifier does not
+already link to, and a pathway cell opens KEGG's coloured map instead.
+
+KEGG is not a public database. Academic use is free; any non-academic use needs a commercial
+licence. The tab asks once, before it shows a single KEGG identifier, and the answer stays in the
+browser. The [Gut Metabolic Modules](https://github.com/raeslab/GMMs) level asks its own question
+for the same reason and ships **no definitions at all** — VIB licenses them for academic use inside
+one institution, so the reader opens their own copy, which is read in the tab and stored nowhere.
 
 ## Read ceiling
 
@@ -175,12 +267,22 @@ is the real one and the UI says so rather than failing unexplained.
 | `web/ena.js` | Resolves an ENA accession and streams its FASTQs, and asks the portal for what the run says about itself in the same request. |
 | `web/meta.js` | Decides which of that is printable: INSDC sentinels, archive-generated titles and 0.0/0.0 coordinates never reach the screen. |
 | `web/figures.js` | Every figure, as pure functions — a table in, an SVG string out. No DOM, no fetch, no library. |
+| `web/func-sketch.js` | The second reading of the same reads: amino-acid k-mers against KEGG orthologs, fed from every one of the worker's four feed paths — one parser per byte stream, one sketch per sample. |
+| `web/kegg.js` | Orthologs into modules and pathways, the KEGG links and the colour ramp, and the licence question both pages ask. Pure functions, same contract as `figures.js`. |
+| `web/gmm.js` | Gut Metabolic Modules, parsed from the reader's own copy of VIB's definitions. Ships none. |
+| `web/table-view.js` | Searching and sorting a matrix of hundreds of rows: what a search matches, how ties break, and the third click that restores the original order. Pure functions. |
+| `web/groups.js` | Where a sample grouping comes from — a metadata field, the editor, or a CSV — and which fields are worth offering. Pure functions. |
+| `web/stats.js` | The contrast's test: exact Mann-Whitney by permutation, Benjamini-Hochberg, and the smallest p attainable at a given pair of group sizes. Pure functions. |
+| `web/db/kegg/` | 13,509 KEGG ortholog sketches (20 MB, Zenodo 10045253, CC BY 4.0) and the KO→module→pathway map. |
+| `web/funprofiler-pkg/` | sourmash compiled to wasm32, for the protein sketch. The build script also writes a wasm64 package to `web/funprofiler-pkg64/`, used only to measure it against this one: the page does not load it and it is not committed. |
 | `web/sylph-pkg/` | wasm32 package (committed so the deployed site is self-contained). |
 | `web/sylph-pkg64/` | wasm64 package, same filenames — loaded when a run needs more than 4 GB. |
 | `scripts/build_wasm.sh` | Builds either package: `./scripts/build_wasm.sh 32\|64\|both`. |
 | `scripts/build_biome_dbs.sh` | Builds one `.syldb` per MGnify catalogue (see *Reference databases*). |
 | `scripts/build_gut_db.sh` | The original human-gut-only pipeline, kept as it was. |
-| `scripts/dbcache-test/`, `scripts/ena-test/` | Browser and Node test benches, plus `flaky_server.py`. 1,595 parity assertions, 173 against a hostile HTTP server, 59 source-level claims, and 37 mutations that check the benches still bite. |
+| `scripts/dbcache-test/`, `scripts/ena-test/` | Browser and Node test benches, plus `flaky_server.py`. 1,636 parity assertions, 173 against a hostile HTTP server, 172 source-level claims, a real-browser run of both pages, and 48 mutations that check the benches still bite. |
+| `scripts/funcprofile_ena_runs.mjs` | The functional half of the example, measured offline with the same code the page runs. |
+| `scripts/session_to_matrix.mjs` | The example's matrix back out of the session, in the export format, so the demo can be rebuilt from what is tracked. |
 | `scripts/profile_ena_runs.mjs` | Builds the example's measurements with the code the page runs, at the cap the page defaults to. |
 | `sylph-wasm/` | Fork of upstream sylph with a wasm32 target and JS bindings. |
 | `sylph-survey/` | Notes and porting plan for the sylph → WASM fork. |
@@ -225,7 +327,7 @@ and listed with their species counts and sizes in `data/biome-dbs/manifest.tsv`:
 | soil | 19 472 | 2.8 GB | chicken-gut | 1 322 | 115 MB |
 | marine | 13 223 | 1.2 GB | pig-gut | 1 376 | 108 MB |
 | marine-sediment | 6 158 | 674 MB | tomato-rhizosphere | 579 | 91 MB |
-| **human-gut** (UHGG) | 4 744 | 433 MB | human-skin | 579 | 59 MB |
+| **human-gut** (UHGG) | 4 744 | 454 MB | human-skin | 579 | 59 MB |
 | mouse-gut | 2 847 | 274 MB | maize-rhizosphere | 336 | 53 MB |
 | cow-rumen | 2 729 | 237 MB | human-oral | 452 | 32 MB |
 | sheep-rumen | 2 172 | 180 MB | human-vaginal | 280 | 18 MB |
@@ -244,7 +346,7 @@ biome carried into every exported file.
 
 ### Hosting
 
-The 6 MB smoke-test database (`web/db/gut_mini.syldb`) is bundled with the site. The other nineteen are 6.24 GiB in total, far past what GitHub Pages will serve, and are fetched from **Zenodo** at runtime — all nineteen in a single record:
+The 6.5 MB smoke-test database (`web/db/gut_mini.syldb`) is bundled with the site. The other nineteen are 6.24 GiB in total, far past what GitHub Pages will serve, and are fetched from **Zenodo** at runtime — all nineteen in a single record:
 
 - **Concept DOI** (all versions — cite this one): [10.5281/zenodo.21842022](https://doi.org/10.5281/zenodo.21842022)
 - **This version:** [10.5281/zenodo.21842023](https://doi.org/10.5281/zenodo.21842023) — <https://zenodo.org/records/21842023>, 19 files, 6.24 GiB, **CC0**, published 2026-08-07
@@ -276,7 +378,7 @@ The download cache is keyed by URL, so several biomes coexist in it: the listing
 454,021,440 bytes at a measured 1.48 MB/s is about **five minutes**, so the download is built to survive that:
 
 - **once per database, not once per worker.** The pool used to call `loadDbUrl` on every worker and each one ran its own `fetch()`; with the 4-thread setting that was 1.7 GB of simultaneous downloads fighting for the link. Now `db-cache-worker.js` downloads once and every sylph worker reads the same OPFS file — the bytes never cross `postMessage`.
-- **in 8 MiB slices, with `Range`.** The size comes from the `Content-Length` of a HEAD, and `Range` support is *assumed* rather than probed: the first real slice settles it, and a `200` where a `206` was expected restarts the download from zero without ranges. That is deliberate — probing cost a request and, worse, a single transient `503` on that one request was read as "this host does not do ranges" and silently turned a resumable 433 MB download into an all-or-nothing one. `Accept-Ranges` is not consulted either: Zenodo answers ranges perfectly well and never sends it. A failed slice is retried with growing backoff; an interrupted one costs part of a slice, not the file.
+- **in 8 MiB slices, with `Range`.** The size comes from the `Content-Length` of a HEAD, and `Range` support is *assumed* rather than probed: the first real slice settles it, and a `200` where a `206` was expected restarts the download from zero without ranges. That is deliberate — probing cost a request and, worse, a single transient `503` on that one request was read as "this host does not do ranges" and silently turned a resumable 454 MB download into an all-or-nothing one. `Accept-Ranges` is not consulted either: Zenodo answers ranges perfectly well and never sends it. A failed slice is retried with growing backoff; an interrupted one costs part of a slice, not the file.
 - **written straight into OPFS as it arrives**, never accumulated in JS, and the resume pointer is persisted every 4 MiB — so closing the tab mid-download and coming back resumes rather than restarts.
 - **validated before use.** Size must match exactly and `Last-Modified` (or `ETag`) must agree, or the entry is discarded and re-fetched. When the host offers neither validator, the length is all there is to compare: that is shown as "checked on its length only", and such an entry is never *resumed* onto, because a tail from another version would splice invisibly onto the prefix. A truncated `.syldb` would otherwise decode into fewer genomes and produce quietly wrong abundances. A returning visitor pays exactly one `HEAD` for this; if the server is unreachable the entry is still used, and the UI says it was not revalidated.
 - **careful about CORS.** The size comes from `Content-Length` on a `HEAD`, not from `Content-Range` on a `206`: `Content-Range` is not a CORS-safelisted response header and Zenodo does not expose it, so reading the total from there yields `null` in the browser and a database recorded as 1 byte long — while passing every same-origin test.
@@ -306,6 +408,7 @@ authors under MIT.
 |---|---|---|
 | `sylph-wasm/` | fork of [sylph](https://github.com/bluenote-1577/sylph) 0.9.0, with a wasm target added | MIT, © 2023 Jim Shaw — `sylph-wasm/LICENSE` |
 | `web/vendor/fflate.js` | vendored [fflate](https://github.com/101arrowz/fflate) | MIT, © 2026 Arjun Barrett — `web/vendor/LICENSE.fflate` |
+| `web/funprofiler-pkg/` | [sourmash](https://github.com/sourmash-bio/sourmash) compiled to WebAssembly, for the protein sketch (built by `scripts/build_funprofiler_wasm.sh` from a pinned commit, with one added `FuncProfiler` type) | BSD-3-Clause, © 2016 The Regents of the University of California — `web/funprofiler-pkg/LICENSE.sourmash` |
 | everything else | this project | **GPL-3.0-or-later**, © 2026 Guillaume Gautreau — `LICENSE` |
 
 `sylph-wasm/` is a **modified** copy of upstream sylph: a `wasm` feature, a wasm-bindgen surface
@@ -324,6 +427,27 @@ do not hold. They are derived from the
 gut, the [UHGG catalog](https://www.nature.com/articles/s41587-020-0603-3); EMBL-EBI places no
 restriction on redistribution and asks for attribution as good scientific practice, which is what
 the citations below are for. `web/db/lineage.json` is derived from the same catalogues.
+
+**The functional half brings three more licences, and none of them is ours.**
+
+- `web/db/kegg/ko-sketches-k11.ndjson.gz` — 13,509 KEGG ortholog sketches, redistributed
+  **unmodified** (the k = 11 subset, empty sketches left out) from [fmh-funprofiler](https://doi.org/10.1093/bioinformatics/btae397)'s deposit
+  ([Zenodo 10045253](https://doi.org/10.5281/zenodo.10045253)) under **CC BY 4.0**, © KoslickiLab.
+  See `web/db/kegg/README.md` for the provenance, and for why it holds 13,509 of the archive's
+  14,606 signatures.
+- **KEGG itself is not a public database.** Every identifier, name and roll-up shown in the Function
+  tab is KEGG's: academic use is free, any non-academic use requires a commercial licence from
+  Pathway Solutions ([KEGG's terms](https://www.kegg.jp/kegg/legal.html)). The tab asks which the
+  reader is before showing a single KEGG identifier, and the answer stays in the browser.
+- **Gut Metabolic Modules are not shipped at all.** They are distributed by VIB under an Academic
+  Non-commercial Software Licence whose clause 9 forbids passing them outside the licensee's
+  institution, so this repository contains none of them and never will. The page asks the licence
+  question first and then fetches them **from the Raes lab's own repository** — the bytes go from
+  their GitHub to your browser, nothing of theirs is redistributed here, and nothing is written to
+  disk. If that fetch cannot happen (offline, a proxy, the file renamed upstream) the old path is
+  still there: download the file and open it with the picker. `web/gmm.test.mjs` tests the parser on
+  hand-built definitions and skips the checks that need the real catalogue unless `GMM_DEFS` points
+  at your own copy.
 
 ## Citations
 

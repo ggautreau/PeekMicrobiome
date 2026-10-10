@@ -14,7 +14,7 @@
 // chunk sizes (including sizes that split records mid-line), and a
 // multi-file sample where the cap falls in the 1st, 2nd or 3rd file.
 
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { gzipSync } from "./vendor/fflate.js";
 import {
@@ -565,6 +565,40 @@ const workerSrc = readFileSync(here + "sylph-worker.js", "utf8");
     check(`${page} -> ${mod} is on WORKER_VERSION`, pageV === rpcV, `page=${pageV} rpc=${rpcV}`);
     check(`${mod} -> rpc is on WORKER_VERSION`, modRpcV === rpcV, `import=${modRpcV} rpc=${rpcV}`);
   }
+
+  // EVERY versioned import in the graph, not the three that were named by hand.
+  // func-sketch.js joined the worker's imports and nothing above would have
+  // noticed it carrying last release's token: the checks listed modules, so they
+  // could only ever cover the modules somebody remembered to list.
+  {
+    // EVERY file, found by reading the directory — not a list. A list can only
+    // cover the files somebody remembered to add to it, which is exactly how a
+    // new module joins the graph carrying last release's token.
+    let bad = [], scanned = 0;
+    for (const f of readdirSync(here).sort()) {
+      if (!/\.(js|html)$/.test(f) || /\.test\.mjs$/.test(f)) continue;
+      const src = readFileSync(here + f, "utf8");
+      scanned++;
+      // Quoted, and relative: `from "./kegg.js?v=77"`, `src="./multi.js?v=77"`.
+      // Bare `biomes.js?v=14` is prose — the version log in sylph-worker-rpc.js
+      // names old tokens on purpose, and matching those would make this check
+      // fail on its own documentation.
+      for (const m of src.matchAll(/["']\.\/[\w.\/-]+\.js\?v=(\d+)/g)) {
+        if (m[1] !== rpcV) bad.push(`${f}: ${m[0]}`);
+      }
+    }
+    check("every versioned import in web/ is on WORKER_VERSION",
+      bad.length === 0 && scanned > 8, bad.slice(0, 4).join(", ") || `${scanned} files scanned`);
+  }
+
+  // The bump itself is the thing that gets forgotten, and it is forgotten
+  // silently: the checks above all pass on a graph that agrees with itself at
+  // last release's number. Requiring a log entry for the CURRENT version does not
+  // prove the bump was needed — nothing can — but it puts the author in front of
+  // the question at the moment they are changing the protocol, which is the only
+  // moment they can answer it.
+  check("the version log has an entry for the current WORKER_VERSION",
+    new RegExp(`^// v${rpcV}: `, "m").test(rpcSrc), `no "// v${rpcV}:" line`);
 
   // The defect this whole cache exists to fix: a worker that fetches the
   // database itself downloads it once per worker in the pool.
@@ -1244,22 +1278,40 @@ console.log("== the export formats other tools read ==");
 console.log("== the figures compute what they claim to ==");
 {
   const { alphaDiversity, distanceMatrix, pcoa, compositionSvg, alphaSvg, pcoaSvg, pcoaLayout,
-    pieSvg, sampleFacts, eigenvaluesSym, colourAt, NAMED_COLOURS } =
+    pieSvg, contrastSvg, contrastStats, sampleFacts, eigenvaluesSym, colourAt, NAMED_COLOURS } =
     await import("./figures.js");
   // The palette itself is private; its size is what the ceiling is built from.
   const PALETTE_SIZE = NAMED_COLOURS / 3;
 
   // Shannon has known values: n equally-abundant taxa give exactly ln(n), and
   // e^H gives n back. Anything else and the index is not the index.
-  let shannonOk = true;
+  let shannonOk = true, hillOk = true;
   for (const n of [1, 2, 4, 10, 50]) {
     const t = { samples: ["S"], rows: Array.from({ length: n }, (_, i) => ({ species: `t${i}`, values: [100 / n] })) };
     const a = alphaDiversity(t)[0];
     if (Math.abs(a.shannon - Math.log(n)) > 1e-9) shannonOk = false;
     if (Math.abs(a.effective - n) > 1e-6) shannonOk = false;
     if (a.richness !== n) shannonOk = false;
+    // The property that makes the three comparable at all: on n EQUAL rows every
+    // Hill number collapses to n. If q=2 did not, printing it beside q=1 in one
+    // unit would be printing two units in one.
+    if (Math.abs(a.inverseSimpson - n) > 1e-6) hillOk = false;
   }
   check("Shannon on n equal taxa is exactly ln(n), and e^H gives n back", shannonOk);
+  check("...and all three Hill numbers agree on n equal taxa, which is what makes them comparable",
+    hillOk);
+  // Where they must DISAGREE, and in which direction: q=0 >= q=1 >= q=2 always,
+  // and the gap is the weight of the rare tail. One dominant row and a long thin
+  // tail is exactly a functional profile, where the tail sits on single shared
+  // hashes — and the whole reason q=2 was put on screen beside q=1.
+  {
+    const skew = { samples: ["S"], rows: [{ species: "big", values: [90] },
+      ...Array.from({ length: 20 }, (_, i) => ({ species: `t${i}`, values: [0.5] }))] };
+    const a = alphaDiversity(skew)[0];
+    check("...and on a skewed profile they order q=0 > q=1 > q=2, by construction",
+      a.richness > a.effective && a.effective > a.inverseSimpson && a.inverseSimpson > 1,
+      `${a.richness} / ${a.effective.toFixed(2)} / ${a.inverseSimpson.toFixed(2)}`);
+  }
   // Absent is not present-at-zero: a taxon with 0 must not count towards
   // richness, or every sample would report the whole catalogue.
   check("...and a zero-abundance taxon counts towards neither index",
@@ -1299,6 +1351,7 @@ console.log("== the figures compute what they claim to ==");
     ref: null,
   };
   for (const [name, fn] of [["composition", compositionSvg], ["alpha", alphaSvg], ["pcoa", pcoaSvg],
+                            ["contrast", contrastSvg],
                             ["pie", (t) => pieSvg(t, 0)]]) {
     const svg = fn(nasty);
     check(`${name} produces a complete SVG`, svg.startsWith("<svg") && svg.endsWith("</svg>"));
@@ -1309,6 +1362,194 @@ console.log("== the figures compute what they claim to ==");
     check(`...and escapes the data it puts in there`,
       contents.length > 0 && !contents.some((c) => /&(?!amp;|lt;|gt;|quot;|#)/.test(c)),
       contents.find((c) => /&(?!amp;|lt;|gt;|quot;|#)/.test(c)) ?? `${contents.length} text nodes`);
+  }
+
+  // ---- which rows differ ------------------------------------------------------
+  //
+  // The figure's whole claim is that it ranks by EFFECT and not by abundance —
+  // so the test builds a table where those two orderings disagree, and demands
+  // the effect ordering. A row that is enormous in both groups must lose to a
+  // row that is small in one and absent in the other.
+  {
+    const gs = { A: "A", B: "B" };
+    const t = {
+      samples: ["a1", "a2", "a3", "b1", "b2", "b3"],
+      rows: [
+        // Huge, and identical in both groups: no difference at all.
+        { species: "flat_but_huge", values: [0.50, 0.50, 0.50, 0.50, 0.50, 0.50] },
+        // Small, and only in A: the biggest difference in the table.
+        { species: "small_but_split", values: [0.10, 0.10, 0.10, 0.00, 0.00, 0.00] },
+        // Middling, slightly higher in B.
+        { species: "middling", values: [0.20, 0.20, 0.20, 0.24, 0.24, 0.24] },
+      ],
+    };
+    const groupOf = (sm) => (sm.startsWith("a") ? gs.A : gs.B);
+    // scale: 100 because THIS table holds fractions, as the functional tables do.
+    // The taxonomic matrix holds percentages already and passes 1 — see below.
+    const svg = contrastSvg(t, { groupOf, topN: 3, scale: 100 });
+    const order = [...svg.matchAll(/<text[^>]*text-anchor="end"[^>]*>([a-z_]+)/g)].map((m) => m[1]);
+    check("the contrast figure ranks by difference, not by abundance",
+      order[0] === "small_but_split" && !order.includes("flat_but_huge"),
+      order.join(" > "));
+    check("...and names both groups with their sizes",
+      /A \(n=3\)/.test(svg) && /B \(n=3\)/.test(svg));
+    // The number written beside each lane is the signed difference in points of
+    // percentage, A minus B: a reader has to be able to tell which way it goes.
+    check("...and writes the signed difference beside each row",
+      />\+10\.00</.test(svg) && />-4\.00</.test(svg),
+      (svg.match(/>[-+][\d.]+</g) ?? []).join(" "));
+    // One dot per sample per row, always: the dots ARE the evidence, and a
+    // figure that drew only the means would be the p-value it refuses to print.
+    // Two rows survive — the third does not differ at all — times six samples.
+    check("...with every sample drawn as its own dot",
+      (svg.match(/<circle /g) ?? []).length === 2 * t.samples.length,
+      `${(svg.match(/<circle /g) ?? []).length} dots for ${2 * t.samples.length}`);
+    // The figure carries a test now — asked for, after it deliberately carried
+    // none. What it must NOT do is print the number without what bounds it.
+    check("...and prints a q beside each row, from a two-sided Mann-Whitney",
+      /Mann-Whitney two-sided p = /.test(svg) && /Benjamini-Hochberg q = /.test(svg));
+    // THE FLOOR. At three samples a group the smallest attainable p is 0.1, so
+    // no row can reach 0.05 however cleanly the groups separate. Printing q
+    // without that is printing a column of failures and calling it evidence.
+    check("...and says, at these group sizes, what the test cannot do",
+      /at 3 v 3 samples nothing can reach 0\.1/.test(svg),
+      (svg.match(/q: Mann-Whitney[^<]*/) ?? ["no floor sentence"])[0]);
+    // The floor is computed from the NUMBER OF SAMPLES, which is the number of
+    // observations only if each sample is one. Three stool samples from one
+    // donor are not three observations, and the archive's metadata does not
+    // always name the donor — so the figure states what it assumes instead of
+    // guessing, and this holds it to that.
+    check("...and names the assumption that floor rests on",
+      /assumes each sample is independent/.test(svg),
+      (svg.match(/q: Mann-Whitney[^<]*/) ?? ["no assumption stated"])[0]);
+    // The family is the whole table, not the ten rows drawn: correcting over the
+    // rows that happened to be shown would choose the denominator after seeing
+    // the answers.
+    check("...corrected over every row of the table, and saying how many",
+      /Benjamini-Hochberg over 3 rows/.test(svg), (svg.match(/over \d+ rows/) ?? ["-"])[0]);
+    // Still ranked by effect. A p-value ranking at nine samples a group is
+    // mostly a ranking of how many zeros a row has.
+    check("...while the ORDER is still the difference, not the p",
+      order[0] === "small_but_split");
+
+    // The unit the numbers are in is the CALLER's to say, and getting it wrong is
+    // silent: the taxonomic matrix already holds percentages, so a hard-coded
+    // x100 printed "+1367.36" beside a species that differs by 13.67 points.
+    const asPercent = contrastSvg(
+      { samples: t.samples, rows: t.rows.map((r) => ({ ...r, values: r.values.map((v) => v * 100) })) },
+      { groupOf, topN: 3, scale: 1 });
+    check("...in the unit the caller says the values are in",
+      />\+10\.00</.test(asPercent) && !/>\+1000\.00</.test(asPercent),
+      (asPercent.match(/>[-+][\d.]+</g) ?? []).join(" "));
+
+    // A label longer than the space beside the lane is cut to fit, with the whole
+    // string kept in the tooltip. Uncut, "map01100 — Metabolic pathways" began to
+    // the LEFT of the figure and the drawing started mid-word.
+    const longLabels = contrastSvg({
+      samples: t.samples,
+      rows: [{ label: "map01100 — Metabolic pathways and a great many other things", values: [1, 1, 1, 0, 0, 0] }],
+    }, { groupOf, topN: 3, scale: 100 });
+    const shown = longLabels.match(/text-anchor="end"[^>]*>([^<]*)/)?.[1] ?? "";
+    check("...and a long row label is cut, with the whole string kept in a title",
+      shown.endsWith("\u2026") && shown.length < 60 &&
+      /<title>map01100 — Metabolic pathways and a great many/.test(longLabels),
+      JSON.stringify(shown));
+    // The column follows the figure's width rather than being a fixed 190 px:
+    // at 740 px that number truncated a species name while 150 px of lane sat
+    // empty, and at 420 px it took nearly half the picture.
+    const narrow = contrastSvg({
+      samples: t.samples,
+      rows: [{ label: "map01100 — Metabolic pathways and a great many other things", values: [1, 1, 1, 0, 0, 0] }],
+    }, { groupOf, topN: 3, scale: 100, width: 420 });
+    const narrowShown = narrow.match(/text-anchor="end"[^>]*>([^<]*)/)?.[1] ?? "";
+    check("...and the column is narrower in a narrower figure",
+      narrowShown.length < shown.length,
+      `${narrowShown.length} chars at 420 px against ${shown.length} at 900`);
+
+    // The test handed in must draw the same figure as the test computed inside.
+    // It is split out so a slider drag does not recompute 4,307 exact tests per
+    // tick — 470 ms of blocked main thread for numbers that cannot have changed
+    // — and a split that quietly changed the numbers would be worse than the
+    // wait it saves.
+    {
+      const handed = contrastStats(t, { groupOf });
+      const same = contrastSvg(t, { groupOf, topN: 3, scale: 100, stats: handed });
+      check("...and the test handed in draws exactly the figure it would compute",
+        same === svg, `${same.length} against ${svg.length} bytes`);
+      check("...with one entry per row of the table, in the table's order",
+        handed.length === t.rows.length && handed.every((x) => Number.isFinite(x.p)),
+        `${handed.length} for ${t.rows.length} rows`);
+      // Groups too thin to contrast have no test to hand in, and saying so with
+      // null is what lets the figure fall back to computing nothing at all.
+      check("...and nothing at all when there are not two groups to compare",
+        contrastStats(t, { groupOf: () => "everyone" }) === null);
+    }
+
+    // No groups: it must still say something rather than refuse, and it must
+    // rank by spread instead. `middling` is flat here, `small_but_split` is not.
+    const solo = contrastSvg(t, { topN: 3, scale: 100 });
+    const soloOrder = [...solo.matchAll(/<text[^>]*text-anchor="end"[^>]*>([a-z_]+)/g)].map((m) => m[1]);
+    check("with no groups it ranks by spread across samples instead",
+      soloOrder[0] === "small_but_split" && !soloOrder.includes("flat_but_huge") &&
+      /Most variable/.test(solo) && /two groups to contrast/.test(solo), soloOrder.join(" > "));
+    // A single group is not two groups. Contrasting a group with itself would
+    // draw a difference of zero for every row and call it a finding.
+    const oneGroup = contrastSvg(t, { groupOf: () => "everyone", topN: 3, scale: 100 });
+    check("...and one group is treated as no groups, not as a contrast",
+      /Most variable/.test(oneGroup) && !/n=6/.test(oneGroup));
+    // Every row flat: there is nothing to show, and saying so beats an empty
+    // frame that looks like a drawing that failed.
+    const flat = contrastSvg({ samples: ["a", "b"], rows: [{ species: "x", values: [1, 1] }] },
+      { groupOf: (sm) => sm });
+    check("...and a table with nothing to contrast says so",
+      /Nothing to contrast/.test(flat) && flat.endsWith("</svg>"));
+  }
+
+  // ---- the rare taxa in the pie -----------------------------------------------
+  //
+  // They used to be one grey wedge labelled "other taxa (110)": a hundred and ten
+  // measurements with no share, no name and nothing to hover. They are drawn one
+  // by one now — still grey, still pooled into a single legend row, which is the
+  // honest summary of a hundred and ten things that will not fit in a legend.
+  {
+    const many = {
+      samples: ["S1"],
+      rows: Array.from({ length: 40 }, (_, i) => ({
+        species: `Taxon ${i} & sons`, genome: `g${i}`, values: [40 - i],
+      })),
+    };
+    const svg = pieSvg(many, 0, { topN: 5, width: 700, height: 400 });
+    const wedges = svg.match(/class="pie-slice"/g) ?? [];
+    check("every taxon in the sample gets its own wedge, named or not",
+      wedges.length === 40, `${wedges.length} wedges for 40 taxa`);
+    // The pooled ones are marked as such, so the tooltip can say which side of
+    // the cut a slice is on, and so the legend can count them.
+    const rare = svg.match(/data-rest="1"/g) ?? [];
+    check("...with the pooled ones marked, and counted in one legend row",
+      rare.length === 35 && /other taxa \(35\)/.test(svg),
+      `${rare.length} marked, legend says ` +
+      `${(svg.match(/other taxa \(\d+\)/) ?? ["nothing"])[0]}`);
+    // The name has to reach BOTH readers: the page's own tooltip reads the
+    // attribute, and a downloaded SVG has no page around it and reads the title.
+    check("...each carrying its name for the page and for a downloaded file",
+      /data-taxon="Taxon 39 &amp; sons"/.test(svg) &&
+      /<title>Taxon 39 &amp; sons — /.test(svg),
+      (svg.match(/data-taxon="Taxon 39[^"]*"/) ?? ["missing"])[0]);
+    // A share of 0.03 % must not print as "0.0%" — that is the number the reader
+    // hovered a one-pixel wedge to find out.
+    const tiny = pieSvg({
+      samples: ["S1"],
+      rows: [{ species: "big", values: [9999] }, { species: "tiny", values: [1] }],
+    }, 0, { topN: 1, width: 700, height: 400 });
+    check("...and a share too small for one decimal keeps three",
+      /data-share="0\.010%"/.test(tiny), (tiny.match(/data-share="[^"]*"/g) ?? []).join(" "));
+    // A white 1 px edge is wider than a wedge at a hundred slices to the arc: the
+    // pool would come out white rather than grey.
+    const strokes = (svg.match(/data-rest="1"/g) ?? []).length;
+    const restWithStroke = [...svg.matchAll(/<path class="pie-slice"[^>]*>/g)]
+      .filter((m) => /data-rest/.test(m[0]) && /stroke="#fff"/.test(m[0])).length;
+    check("...and the pooled wedges carry no white edge to swallow them",
+      strokes > 0 && restWithStroke === 0, `${restWithStroke} of ${strokes} stroked`);
   }
 
   // Every point must carry its own name: it is the only thing that lets the page
@@ -1334,7 +1575,8 @@ console.log("== the figures compute what they claim to ==");
       })),
     };
     let fits = true, why = "";
-    for (const [name, fn] of [["composition", compositionSvg], ["alpha", alphaSvg], ["pcoa", pcoaSvg]]) {
+    for (const [name, fn] of [["composition", compositionSvg], ["alpha", alphaSvg], ["pcoa", pcoaSvg],
+                              ["contrast", contrastSvg]]) {
       for (const width of [420, 562, 900]) {
         const svg = fn(wide, { width });
         if (!svg.includes(`width="${width}"`)) { fits = false; why = `${name} @${width} declares another width`; }
@@ -1348,6 +1590,65 @@ console.log("== the figures compute what they claim to ==");
     check("every figure is drawn to the width it is given, and stays inside it", fits, why);
   }
 
+  // The two right-hand columns reorder the rows on a click. What must NOT change
+  // is which rows are drawn: the top-N is cut by effect, because "the ten most
+  // confident rows" at these sample sizes is mostly a ranking of how many zeros
+  // a row has. Sorting reorders the ten; it does not choose them.
+  {
+    const t = {
+      samples: ["a", "b", "c", "d"],
+      rows: [{ species: "A", values: [10, 12, 1, 2] }, { species: "B", values: [1, 2, 9, 8] },
+        { species: "C", values: [5, 5, 4, 4] }, { species: "D", values: [0.2, 0.1, 3, 4] }],
+    };
+    const opt = { groupOf: (x) => (x === "a" || x === "b" ? "X" : "Y"), pair: ["X", "Y"], topN: 3 };
+    const drawn = (o) => [...contrastSvg(t, { ...opt, ...o })
+      .matchAll(/<title>([A-D])<\/title>/g)].map((m) => m[1]);
+    const base = drawn({});
+    const desc = drawn({ sort: { col: "diff", dir: "desc" } });
+    const asc = drawn({ sort: { col: "diff", dir: "asc" } });
+    check("sorting the contrast reorders the rows it drew, and no others",
+      JSON.stringify([...base].sort()) === JSON.stringify([...desc].sort()) &&
+      JSON.stringify(desc) === JSON.stringify([...asc].reverse()),
+      `${base.join("")} / ${desc.join("")} / ${asc.join("")}`);
+    // The signed difference, not its magnitude: the column prints "-7.05" and a
+    // reader sorting by it expects the negatives at one end.
+    const signed = contrastSvg(t, { ...opt, topN: 4, sort: { col: "diff", dir: "asc" } });
+    const first = (signed.match(/>([+-][\d.]+)</) ?? [])[1];
+    check("...by the signed value the column prints, not by its magnitude",
+      first?.startsWith("-"), String(first));
+    // Three states, as the matrix headers have: the reader must be able to get
+    // the figure's own order back without reloading the page.
+    check("...and the handles carry what the page needs to wire the cycle",
+      /class="contrast-head" data-sort="diff"/.test(contrastSvg(t, opt)) &&
+      /data-sort="q"/.test(contrastSvg(t, opt)) &&
+      /role="button"/.test(contrastSvg(t, opt)));
+  }
+
+  // THE FIGURE MUST FIT INSIDE ITS OWN FRAME. The legend is laid out in columns
+  // whose width is divided by an assumed characters-per-pixel, and when that
+  // number is too small the right-hand column runs off the viewBox — measured in
+  // a browser at x = 711 in a 699-wide figure, clipped on screen and in the
+  // downloaded SVG alike. 6.62 px is the widest character measured at 11 px in
+  // the page's own stack; this checks the worst case that assumption allows.
+  {
+    const longNames = {
+      samples: ["S1", "S2"],
+      rows: Array.from({ length: 9 }, (_, i) => ({
+        species: `map0${1100 + i} — Biosynthesis of secondary metabolites and other very long names`,
+        values: [10 - i, 9 - i],
+      })),
+    };
+    const svg = compositionSvg(longNames, { width: 699, topN: 8 });
+    const box = Number((svg.match(/viewBox="0 0 ([\d.]+)/) ?? [])[1] ?? 0);
+    let worst = 0, worstText = "";
+    for (const m of svg.matchAll(/<text x="([\d.]+)"[^>]*>([^<]*)<\/text>/g)) {
+      const right = Number(m[1]) + m[2].length * 6.62;
+      if (right > worst) { worst = right; worstText = m[2]; }
+    }
+    check("the composition legend stays inside the figure's own frame",
+      box > 0 && worst <= box, `${worst.toFixed(0)} px dans ${box} — « ${worstText} »`);
+  }
+
   // Every figure has to be askable, not only the ordination: a bar of the
   // composition and a row of the diversity chart are samples too, and the panel
   // is opened by whatever carries data-sample.
@@ -1355,8 +1656,16 @@ console.log("== the figures compute what they claim to ==");
     const svg = fn(nasty);
     const marks = svg.match(/class="sample-row" data-sample="([^"]*)"/g) ?? [];
     check(`${name} makes every sample a mark that can be opened`,
-      marks.length === nasty.samples.length && (svg.match(/<\/g>/g) ?? []).length === marks.length,
+      marks.length === nasty.samples.length,
       `${marks.length} marks for ${nasty.samples.length} samples`);
+    // Balance, counted as balance. This used to be "one </g> per sample row",
+    // which was the same number only while sample rows were the ONLY groups —
+    // so wrapping each legend entry in a <g> to hang a tooltip on it failed a
+    // check about opening the sample panel.
+    const open = (svg.match(/<g[\s>]/g) ?? []).length;
+    const close = (svg.match(/<\/g>/g) ?? []).length;
+    check(`...and closes every group it opens`, open === close && open >= marks.length,
+      `${open} opened, ${close} closed`);
   }
 
   // What fills the panel beside the pie. The distances are the ones the
@@ -2155,6 +2464,57 @@ console.log("== the worked example is what it claims to be ==");
     multi.includes('"demo/gut-demo.session.json"') && multi.includes('"demo/gut-demo.groups.csv"'));
   check("...and says whose numbers they are, in the banner and nowhere else needed",
     /not your data/.test(multi));
+
+  // ---- the functional half ----------------------------------------------------
+  //
+  // The Function tab is the same eighteen runs read to the same depth, or it is
+  // a second experiment shown under the first one's heading. Everything below
+  // is checkable from the shipped file, so it is checked.
+  {
+    const { koTable, moduleTable, moduleCoverage } = await import("./kegg.js");
+    const fp = st.funcProfiles;
+    check("the example carries a functional profile for every run it shows",
+      !!fp && st.sampleOrder.every((s) => fp[s] && Object.keys(fp[s]).length > 0),
+      fp ? `${Object.keys(fp).length} profiled of ${st.sampleOrder.length}` : "none");
+    // Everything below reads the profiles, so it runs only if there are any.
+    // One missing block is one failure, not six of the same cause — and a suite
+    // that throws on it reports nothing about the checks that come after.
+    if (fp) {
+    // The identifiers, not the archive's file names. `ko:K01952` joins to
+    // nothing in the KEGG map, and the failure reads as "no ortholog is in a
+    // module" — a sentence plausible enough to ship.
+    const ids = Object.keys(fp[st.sampleOrder[0]]);
+    check("...keyed by KEGG ortholog, with the archive's ko: prefix stripped",
+      ids.length > 500 && ids.every((k) => /^K\d+$/.test(k)),
+      `${ids.length} orthologs, e.g. ${ids.slice(0, 2)}`);
+    // Each column is a share of that sample's own matched signal. A column that
+    // does not sum to one is a profile cut short, and every comparison across
+    // samples below would be reading depth as biology.
+    const sums = st.sampleOrder.map((s) => Object.values(fp[s]).reduce((a, b) => a + b, 0));
+    check("...each column a share of its own sample, summing to one",
+      sums.every((t) => Math.abs(t - 1) < 0.02),
+      `${Math.min(...sums).toFixed(3)}–${Math.max(...sums).toFixed(3)}`);
+
+    const map = JSON.parse(readFileSync(here + "db/kegg/ko-map.json", "utf8"));
+    const named = ids.filter((k) => map.ko[k]).length;
+    check("...and the bundled KEGG map can name what was measured",
+      named / ids.length > 0.9, `${((named / ids.length) * 100).toFixed(1)}% named`);
+    // The number the panel prints beside every rolled-up view. Pinned loosely
+    // and from the real profiles: if a rebuild moves it far, the wording that
+    // quotes it has to move too.
+    const cov = moduleCoverage(fp, st.sampleOrder, map);
+    check("...with a module-level view that speaks for a stated part of it",
+      cov > 0.10 && cov < 0.45, `${(cov * 100).toFixed(1)}% reaches a module`);
+    // The whole reason the tables share one shape: functions go through the
+    // taxonomic figures unchanged.
+    const ko = koTable(fp, st.sampleOrder, map);
+    const mod = moduleTable(fp, st.sampleOrder, map);
+    check("...and both granularities come out as tables the figures already take",
+      ko.rows.length > mod.rows.length && mod.rows.length > 50 &&
+      ko.rows.every((r) => r.values.length === st.sampleOrder.length),
+      `${ko.rows.length} orthologs, ${mod.rows.length} modules`);
+    }
+  }
 }
 
 console.log("== clustering orders the matrix without changing it ==");

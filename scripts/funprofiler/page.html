@@ -1,0 +1,55 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>waiting</title>
+<pre id="out">running…</pre>
+<script type="module">
+  // Which build to exercise comes from the query string, so the same page proves
+  // wasm32 and wasm64 and nothing can differ between the two runs but the module.
+  const pkg = new URLSearchParams(location.search).get("pkg") || "funprofiler-pkg";
+  const K_STORED = 33, SCALED = 1000, SEED = 42;
+  const say = (s) => { document.getElementById("out").textContent = s; document.title = s;
+    fetch("/done?" + encodeURIComponent(s)).catch(() => {}); };
+
+  try {
+    const mod = await import(`../../web/${pkg}/sourmash.js`);
+    await mod.default();
+
+    const reads = await (await fetch("./reads.json")).json();
+    const t0 = performance.now();
+    const sample = new mod.KmerMinHash(0, K_STORED, true, false, false, SEED, SCALED, true);
+    for (const r of reads) sample.add_sequence_js(r);
+    const tSketch = (performance.now() - t0) / 1000;
+
+    const refs = await (await fetch("./ko_subset_plain.json")).json();
+    const t1 = performance.now();
+    const prof = new mod.FuncProfiler();
+    for (const json of refs) prof.add_references_json(json, K_STORED, SCALED);
+    const tLoad = (performance.now() - t1) / 1000;
+
+    const t2 = performance.now();
+    const csv = prof.profile(sample, 1);
+    const tProf = (performance.now() - t2) / 1000;
+
+    const rows = csv.trim().split("\n").slice(1);
+    // A digest of the whole profile, so the two builds are compared on every
+    // number rather than on the count and the first row.
+    const digest = rows.map((r) => r).join("|");
+    let h = 0n;
+    for (const ch of digest) h = (h * 31n + BigInt(ch.codePointAt(0))) & 0xffffffffffffn;
+
+    say([
+      `PKG=${pkg}`,
+      `HASHES=${sample.size_js()}`,
+      `REFS=${prof.len()}`,
+      `KOS=${rows.length}`,
+      `DIGEST=${h.toString(16)}`,
+      `FIRST=${rows[0] ?? ""}`,
+      `SKETCH_S=${tSketch.toFixed(2)}`,
+      `LOAD_S=${tLoad.toFixed(2)}`,
+      `PROFILE_S=${tProf.toFixed(3)}`,
+      "STATUS=OK",
+    ].join(" "));
+  } catch (e) {
+    say(`PKG=${pkg} STATUS=FAIL ${e && e.message ? e.message : e}`);
+  }
+</script>

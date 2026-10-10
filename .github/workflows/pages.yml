@@ -18,7 +18,7 @@ concurrency:
 
 jobs:
   # The benches, before anything ships. Until this job existed every push
-  # deployed straight to production with nothing run at all: 1,596 assertions,
+  # deployed straight to production with nothing run at all: 2,124 assertions,
   # 173 in the ENA suite and 37 mutations that only ever executed because
   # somebody remembered to type them.
   #
@@ -39,6 +39,47 @@ jobs:
       # checked against the study it claims to come from.
       - name: Parity suite
         run: node web/fastq-trim.parity.test.mjs
+
+      # KEGG orthologs into modules and pathways, and the pathway figure. Hand
+      # -built profiles whose answers are worked out on paper, then the shipped
+      # ko-map.json — so a rebuild that changes its shape fails here.
+      - name: KEGG roll-ups
+        run: node web/kegg.test.mjs
+
+      # The protein sketcher, against the four shapes the worker feeds it in:
+      # whole buffers, chunks that fall inside a line, and two mates arriving
+      # interleaved. A reader that loses the FASTQ record phase does not throw —
+      # it returns a smaller profile — so the checks demand the SAME profile out
+      # of every shape.
+      - name: Protein sketcher
+        run: node web/func-sketch.test.mjs
+
+      # Searching and sorting a matrix of hundreds of rows: what a search matches,
+      # what happens to ties, and the third click that gives the original order
+      # back.
+      - name: Table view
+        run: node web/table-view.test.mjs
+
+      # The contrast figure's test, against values worked out on paper and
+      # against an independent brute-force enumeration of the same permutation
+      # null. A p-value that is wrong by a factor of two looks exactly like one
+      # that is right, which is why this is the one thing here that cannot be
+      # checked by looking at the page.
+      - name: Statistics
+        run: node web/stats.test.mjs
+
+      # Where a sample grouping comes from — a metadata field, the editor, or a
+      # CSV — and which fields are worth offering at all. A field with one value
+      # for every sample, or a distinct value per sample, groups nothing.
+      - name: Sample groups
+        run: node web/groups.test.mjs
+
+      # The Gut Metabolic Module parser and estimator, on definitions small
+      # enough to work out on paper. The real catalogue is NOT in this repository
+      # — VIB licenses it for academic use inside one institution — so the checks
+      # that need it are skipped here and run locally with GMM_DEFS set.
+      - name: Gut Metabolic Modules
+        run: node web/gmm.test.mjs
 
       # What the pages CLAIM against what they ship — a sentence in a banner, a
       # control that must be frozen during a run, a door that must not be

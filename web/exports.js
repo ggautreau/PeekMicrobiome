@@ -177,6 +177,20 @@ export function toSession(state) {
     // before this line still opens here — with no metadata, which is exactly
     // what it had.
     sampleMeta: Object.fromEntries(state.sampleMeta ?? []),
+    // Functional profiles, when the run measured them: sample -> { KO: share }.
+    // Optional for the same reason sampleMeta is, and the format number does not
+    // move for it — a session written here still opens on a page that predates
+    // functions, and a session written before them opens here with none, which
+    // is what it had. The KEGG roll-ups are NOT saved: they are derived, and a
+    // saved roll-up would freeze the map version the way saving the aggregated
+    // matrix would freeze the rank.
+    funcProfiles: state.funcProfiles ?? null,
+    // The groups the reader made by hand, and nothing else about grouping. A
+    // grouping derived from a metadata FIELD is not saved: the field is already
+    // in `sampleMeta`, so saving the result would freeze a derivation the way a
+    // saved roll-up would freeze the KEGG map. Optional, like the two above, and
+    // the format number does not move for it.
+    groups: state.groups?.size ? Object.fromEntries(state.groups) : null,
     rank: state.rank ?? "s",
   }, null, 1);
 }
@@ -206,6 +220,14 @@ export function fromSession(text) {
     matrix: j.matrix,
     refBySample: new Map(Object.entries(j.refBySample ?? {})),
     sampleMeta: new Map(Object.entries(j.sampleMeta ?? {})),
+    // A plain object, sample -> { KO: share }, or null. Never {} for "absent":
+    // the Function tab has to tell "this run measured no functions" from "this
+    // run measured functions and found none", and those are different answers.
+    funcProfiles: (j.funcProfiles && typeof j.funcProfiles === "object") ? j.funcProfiles : null,
+    // Groups made by hand, or an empty map. A session written before this key
+    // existed opens with no groups, which is what it had.
+    groups: new Map(Object.entries(j.groups ?? {})
+      .filter(([, v]) => typeof v === "string" && v.trim())),
     rank: typeof j.rank === "string" ? j.rank : "s",
     savedAt: j.savedAt ?? null,
   };

@@ -882,7 +882,8 @@ table.matrix tbody tr:nth-child(even) { background: var(--bg-softer); }
    is disabled until a database is loaded, which happens in a card further up
    that is easy to walk past. A number that fills in as each step is satisfied
    turns that from a rule you have to be told into something you can see. */
-.card > h2 {
+.card > h2,
+.card > .card-head > h2 {
   display: flex;
   align-items: center;
   gap: 0.6rem;
@@ -903,20 +904,23 @@ table.matrix tbody tr:nth-child(even) { background: var(--bg-softer); }
   transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
 }
 /* The step you can act on right now. */
-.card.step-now > h2 .step-num {
+.card.step-now > h2 .step-num,
+.card.step-now > .card-head > h2 .step-num {
   border-color: var(--accent);
   color: var(--accent);
   background: var(--accent-soft);
 }
 /* Done. The number is replaced by a tick drawn in CSS, so it reads at a glance
    without another asset to load. */
-.card.step-done > h2 .step-num {
+.card.step-done > h2 .step-num,
+.card.step-done > .card-head > h2 .step-num {
   border-color: var(--success);
   background: var(--success);
   color: #fff;
   font-size: 0;
 }
-.card.step-done > h2 .step-num::after {
+.card.step-done > h2 .step-num::after,
+.card.step-done > .card-head > h2 .step-num::after {
   content: "✓";
   font-size: 0.95rem;
   line-height: 1;
@@ -926,7 +930,8 @@ table.matrix tbody tr:nth-child(even) { background: var(--bg-softer); }
 .card.step-now {
   border-left: 3px solid var(--accent);
 }
-.card.step-done > h2 {
+.card.step-done > h2,
+.card.step-done > .card-head > h2 {
   color: var(--ink-soft);
 }
 
@@ -1097,23 +1102,81 @@ details[open] > .ena-summary::before { transform: rotate(90deg); }
    An aside to the matrix, not a mode: opening one is a click, closing it is the
    same click again. */
 .figures { margin-top: 1rem; }
-.fig-tabs { display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; }
-.fig-tab {
-  background: var(--bg-card);
+/* Pushes everything after it to the far end of a toolbar: settings on the left,
+   what the run says about itself in the middle, actions on the right. Three
+   ranks instead of one undifferentiated row. */
+.tb-spacer { flex: 1 1 2rem; min-width: 0; }
+
+/* The sentence under a figure, not inside its bar: it runs to two lines, and a
+   two-line sentence between controls drags them out of alignment. */
+.fig-note { display: block; margin: 0.5rem 0 0; }
+
+/* ---- the figure switch ------------------------------------------------------
+   A SEGMENTED CONTROL, not five loose buttons. Five bordered rectangles in a row
+   with the same weight as every other control on the card read as five actions
+   of equal standing; one joined strip with a selected segment reads as "these
+   are the views of the same thing, and you are looking at that one". The icons
+   are the second half of it: at a glance the strip is recognisable as a row of
+   pictures rather than a wall of words. */
+.fig-tabs {
+  display: flex;
+  gap: 0.4rem;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.fig-switch {
+  display: inline-flex;
+  /* WRAPS. Five segments at ~120 px do not fit a 420 px screen, and with
+     `overflow: hidden` and no wrapping the last two were clipped away — not
+     merely ugly, unreachable: on a phone there was no way to open Contrast or
+     Enterotype at all. Measured, at 420 px, before this line existed. */
+  flex-wrap: wrap;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
-  padding: 0.4rem 0.9rem;
+  overflow: hidden;
+  background: var(--bg-soft);
+}
+.fig-tab, .func-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  background: none;
+  border: 0;
+  border-right: 1px solid var(--border);
+  border-radius: 0;
+  padding: 0.4rem 0.8rem;
   color: var(--ink-soft);
   font: inherit;
   cursor: pointer;
+  white-space: nowrap;
 }
-.fig-tab:hover { border-color: var(--accent); color: var(--accent-ink); }
-.fig-tab.is-on {
+.fig-tab:last-child, .func-tab:last-child { border-right: 0; }
+.fig-tab:hover, .func-tab:hover { color: var(--accent-ink); background: var(--bg-card); }
+.fig-tab.is-on, .func-tab.is-on {
   background: var(--accent-soft);
-  border-color: var(--accent);
   color: var(--accent-ink);
   font-weight: 600;
 }
+.fig-tab svg, .func-tab svg { flex: 0 0 auto; opacity: .85; }
+
+/* An ACTION beside the switch, and deliberately quieter than it: saving a
+   picture is not one of the five things the figure area is for. Icon plus a
+   three-letter word rather than "Download SVG", which was the widest control in
+   the row and the least often used. */
+.fig-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  background: none;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  padding: 0.35rem 0.6rem;
+  color: var(--ink-muted);
+  font: inherit;
+  cursor: pointer;
+}
+.fig-action:hover { color: var(--accent-ink); border-color: var(--border); }
+.fig-tab.is-on svg, .func-tab.is-on svg { opacity: 1; }
 .fig-meta { cursor: pointer; color: var(--ink-soft); font-size: 0.88rem; }
 .fig-meta:hover { color: var(--accent-ink); text-decoration: underline; }
 .fig-canvas {
@@ -1153,11 +1216,24 @@ details[open] > .ena-summary::before { transform: rotate(90deg); }
 
 .fig-zoom { display: inline-flex; align-items: center; gap: 0.2rem; }
 .fig-zoom button {
-  min-width: 1.9rem;
   padding: 0.2rem 0.5rem;
-  font-size: 0.85rem;
-  line-height: 1.2;
+  font-size: 0.8rem;
+  line-height: 1.3;
 }
+/* Square ONLY where the content is a glyph. The magnifiers replaced a bare "−"
+   and "+", which said nothing about what they act on — a minus beside a figure
+   could as easily remove it. `Reset` is a word and keeps a word's box: sized
+   square it overflowed, and its text ran into the button beside it. */
+.fig-zoom button[data-zoom="in"],
+.fig-zoom button[data-zoom="out"] {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.75rem;
+  height: 1.75rem;
+  padding: 0;
+}
+.fig-zoom button svg { opacity: 0.8; }
 .fig-zoom button[disabled] { opacity: 0.45; cursor: default; }
 .fig-zoom-k {
   min-width: 2.4rem;
@@ -1185,7 +1261,6 @@ details[open] > .ena-summary::before { transform: rotate(90deg); }
    jumps. min-width is what makes the pair stack on a narrow window instead of
    squeezing to nothing. */
 .fig-canvas, .fig-detail {
-  flex: 1 1 0;
   min-width: min(22rem, 100%);
   height: clamp(24rem, 58vh, 38rem);
   overflow: auto;
@@ -1194,7 +1269,20 @@ details[open] > .ena-summary::before { transform: rotate(90deg); }
    width of its content, and a 620px figure would push the row off the page. */
 
 
+/* NOT half each. The panel holds a pie and three numbers and needs about 24rem;
+   the figure is a plot of eighteen samples or a list of thirty rows and can use
+   everything else. At 50/50 the contrast lanes were 250 px of a 570 px card with
+   the other half showing "Pick a sample" — the figure cramped so that a
+   placeholder could have the same room as the measurement.
+   Still a FIXED split, not one that follows the content: the plot must not
+   resize under the pointer that clicked it. */
+.fig-canvas { flex: 1 1 0; }
 .fig-detail {
+  /* A share, not a fixed 26rem: at a 900 px window the fixed number made the
+     panel WIDER than the plot beside it — the placeholder winning the card. A
+     third of the row, floored so the pie stays legible and capped so it never
+     takes more than it needs. */
+  flex: 0 1 clamp(20rem, 32%, 26rem);
   margin-top: 0.7rem;
   padding: 0.6rem;
   background: var(--bg-card);
@@ -1247,6 +1335,35 @@ details[open] > .ena-summary::before { transform: rotate(90deg); }
      long, and three stat tiles spread over a metre read as three separate
      things rather than one line about one sample. */
   max-width: 46rem;
+}
+/* The KEGG-maps tab: a table of links, not a drawing, so it takes the whole row
+   rather than sharing it with a sample panel that has nothing to show beside a
+   table. Its own scroll box, because eighteen columns of links is wider than the
+   card on any window. */
+/* A matrix cell that opens something. The tint already says the cell carries a
+   number; the link takes the whole cell so a four-character figure is not the
+   target. Used by the functional pathway table, where a cell is exactly what a
+   KEGG map needs — this pathway, in this sample. */
+.matrix td.num a {
+  color: inherit;
+  text-decoration: none;
+  display: block;
+  margin: -0.3rem -0.45rem;
+  padding: 0.3rem 0.45rem;
+}
+.matrix td.num a:hover { text-decoration: underline; }
+.matrix td.num a:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+
+/* When the disc and the three numbers are drawn at different levels, the line
+   that says so. Quiet — it is a caveat, not a finding — but present, because a
+   pie of pathways over three tiles counting orthologs is otherwise read as one
+   statement. */
+.pie-note {
+  font-size: 0.84rem;
+  line-height: 1.45;
+  color: var(--ink-soft);
+  border-left: 2px solid var(--border);
+  padding-left: 0.6rem;
 }
 /* What the archive said about the sample, under the three numbers. Chips rather
    than a table: most samples carry three or four of these and a table of
@@ -1557,6 +1674,203 @@ details[open] > .ena-summary::before { transform: rotate(90deg); }
 }
 .settings-actions { display: flex; gap: 0.6rem; justify-content: flex-end; flex-wrap: wrap; }
 
+/* ---- the group editor ------------------------------------------------------
+   Two columns of rows rather than one long list: eighteen samples in one column
+   is a dialog taller than the screen, and the whole point of the editor is to
+   see the assignment as a whole while making it. It scrolls when even two
+   columns will not fit, which is what a run of eighty-five needs. */
+/* Wider than Settings, and only this dialog: the list is two columns of
+   name-plus-field, and at Settings' 34rem only one column fits — which turns
+   eighteen samples into a scroll and eighty-five into a chore. */
+#groupEdit { max-width: min(56rem, 94vw); }
+/* A button that reads as a link: the secondary way out of the contrast refusal
+   ("or show the most variable rows instead"). A <button> rather than an <a>
+   because it does something to this page and goes nowhere. */
+.linky {
+  background: none;
+  border: 0;
+  padding: 0;
+  font: inherit;
+  color: var(--accent);
+  text-decoration: underline;
+  cursor: pointer;
+}
+.linky:hover { color: var(--accent-ink-hover); }
+
+/* The example's banner, folded on the small screens where it was a whole screen
+   of reading before the results. Open by default — the sentence it carries is
+   the reason it exists — but foldable, and its summary alone is enough. */
+.demo-fold > summary { cursor: pointer; list-style: none; }
+.demo-fold > summary::-webkit-details-marker { display: none; }
+.demo-fold > summary::after { content: " ▾"; opacity: .6; }
+.demo-fold:not([open]) > summary::after { content: " ▸"; }
+.demo-fold > div { margin-top: .45rem; }
+
+/* The citation notice, folded. `summary` carries the icon and the one sentence
+   that has to be met even by someone who never opens it. */
+.notice-fold > summary {
+  display: flex;
+  gap: .6rem;
+  align-items: flex-start;
+  cursor: pointer;
+  list-style: none;
+}
+.notice-fold > summary::-webkit-details-marker { display: none; }
+.notice-fold > summary::after {
+  content: "▸";
+  margin-left: auto;
+  opacity: .6;
+  transition: transform .15s;
+}
+.notice-fold[open] > summary::after { content: "▾"; }
+.notice-fold > div { margin-top: .5rem; padding-left: 1.6rem; }
+
+/* The ✕ that closes a figure. Quiet: it is the way out, not an action anybody
+   comes to the page for. */
+.fig-close {
+  /* Right after Download SVG, NOT pushed to the far end: `margin-left: auto` in
+     a flex row takes all the free space before it, so the ✕ ended up sitting
+     against the Groups picker and reading as its close button. */
+  background: none;
+  border: 0;
+  font: inherit;
+  color: var(--ink-muted);
+  cursor: pointer;
+  padding: 0 .3rem;
+}
+.fig-close:hover { color: var(--accent); }
+
+/* ---- finding a row in a matrix of hundreds ---------------------------------
+   The abundance matrix is 468 species by 18 samples on the shipped example, and
+   scrolling was the only way to reach one of them. */
+/* A <select> is as wide as its longest option, and folding six exports into one
+   menu gave it "Session file (put it back on screen later)". At 420 px that one
+   control pushed the whole document sideways — measured. A select that cannot
+   shrink is the classic way a responsive layout breaks. */
+.rank-pick { min-width: 0; }
+.rank-pick select, .toolbar select { max-width: 100%; }
+
+.matrix-find {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin: 0 0 0.4rem;
+  flex-wrap: wrap;
+}
+.matrix-find input[type="search"] {
+  flex: 1 1 12rem;
+  min-width: 0;
+  max-width: 26rem;
+  padding: 0.35rem 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-card);
+  color: var(--ink);
+  font: inherit;
+}
+.matrix-find input[type="search"]:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+/* A label that only a screen reader needs: the placeholder says the same thing
+   to everyone else, and a visible label here would be a third row of chrome. */
+.visually-hidden {
+  position: absolute;
+  width: 1px; height: 1px;
+  margin: -1px; padding: 0; border: 0;
+  clip-path: inset(50%);
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+/* A sortable column header. The arrow is the state; the pointer is the
+   affordance. */
+table.matrix thead th.sortable { cursor: pointer; user-select: none; }
+table.matrix thead th.sortable:hover { color: var(--accent); }
+table.matrix thead th .sort-mark { opacity: 0.85; font-size: 0.85em; margin-left: 0.15rem; }
+
+/* ---- what is inside a matrix cell ------------------------------------------
+   A cell that can be opened looks like a cell, not like a button: the matrix is
+   a wall of numbers and a wall of buttons would be unreadable. The affordance is
+   the underline on hover and the pointer, which is what a link in the same table
+   already offers. */
+.cell-open {
+  background: none;
+  border: 0;
+  padding: 0;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+}
+.cell-open:hover { text-decoration: underline; }
+.cell-open:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+.cell-pop {
+  position: fixed;
+  z-index: 60;
+  max-width: min(34rem, 92vw);
+  max-height: 60vh;
+  overflow-y: auto;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.14);
+  padding: 0.7rem 0.85rem 0.6rem;
+}
+.cell-pop-head { display: flex; align-items: baseline; gap: 0.5rem; flex-wrap: wrap; }
+.cell-pop-head strong { color: var(--ink); }
+.cell-pop-head span { color: var(--ink-soft); font-size: 0.88rem; }
+.cell-pop-sample { margin-left: auto; color: var(--accent-ink) !important; font-weight: 600; }
+.cell-pop-close { background: none; border: 0; font: inherit; cursor: pointer; color: var(--ink-muted); }
+.cell-pop .info { margin: 0.4rem 0 0.5rem; font-size: 0.82rem; }
+.cell-pop-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.15rem; }
+.cell-pop-list li {
+  display: grid;
+  grid-template-columns: 5.5rem 1fr auto;
+  gap: 0.5rem;
+  align-items: baseline;
+  font-size: 0.85rem;
+}
+.cell-pop-list li span { color: var(--ink-soft); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cell-pop-list li b { color: var(--ink); font-variant-numeric: tabular-nums; }
+/* A step that was found and one that was not are the same list, so the
+   difference has to be visible without reading the last column. */
+.cell-pop-list li.step-off { opacity: 0.55; }
+.cell-pop-list li.step-off b { color: var(--ink-muted); font-weight: 500; }
+
+.group-quick { align-items: center; gap: 0.6rem; flex-wrap: wrap; }
+.group-quick select { max-width: 16rem; }
+/* The source picker names a field and its group count — "by collection_date
+   (9 groups)" — and at the toolbar's default select width that reads as
+   "by collection_da". */
+/* Wide enough for the entry that says where the groups came from and how many
+   samples it matched — the longest of them, and the one a reader most needs to
+   read without opening the menu. It was rendering as "from a CSV — 18". */
+#figGroupSource, #funcGroupSource { min-width: 13rem; max-width: 16rem; }
+.group-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(19rem, 1fr));
+  gap: 0.3rem 1.2rem;
+  max-height: 52vh;
+  overflow-y: auto;
+  padding-right: 0.3rem;
+}
+.group-row {
+  display: grid;
+  grid-template-columns: 1fr 8.5rem;
+  align-items: center;
+  gap: 0.5rem;
+}
+/* The sample name is the fixed part and the input is the part being typed in,
+   so the name gets the elastic column and truncates rather than pushing the
+   field off the edge on a long accession. */
+.group-sample {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.85rem;
+  color: var(--ink-soft);
+}
+.group-row input[type="text"] { width: 100%; }
+
 /* ---------- Step strip ----------
    Sticky, because the question it answers ("what is missing?") is asked from
    the bottom of the page, where the numbered cards are long gone. */
@@ -1841,6 +2155,12 @@ html[data-theme="dark"] .notice.biome-warning .notice-icon { color: #e07a63; }
   font-weight: 600;
 }
 .db-ref:empty { display: none; }
+/* The functional half's line is a paragraph, not a label: it says what the
+   method finds AND what it misses, which is three lines of text. At the 600
+   weight a one-line "Profiled against …" carries, three lines shout. Same box,
+   same colour, normal weight — it is the same kind of statement, at the length
+   it actually needs. */
+.db-ref.db-ref-long { font-weight: 400; line-height: 1.45; }
 /* A database off the user's disk cannot be named: say so in a colour that does
    not look like a confirmed provenance. */
 .db-ref.db-ref-local {
@@ -1939,3 +2259,286 @@ html[data-theme="dark"] .notice.biome-warning .notice-icon { color: #e07a63; }
    go away with it. */
 .fig-colour { display: inline-flex; align-items: center; gap: 0.35rem; font-size: 0.85rem; color: var(--ink-soft); }
 .fig-colour select { font-size: 0.85rem; padding: 0.15rem 0.3rem; }
+
+/* The KEGG acknowledgement. Deliberately not a modal: a modal over the whole
+   page would read as a paywall, and this is a question about one tab. */
+/* --border and --bg-card, not --line and --card: those two names have never
+   existed in this stylesheet, so every declaration using them was invalid and
+   dropped. The KEGG gate's buttons were therefore borderless text on no
+   background, and the selected Taxonomy/Function tab had neither its border nor
+   its card fill — which is why the contrast refusal's two buttons did not read
+   as buttons when they were added here. Six declarations, one silent failure. */
+.kegg-gate-actions { display: flex; gap: .6rem; flex-wrap: wrap; justify-content: center; margin-top: .35rem; }
+.kegg-gate-actions button {
+  padding: .45rem .9rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-card);
+  color: var(--ink-soft);
+  cursor: pointer;
+  font: inherit;
+}
+.kegg-gate-actions button:hover { border-color: var(--accent); color: var(--accent); }
+.kegg-gate-actions button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.kegg-gate .kegg-gate-fine { font-size: .8rem; opacity: .75; max-width: 30rem; }
+
+/* Taxonomy / Function: one run, two questions. Above the toolbars because the
+   choice governs everything under it — matrix, downloads and figures alike. */
+.res-tabs { display: flex; gap: .25rem; margin: .6rem 0 .2rem; border-bottom: 1px solid var(--border); }
+/* Two of them, so each takes half the bar rather than sitting in the left
+   corner where a tab bar looks like a button group. */
+.res-tab {
+  flex: 1 1 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: .5rem;
+  padding: .5rem .95rem;
+  border: 1px solid transparent;
+  border-bottom: none;
+  border-radius: 7px 7px 0 0;
+  background: none;
+  color: var(--ink-muted);
+  cursor: pointer;
+  font: inherit;
+  font-weight: 600;
+  margin-bottom: -1px;
+}
+.res-tab:hover { color: var(--accent); }
+.res-tab.is-on {
+  color: var(--accent);
+  border-color: var(--border);
+  border-bottom: 1px solid var(--bg-card);
+  background: var(--bg-card);
+}
+.res-tab:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* ---------- The card's own actions ----------
+   Export and "Open a session" sat in the taxonomic toolbar, in the same row and
+   at the same weight as "Level" and "group similar rows" — so a setting and a
+   save read as two of a kind, and the functional half grew its own pair of
+   download buttons because the menu below plainly belonged to the other table.
+   They are the CARD's actions, so they sit on the card's title line, once, at
+   the other end from the title: the level a control acts at is the level it is
+   drawn at. */
+.card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.8rem 1rem;
+  flex-wrap: wrap;
+}
+.card-head > h2 { margin: 0; }
+.card-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+/* Actions read as actions: a quiet outline, the accent on hover, and the same
+   height as each other whether the control inside is a select or a file input. */
+.card-actions > label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin: 0;
+  padding: 0.3rem 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-card);
+  font-size: 0.86rem;
+  cursor: pointer;
+}
+.card-actions > label:hover { border-color: var(--accent); }
+.card-actions > label:focus-within { outline: 2px solid var(--accent); outline-offset: 1px; }
+.card-actions svg { flex: 0 0 auto; opacity: 0.75; }
+.card-actions select {
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  padding: 0;
+  max-width: 12rem;
+  cursor: pointer;
+}
+.card-actions select:focus-visible { outline: none; }
+@media (max-width: 34rem) {
+  /* The title keeps the line to itself; the actions take the next one whole. */
+  .card-actions { width: 100%; }
+}
+
+/* The magnifier in the filter box: the same mark on both halves, so the two
+   tables are recognisably the same control rather than two boxes that happen to
+   look alike. */
+.matrix-find > svg {
+  flex: 0 0 auto;
+  opacity: 0.55;
+  margin-right: -0.25rem;
+}
+
+/* A hairline between the settings and the two actions at the end of a figure
+   bar. The spacer says "these belong at the other end"; the rule says "and these
+   last two are a different kind of thing" — without another border-and-padding
+   box in a row that already has plenty. */
+/* Away with the actions it separates. On the functional half before the licence
+   is answered there are no tabs and no buttons, and the rule was the only thing
+   left in the bar: a 19-pixel line floating over an otherwise empty strip, which
+   reads as a rendering fault. */
+.tb-div:has(+ .fig-action.hide) { display: none; }
+.tb-div {
+  flex: 0 0 auto;
+  align-self: stretch;
+  width: 1px;
+  min-height: 1.2rem;
+  margin: 0 0.15rem;
+  background: var(--border);
+}
+
+/* Everything a figure bar holds that is not "which figure", as ONE block that
+   keeps to the right. As loose siblings they wrapped one at a time onto a line
+   of their own — right-aligned above, left-aligned below, which reads as a
+   layout that has come apart rather than as two ranks. */
+/* Each control keeps its own width and wraps when there is no room, rather than
+   shrinking: a flex item may go below its content, and the Groups picker was
+   being squeezed to "from a CSV — 18" with the rest of the sentence inside a
+   control the reader cannot widen. */
+.fig-controls > * { flex: 0 0 auto; }
+.fig-controls > .tb-spacer { flex: 1 1 2rem; }
+.fig-controls {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  /* A ROW OF ITS OWN, at every width. Sharing the tab row means the settings
+     appear beside the tabs on a wide window and drop below on a narrow one, so
+     the bar has no stable shape to learn — and at the widths in between they
+     wrapped one control at a time. Two ranks, always: WHICH FIGURE and what to
+     do with it on the first row, what it is set to on the second. Save and close
+     stay up with the tabs, in the empty half of that row: they act on the figure
+     as a whole, and hung off the end of the settings they were the two that fell
+     onto a third line of their own. */
+  flex: 1 1 100%;
+  min-width: 0;
+}
+
+/* A button that carries a mark lays its two parts out as one thing. Scoped to
+   the buttons that have one rather than to `button svg`, so a future button with
+   an icon has to opt in and cannot silently inherit a layout meant for this
+   handful. */
+.group-quick button,
+#figGroupEdit,
+#funcGroupEdit {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+/* Sized for the row it sits in, not for the page's default button. The generic
+   rule is 0.5rem/1.05rem, which is right for "Load database" and twice the
+   height of the pickers this one stands beside — it read as the important
+   control in a row of settings, which it is not. */
+#figGroupEdit,
+#funcGroupEdit {
+  padding: 0.22rem 0.55rem;
+  font-size: 0.85rem;
+  line-height: 1.3;
+}
+.group-quick button svg,
+#figGroupEdit svg,
+#funcGroupEdit svg,
+.fig-colour > svg,
+.fig-topn > svg,
+.rank-pick > svg {
+  flex: 0 0 auto;
+  opacity: 0.65;
+}
+/* The settings labels hold an icon now, so they lay out like the ones that
+   always did. */
+.fig-topn { display: inline-flex; align-items: center; gap: 0.35rem; }
+.rank-pick { display: inline-flex; align-items: center; gap: 0.35rem; }
+
+/* A plot wants a fixed height — it is drawn to fit one, and a figure that
+   changes size as its data changes is a figure that cannot be compared with the
+   one before it. A SENTENCE does not: the licence question, "nothing measured
+   yet" and the contrast's "pick two groups" were each centred in 38rem of empty
+   bordered box, which reads as a panel that failed to load rather than as an
+   answer. Keyed off the message itself, so it cannot drift out of step with the
+   half-dozen places that put one there. A browser without :has() drops the rule
+   and gets the old fixed box — the worse layout, not a broken one. */
+.fig-canvas:has(.fig-refusal) {
+  height: auto;
+  min-height: 11rem;
+}
+
+/* The contrast's two column headings are handles: they reorder the rows. Nothing
+   else in a figure is clickable text, so they have to say so — the cursor and
+   the hover colour are the whole affordance, since a heading cannot carry a
+   border without becoming a button and crowding a figure that is already tight. */
+.contrast-head {
+  cursor: pointer;
+  font-weight: 600;
+}
+.contrast-head:hover { fill: var(--accent); }
+.contrast-head:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* The two links a module cell offers: KEGG's coloured pathway map, and KEGG's
+   own module diagram. On their own line under the count, because they are what
+   the reader does next rather than part of the sentence above them. */
+.cell-pop-links { margin: 0.35rem 0 0.1rem; }
+.cell-pop-links a { color: var(--accent); }
+
+/* SAVE, WHERE THE THING BEING SAVED IS. The button sat at the far end of the tab
+   row, a figure's width away from the picture it writes to disk; nothing tied
+   the two together. It sits in the figure's own top-right corner now. It cannot
+   live INSIDE the canvas — every redraw replaces that element's innerHTML — so
+   the canvas gets a positioned wrapper and the button overlays it. */
+.fig-canvas-wrap {
+  position: relative;
+  display: flex;
+  /* THE CANVAS'S OWN FLEX, moved out to the wrapper. `.fig-canvas { flex: 1 1 0 }`
+     is what gives the figure everything the panel does not take; a wrapper with
+     a basis of its own took two thirds of the row and left the figure short. */
+  flex: 1 1 0;
+  min-width: min(22rem, 100%);
+}
+/* The wrapper takes the canvas's own box so the button lands on the figure's
+   corner and not in empty space: the height lives on .fig-canvas, and a wrapper
+   that did not follow it would collapse. */
+.fig-canvas-wrap > .fig-canvas { flex: 1 1 auto; min-width: 0; width: 100%; margin-top: 0; }
+/* The canvas's own top margin moves to the wrapper, or the absolutely positioned
+   button lands that margin ABOVE the figure's visible edge. */
+.fig-canvas-wrap { margin-top: 0.7rem; }
+.fig-canvas-wrap:has(> .fig-canvas.hide) > .fig-action { display: none; }
+.fig-canvas-wrap > .fig-action {
+  position: absolute;
+  top: 0.45rem;
+  right: 0.55rem;
+  z-index: 2;
+  /* Quiet until wanted: it overlays a figure, so it must not compete with it. */
+  background: color-mix(in srgb, var(--bg-card) 88%, transparent);
+  backdrop-filter: blur(2px);
+}
+.fig-canvas-wrap > .fig-action:hover { background: var(--bg-card); border-color: var(--border); }
+/* Smaller than it was in the toolbar: overlaying a figure, it must read as a
+   handle on the picture rather than as a control of the card. */
+.fig-canvas-wrap > .fig-action {
+  padding: 0.2rem 0.45rem;
+  font-size: 0.8rem;
+  border-color: var(--border);
+}
+
+/* The figure's save menu: a label wrapping a select, so the whole chip is the
+   target and the arrow is the select's own. Three things can be saved — the
+   figure, the sample panel beside it, or both composed side by side — and a
+   button could only ever offer one. */
+.fig-svg-pick { cursor: pointer; }
+.fig-svg-pick select {
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  font-size: 0.8rem;
+  padding: 0;
+  width: 1.1rem;
+  cursor: pointer;
+}
+.fig-svg-pick select:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }

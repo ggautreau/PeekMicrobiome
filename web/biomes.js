@@ -351,6 +351,16 @@ export function makeDbRef({ biome, dbMeta, label, source, url }) {
     label: biome?.label ?? `Local file — ${label ?? "unknown"}`,
     catalogue: biome ? catalogueName(biome) : "",
     version: biome?.version ?? "",
+    // Which GTDB release the SPECIES NAMES come from, where MGnify's README says
+    // so. Not the same fact as the catalogue version: UHGG v2.0.2's names were
+    // generated with GTDB r202, and four releases have passed since — of the
+    // 4,744 human-gut representatives, 631 carry a name whose genus no longer
+    // exists in r220. A name shown with no release beside it invites the reader
+    // to look it up in the current GTDB and find nothing.
+    //
+    // Empty for the fourteen catalogues whose README does not state a release,
+    // and the page then says nothing: a guessed citation is worse than none.
+    gtdb: biome?.gtdb ?? "",
     species: biome?.species ?? NaN,
     file: biome?.file || label || "",
     url: biome?.url || url || "",
@@ -403,7 +413,8 @@ export function refLine(ref) {
     return `Local database ${ref.file} — biome unknown: this page cannot tell which catalogue ` +
       `a file from your disk was built from.`;
   }
-  return `${ref.label} — ${ref.catalogue}, ${fmtCount(ref.genomes)} genomes`;
+  return `${ref.label} — ${ref.catalogue}, ${fmtCount(ref.genomes)} genomes` +
+    (ref.gtdb ? `, names from GTDB ${ref.gtdb}` : "");
 }
 
 // ---- exports -----------------------------------------------------------------
@@ -424,6 +435,14 @@ export function refCommentLines(ref, { samples, rows, tool = "PeekMicrobiome" } 
     out.push(`# reference database: LOCAL FILE ${ref.file} — biome unknown, chosen from disk`);
   } else if (ref) {
     out.push(`# reference database: ${ref.label} [${ref.key}] — ${ref.catalogue}`);
+    // In the FILE, not only on the page: an exported matrix is read a year later
+    // with no interface around it, and "Agathobacter rectalis" in a column with
+    // no release beside it is a name the reader will look up in whatever GTDB is
+    // current — which for a fifth of these names no longer has it.
+    if (ref.gtdb) {
+      out.push(`# species names: GTDB ${ref.gtdb}, as MGnify generated them for this catalogue — ` +
+        `later GTDB releases have renamed some of them`);
+    }
     if (ref.url) out.push(`# database file: ${ref.file} — ${ref.url}`);
     if (ref.doi) out.push(`# database DOI: ${ref.doi}`);
   } else {

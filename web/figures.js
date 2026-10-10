@@ -19,6 +19,10 @@ const PALETTE = [
   "#c2568f", "#4d8b3f", "#a35c2a", "#5c6bc0", "#00897b", "#8d6e63",
 ];
 const GREY = "#b8bcbd";
+// One step darker, for the alternating rare wedges of the pie. Close enough that
+// the pool still reads as one grey remainder, far enough that a boundary between
+// two of a hundred slices is visible.
+const GREY_ALT = "#a7abac";
 const INK = "#1f2426";
 
 /**
@@ -74,22 +78,40 @@ const esc = (s) => String(s ?? "")
   .replace(/"/g, "&quot;");
 
 /**
- * Shannon index and observed richness, per sample.
+ * The three Hill numbers, per sample: q = 0, 1 and 2.
  *
- * Shannon is computed on the abundances RENORMALISED to sum to 1 within each
- * sample. sylph's taxonomic abundances already sum to ~100 per sample, but only
- * over what it detected — renormalising makes that explicit instead of letting a
+ * All computed on the abundances RENORMALISED to sum to 1 within each sample.
+ * sylph's taxonomic abundances already sum to ~100 per sample, but only over
+ * what it detected — renormalising makes that explicit instead of letting a
  * sample that sums to 97.3 score differently for that reason alone.
+ *
+ * WHY THREE AND NOT ONE. They are the same family read at three weightings, and
+ * the difference between them is the difference between three questions:
+ *
+ *   q=0  richness — every row counts the same, so a row detected on one shared
+ *        hash weighs as much as one at 2%. The most exposed to the detection
+ *        floor, and the number a deeper run inflates.
+ *   q=1  exp(Shannon) — rows weighted by their abundance. The standard, and what
+ *        the literature reports.
+ *   q=2  inverse Simpson — dominated by the abundant rows, so it all but ignores
+ *        the tail. On this project's own functional profiles it separates
+ *        samples 1.7x better than q=1 (CV 14.2% against 8.6%), because that tail
+ *        is where a sketch estimate is least reliable.
+ *
+ * Reporting one alone invites the reader to take it as "the" diversity. Three
+ * agreeing is a result; three disagreeing says the answer depends on how the
+ * rare rows are weighted, which is itself worth seeing.
  */
 export function alphaDiversity(table) {
   return table.samples.map((name, c) => {
     const vals = table.rows.map((r) => r.values[c] || 0).filter((v) => v > 0);
     const total = vals.reduce((a, v) => a + v, 0);
-    let shannon = 0;
+    let shannon = 0, simpson = 0;
     if (total > 0) {
       for (const v of vals) {
         const p = v / total;
         shannon -= p * Math.log(p);
+        simpson += p * p;
       }
     }
     return {
@@ -99,6 +121,9 @@ export function alphaDiversity(table) {
       // e^H — "how many equally-abundant taxa would give this diversity". Far
       // easier to read than nats, and the unit people actually compare.
       effective: vals.length ? Math.exp(shannon) : 0,
+      // 1/Σp² — the same unit again, so the three are directly comparable: all
+      // three answer "how many equally-abundant rows would look like this".
+      inverseSimpson: simpson > 0 ? 1 / simpson : 0,
     };
   });
 }
@@ -167,6 +192,9 @@ export function sampleFacts(table, sample, { neighbours = 4, metric = "bray" } =
     richness: mine.richness,
     shannon: mine.shannon,
     effective: mine.effective,
+    // The third weighting, carried through so the panel can print all three
+    // where the figure prints all three.
+    inverseSimpson: mine.inverseSimpson,
     rank,
     of: table.samples.length,
     metric: how,
@@ -330,6 +358,8 @@ export function pcoa(D, { dims = 2, iters = 200 } = {}) {
   };
 }
 
+import { mannWhitney, benjaminiHochberg, minAttainableP, fmtP } from "./stats.js?v=79";
+
 // ---- drawing -----------------------------------------------------------------
 
 // `font` is the whole figure's type size. It is a parameter because the pie is
@@ -341,14 +371,25 @@ const svgOpen = (w, h, title, font = 11, attrs = "") =>
   `${attrs}aria-label="${esc(title)}"><rect width="${w}" height="${h}" fill="#ffffff"/>`;
 
 /**
- * Stacked composition bars, one per sample, top N taxa plus "other".
+ * Stacked composition bars, one per sample, top N rows plus "other".
  *
  * "Other" is drawn in grey and is never dropped: with 600 taxa the top 10 rarely
  * reach 100%, and a bar that stops at 60% with no explanation reads as missing
  * data rather than as a legend cut.
+ *
+ * `species` OR `name`, and `otherLabel`, because this now draws two kinds of
+ * table. The functional tables from kegg.js are the same `{ samples, rows }`
+ * shape — that is the whole reason functions need no plotting code of their own
+ * — but their rows are named `name`, and a legend of ten `undefined`s under a
+ * bar of "other taxa" is what reading only `species` produced.
  */
-export function compositionSvg(table, { topN = 10, width = 900, barH = 0, height = 0 } = {}) {
+export function compositionSvg(table, {
+  topN = 10, width = 900, barH = 0, height = 0, otherLabel = "other taxa",
+} = {}) {
   const { samples, rows } = table;
+  // `label` before `name`: kegg.js keeps the bare name in `name` for the matrix
+  // column and the identifier-plus-name in `label`, which is what a legend needs.
+  const labelOf = (r) => r.species ?? r.label ?? r.name ?? "";
   const totals = rows.map((r, i) => ({ i, sum: r.values.reduce((a, v) => a + v, 0) }));
   totals.sort((a, b) => b.sum - a.sum);
   const keep = totals.slice(0, topN).map((t) => t.i);
@@ -389,7 +430,7 @@ export function compositionSvg(table, { topN = 10, width = 900, barH = 0, height
       const w = frac * plotW;
       if (w > 0.2) {
         out += `<rect x="${x.toFixed(1)}" y="${y}" width="${w.toFixed(1)}" height="${bar}" ` +
-          `fill="${colourAt(k)}"><title>${esc(rows[ri].species)} — ${(frac * 100).toFixed(1)}%</title></rect>`;
+          `fill="${colourAt(k)}"><title>${esc(labelOf(rows[ri]))} — ${(frac * 100).toFixed(1)}%</title></rect>`;
       }
       x += w;
     });
@@ -397,36 +438,57 @@ export function compositionSvg(table, { topN = 10, width = 900, barH = 0, height
     if (rest > 0.2) {
       const restFrac = rest / plotW;
       out += `<rect x="${x.toFixed(1)}" y="${y}" width="${rest.toFixed(1)}" height="${bar}" ` +
-        `fill="${GREY}"><title>other taxa — ${(restFrac * 100).toFixed(1)}%</title></rect>`;
+        `fill="${GREY}"><title>${esc(otherLabel)} — ${(restFrac * 100).toFixed(1)}%</title></rect>`;
     }
     out += "</g>";
   });
 
   let ly = padT + samples.length * (bar + gap) + 12;
-  [...keep.map((ri, k) => [rows[ri].species, colourAt(k)]), ["other taxa", GREY]]
+  [...keep.map((ri, k) => [labelOf(rows[ri]), colourAt(k)]), [otherLabel, GREY]]
     .forEach(([label, colour], k) => {
       const col = k % legendCols, row = Math.floor(k / legendCols);
       const colW = plotW / legendCols;
       const lx = padL + col * colW;
-      // Clipped to what the column can hold, at roughly 5.6 px per character.
-      const room = Math.max(8, Math.floor((colW - 20) / 5.6));
+      // Clipped to what the column can hold. 6.6 px a character, MEASURED in the
+      // browser on this very legend (mean 6.2, max 6.62 at 11 px) rather than
+      // guessed: at the 5.6 this started at, the right-hand column's labels
+      // ended at x = 711 in a 699-wide viewBox and the figure clipped its own
+      // legend — in the downloaded SVG as much as on screen. The 15 px is the
+      // swatch and its gap, and the 4 is a gutter so the longest label does not
+      // touch the frame.
+      const room = Math.max(8, Math.floor((colW - 19) / 6.6));
       const text = String(label).length > room
         ? `${String(label).slice(0, room - 1)}…` : String(label);
-      out += `<rect x="${lx}" y="${ly + row * 18}" width="10" height="10" fill="${colour}"/>` +
-        `<text x="${lx + 15}" y="${ly + row * 18 + 9}" fill="#5a5550">${esc(text)}</text>`;
+      // The full label on hover. KEGG module names run past any legend column —
+      // "Glycolysis (Embden-Meyerhof pathway), glucose => pyruvate" is 56
+      // characters against a budget of 40 — so without this the ellipsis is
+      // where the name ends, and the bars carry a tooltip the legend did not.
+      const tip = text === String(label) ? "" : `<title>${esc(label)}</title>`;
+      out += `<g>${tip}` +
+        `<rect x="${lx}" y="${ly + row * 18}" width="10" height="10" fill="${colour}"/>` +
+        `<text x="${lx + 15}" y="${ly + row * 18 + 9}" fill="#5a5550">${esc(text)}</text></g>`;
     });
   return out + "</svg>";
 }
 
-/** Shannon (as effective taxa) and observed richness, one row per sample. */
-export function alphaSvg(table, { width = 760, rowH = 0, height = 0 } = {}) {
+/**
+ * Shannon (as an effective count) and observed richness, one row per sample.
+ *
+ * `unit` names what is being counted. Shannon does not care whether a row is a
+ * species or a KEGG module, but the reader does: "effective number of taxa"
+ * over a table of pathways is the taxonomic figure's caption showing through.
+ */
+export function alphaSvg(table, { width = 760, rowH = 0, height = 0, unit = "taxa" } = {}) {
   const a = alphaDiversity(table);
   // padR holds the value written past the end of the longest bar. Measured from
   // the longest label there actually is, at ~6.4 px a character: fixed at 60 it
   // was cut off mid-number the moment the figure stopped being 760 px wide, and
   // any fixed number is the same bug waiting for a longer number.
-  const longest = Math.max(8, ...a.map((d) =>
-    `${d.effective.toFixed(1)} (${d.richness} obs.)`.length));
+  // The three numbers, in one string, so the bar is the standard index and the
+  // other two weightings sit beside it rather than in a control nobody finds.
+  const trail = (d) => `${d.effective.toFixed(1)}  (${d.richness} obs. · ` +
+    `${d.inverseSimpson.toFixed(0)} at q=2)`;
+  const longest = Math.max(8, ...a.map((d) => trail(d).length));
   const padL = 150, padT = 30, padR = Math.ceil(longest * 6.4) + 12;
   const plotW = width - padL - padR;
   // Same as the composition: the rows fill the height the page has for them.
@@ -436,7 +498,8 @@ export function alphaSvg(table, { width = 760, rowH = 0, height = 0 } = {}) {
   const h = padT + a.length * row + 34;
   const maxEff = Math.max(1, ...a.map((d) => d.effective));
   let out = svgOpen(width, h, "Alpha diversity per sample");
-  out += `<text x="${padL}" y="16" fill="#275662" font-weight="600">Effective number of taxa (e^Shannon)</text>`;
+  out += `<text x="${padL}" y="16" fill="#275662" font-weight="600">` +
+    `Effective number of ${esc(unit)} — bar q=1 (e^Shannon), then q=0 and q=2</text>`;
   a.forEach((d, i) => {
     const y = padT + i * row;
     const w = (d.effective / maxEff) * plotW;
@@ -446,12 +509,565 @@ export function alphaSvg(table, { width = 760, rowH = 0, height = 0 } = {}) {
       `<text x="${padL - 8}" y="${(y + row / 2 + 4).toFixed(1)}" text-anchor="end" fill="#275662">${esc(d.sample)}</text>` +
       `<rect x="${padL}" y="${(y + row / 2 - 6.5).toFixed(1)}" width="${w.toFixed(1)}" ` +
       `height="13" fill="#00a3a6">` +
-      `<title>${esc(d.sample)}: ${d.effective.toFixed(1)} effective taxa, ` +
-      `Shannon ${d.shannon.toFixed(2)}, ${d.richness} observed</title></rect>` +
+      `<title>${esc(d.sample)}: Hill numbers over ${esc(unit)} — ` +
+      `q=0 ${d.richness} observed, q=1 ${d.effective.toFixed(1)} (Shannon ${d.shannon.toFixed(2)}), ` +
+      `q=2 ${d.inverseSimpson.toFixed(1)} (inverse Simpson). All three are ` +
+      `"how many equally-abundant ${esc(unit)} would look like this".</title></rect>` +
       `<text x="${padL + w + 6}" y="${(y + row / 2 + 4).toFixed(1)}" fill="#5a5550">${d.effective.toFixed(1)} ` +
-      `<tspan fill="#6b7172">(${d.richness} obs.)</tspan></text></g>`;
+      `<tspan fill="#6b7172">(${d.richness} obs. · ${d.inverseSimpson.toFixed(0)} at q=2)</tspan>` +
+      `</text></g>`;
   });
   return out + "</svg>";
+}
+
+/**
+ * Which rows differ between two groups of samples — or, with no groups, which
+ * rows vary most across them.
+ *
+ * WHY THERE ARE NO P-VALUES HERE, and why that is the honest choice rather than
+ * the lazy one. A run on this page is typically a handful of samples; the rows
+ * are compositional, so they are not independent; and there are 100 pathways or
+ * 13,509 orthologs of them, which is a multiple-testing problem no correction
+ * rescues at n=9 per group. A page that printed "p = 0.03" beside a pathway
+ * would be making a claim its own data cannot support, and readers would carry
+ * that number into a paper. So this figure ranks by EFFECT — the difference in
+ * mean relative abundance — and then shows every sample as a dot, which is the
+ * thing a p-value is a lossy summary of: the reader sees the spread, the
+ * overlap, and the one outlier carrying a difference, and draws their own
+ * conclusion.
+ *
+ * `groupOf(sample)` returns a group name or null. With two or more groups the
+ * two LARGEST are contrasted, and the caller is told which in the returned
+ * markup's title. With fewer, rows are ranked by spread (max − min across
+ * samples) and no means are drawn — there is nothing to contrast them with.
+ *
+ * The same `{ samples, rows }` table as every other figure here, so it draws
+ * taxa and functions with no second implementation.
+ */
+export function contrastSvg(table, {
+  topN = 10, width = 900, height = 0, rowH = 0, groupOf = () => null, unit = "taxa",
+  pair = null, scale = 1, test = true, stats = null, sort = null,
+} = {}) {
+  const { samples, rows } = table;
+  const labelOf = (r) => r.species ?? r.label ?? r.name ?? "";
+
+  // Which groups, and how big. Sorted by size, then by name so a tie is stable
+  // rather than dependent on the order samples happened to arrive in.
+  const bySize = new Map();
+  samples.forEach((s, i) => {
+    const g = groupOf(s);
+    if (!g) return;
+    if (!bySize.has(g)) bySize.set(g, []);
+    bySize.get(g).push(i);
+  });
+  const groups = [...bySize.entries()]
+    .sort((a, b) => b[1].length - a[1].length || String(a[0]).localeCompare(String(b[0])));
+  // The caller's pair wins, when both halves of it exist. Six groups of three
+  // makes "the two largest" a coin toss settled by alphabetical order, which is
+  // not a choice a reader made — so the page offers the choice and passes it
+  // here. Falling back to the two largest keeps the figure drawable before
+  // anyone has picked, and with no picker at all.
+  const want = pair && pair.length === 2
+    ? pair.map((n) => groups.find(([g]) => g === n)).filter(Boolean) : [];
+  const cand = want.length === 2 && want[0][0] !== want[1][0] ? want : groups;
+  const paired = cand.length >= 2 && cand[0][1].length >= 2 && cand[1][1].length >= 2;
+  const [gA, gB] = paired ? [cand[0], cand[1]] : [null, null];
+
+  const mean = (values, idx) => idx.reduce((a, i) => a + (values[i] ?? 0), 0) / idx.length;
+  const scored = rows.map((r) => {
+    if (paired) {
+      const a = mean(r.values, gA[1]), b = mean(r.values, gB[1]);
+      // `score` ranks (it is a magnitude, so the largest differences head the
+      // figure whichever way they point); `signed` is the number printed in the
+      // diff column, and it is what a click on that column sorts by.
+      return { r, a, b, score: Math.abs(a - b), signed: a - b };
+    }
+    // NOT Math.min(...values, 0). That extra 0 pins the bottom of every range at
+    // zero, so the "range" becomes the maximum and the figure silently ranks by
+    // abundance — which is the one thing it exists not to do. A row present at
+    // 50 % in every sample would head a chart titled "most variable".
+    if (!r.values.length) return { r, a: null, b: null, score: 0 };
+    const hi = Math.max(...r.values), lo = Math.min(...r.values);
+    return { r, a: null, b: null, score: hi - lo };
+  });
+  // THE TEST, over EVERY row rather than over the ten that will be drawn: the
+  // question is asked of the whole table at once, so correcting over the subset
+  // that happened to be shown would be choosing the denominator after seeing the
+  // answers. Exact Mann-Whitney at these sizes — 468 rows of the shipped example
+  // take 64 ms — and Benjamini-Hochberg across the family.
+  //
+  // Ranked by EFFECT still, not by p. A p-value orders rows by how confident the
+  // data are, which at nine samples a group is mostly a ranking of how many
+  // zeros a row has; the difference in abundance is what the reader came for,
+  // and the q is what says whether to believe it.
+  if (paired && test) {
+    // `stats` lets the caller hand in what it already computed. The test is
+    // EXACT and therefore not free — 4,307 orthologs take 470 ms — and it
+    // depends on the rows and the grouping, on neither the width nor the top-N.
+    // Recomputing it while somebody drags the slider is half a second of blocked
+    // main thread per tick, for numbers that cannot have changed.
+    //
+    // Computed here when nothing is handed in, so the function stays whole and
+    // testable on its own.
+    const ready = stats && stats.length === scored.length;
+    const ps = ready ? stats.map((x) => x.p)
+      : scored.map((x) => mannWhitney(gA[1].map((i) => x.r.values[i] ?? 0),
+        gB[1].map((i) => x.r.values[i] ?? 0)).p);
+    const qs = ready ? stats.map((x) => x.q) : benjaminiHochberg(ps);
+    scored.forEach((x, i) => { x.p = ps[i]; x.q = qs[i]; });
+  }
+  // WHICH ROWS, then IN WHAT ORDER — and they are not the same decision. The
+  // figure exists to show the largest differences, so the top-N is always cut by
+  // effect: sorting by q first and cutting would answer "the ten most confident
+  // rows", which at these sample sizes is mostly a ranking of how many zeros a
+  // row has. The reader's click reorders what was selected; it does not select.
+  scored.sort((x, y) => y.score - x.score);
+  const keep = scored.slice(0, topN).filter((x) => x.score > 0);
+  if (sort?.col === "diff" || sort?.col === "q") {
+    const asc = sort.dir === "asc";
+    // The diff column prints a signed number and the lane is drawn from its
+    // magnitude, so "sort by diff" means the signed value a reader sees — which
+    // is why this reads `signed` and not `score`.
+    const at = (x) => (sort.col === "q"
+      ? (Number.isFinite(x.q) ? x.q : Infinity)
+      : (x.signed ?? x.score));
+    keep.sort((x, y) => {
+      const d = asc ? at(x) - at(y) : at(y) - at(x);
+      // Ties on q are the rule rather than the exception once Benjamini-Hochberg
+      // has flattened a family, so the effect breaks them and the order is
+      // stable between two renders of the same data.
+      return d || (y.score - x.score);
+    });
+  }
+
+  // THE ONE FIGURE HERE THAT PRINTS AN ABUNDANCE. Composition normalises each
+  // column and the diversity chart draws Hill numbers, so neither cares what
+  // unit the values are in; this one writes "+0.72" beside a lane and has to
+  // mean percentage points when it does. The taxonomic matrix already holds
+  // percentages and the functional tables hold fractions summing to one — the
+  // same split paintMatrix carries as `scale` — so the caller says which, and a
+  // hard-coded x100 printed "+1367.36" for a difference of 13.67 points.
+  const pc = (v) => v * scale;
+
+  // padR holds the difference AND, when there is a test, the q beside it. Fixed
+  // at 74 the q was drawn past the right edge of the figure — the same class of
+  // bug as the clipped row labels, one column over.
+  const showQ = paired && test;
+  const qCol = 62;                       // where the q sits, from the lane's end
+  // padT grows with the subtitle. SVG does not wrap text, so a caption longer
+  // than the figure is a caption cut off mid-word — which is what "Benjamini-
+  // Hochberg over 468 ro" was. Each line is emitted separately and the top
+  // padding is sized to how many there are.
+  // The label column follows the figure's width instead of being 190 px whatever
+  // the room: at 740 px that fixed number truncated "Phocaeicola coprophilus" to
+  // 24 characters while 150 px of lane sat empty, and at 420 px it took nearly
+  // half the picture. Clamped at both ends — under 140 a species name is a
+  // stub, over 280 the lanes start to lose what they are for.
+  const padL = Math.round(Math.max(140, Math.min(280, width * 0.26)));
+  const padR = showQ ? 128 : 74;
+  // 7 px a character, not the 6.4 alphaSvg uses for its own trailing numbers:
+  // those are digits, and these are names. At 6.4 a 27-character label still
+  // started a few pixels left of the figure — "map00030 — Pentose phospha…"
+  // rendered as "nap00030 …" — because m, w and the em dash are all wider than
+  // the average this figure is measured on.
+  const labelChars = Math.max(6, Math.floor((padL - 16) / 7));
+  const plotW = Math.max(60, width - padL - padR);
+  // Two at most now that the floor rides on the q line — and the reserved space
+  // has to shrink with the text, or the rows keep being squeezed for a line that
+  // is no longer drawn.
+  const subLines = paired && showQ ? 2 : 1;
+  // A line for the two column headings, above the first lane where a table puts
+  // them. They used to share the axis line with the group legend, both anchored
+  // at the same x — so "M048 ● M055" ran straight into "diff" and the figure
+  // ended in "M0155 3diff".
+  const headRoom = 11;
+  const padT = 22 + subLines * 12 + headRoom;
+  const row = rowH || (height
+    // Up to 46, not 38, and measured against the room the axis and legend now
+    // take: ten lanes at 38 in a 608 px box left 130 px of empty bordered card
+    // under the axis, which reads as a figure that failed to fill its frame.
+    ? Math.max(16, Math.min(46, (height - padT - (paired ? 62 : 46)) / Math.max(1, keep.length)))
+    : 26);
+  // 46 under the last lane for the axis and its ticks, and another 16 when a
+  // group legend goes below them.
+  const h = padT + Math.max(1, keep.length) * row + (paired ? 62 : 46);
+  // Every lane on ONE scale, so a long lane means more than a short one wherever
+  // it sits. Per-lane scaling would make a trace row look like the biggest thing
+  // in the figure.
+  const max = Math.max(1e-9, ...keep.flatMap((x) => x.r.values));
+
+  const heading = paired
+    ? `Largest differences between ${gA[0]} (n=${gA[1].length}) and ${gB[0]} (n=${gB[1].length})`
+    : `Most variable ${unit} across the ${samples.length} samples`;
+  let out = svgOpen(width, h, heading);
+  out += `<text x="0" y="14" fill="#275662" font-weight="600">${esc(heading)}</text>`;
+  // TWO LINES AT MOST, and each has to fit: SVG does not wrap, so a sentence
+  // longer than the figure is one cut off mid-word with no ellipsis to say so.
+  // There were three, and the third repeated what the caption under the figure
+  // then said again — the method was on screen three times over a plot whose
+  // rows were being squeezed to make room for it. The first line says what the
+  // marks are; the second says what the q column is and, where it bites, the
+  // floor: at three samples a group the smallest p the test can return is 0.1,
+  // so nothing clears 0.05 however cleanly the groups separate, and a column of
+  // q = 1 is arithmetic rather than a failure. That one cannot be dropped —
+  // it is the difference between a null result and a broken figure.
+  const floorP = paired ? minAttainableP(gA[1].length, gB[1].length) : NaN;
+  const subs = paired
+    ? ["Difference in mean abundance · one dot per sample · bars are the group means"]
+    : ["Range across samples, largest first · make or pick two groups to contrast them"];
+  if (showQ) {
+    // THE FLOOR RESTS ON AN ASSUMPTION, and the figure has to say so. It is
+    // computed from the NUMBER OF SAMPLES, which is the number of independent
+    // observations only if each sample is one. Three stool samples from one
+    // donor are near-replicates — on the shipped example the mean within-donor
+    // distance is 0.326 against 0.734 between — so a nine-against-nine split by
+    // sex is really three donors against three, whose floor is 0.1 and not
+    // 2/48,620: the printed one is permissive by a factor of 2,431. Nothing in
+    // the archive's metadata names the donor there (it is inside `sample_alias`,
+    // "A.M065_1"), so guessing it would be worse than saying what is assumed.
+    // The reader knows their design; the figure must not pretend the question
+    // does not arise.
+    subs.push(`q: Mann-Whitney, Benjamini-Hochberg over ${rows.length} rows` +
+      (floorP > 0.05
+        ? ` · at ${gA[1].length} v ${gB[1].length} samples nothing can reach ${fmtP(floorP)}`
+        : "") +
+      ` · assumes each sample is independent`);
+  }
+  subs.forEach((line, i) => {
+    out += `<text x="0" y="${27 + i * 12}" fill="#6b7172">${esc(line)}</text>`;
+  });
+
+  if (!keep.length) {
+    return out + `<text x="0" y="${padT + 20}" fill="#5a5550">` +
+      `Nothing to contrast: every row is flat across these samples.</text></svg>`;
+  }
+
+  // The two column headings, and — when the figure is a contrast — the handles
+  // that reorder it. Marked with a class and a data attribute so the page can
+  // wire a click without the figure knowing what a click is, the same contract
+  // as `pcoa-pt` and `contrast-pt`. The arrow is the matrix's convention, so a
+  // reader who has sorted a table already knows what it means.
+  const head = (label, x, key) => {
+    const on = sort?.col === key;
+    const mark = on ? (sort.dir === "asc" ? " \u2191" : " \u2193") : "";
+    const attrs = paired
+      ? ` class="contrast-head" data-sort="${key}" role="button" tabindex="0"` +
+        ` aria-label="Sort the rows by ${label}"`
+      : "";
+    return `<text x="${x.toFixed(1)}" y="${padT - 5}"${attrs} ` +
+      `fill="${on ? "#275662" : "#9aa0a1"}">${esc(label + mark)}` +
+      (paired ? `<title>Click to sort by ${label}</title>` : "") + `</text>`;
+  };
+  out += head(paired ? "diff" : "range", padL + plotW + 8, "diff");
+  if (showQ) out += head("q", padL + plotW + qCol, "q");
+
+  const cA = "#00a3a6", cB = "#e8623b", cNone = "#8b9294";
+  const x = (v) => padL + (Math.max(0, v) / max) * plotW;
+
+  keep.forEach((x0, i) => {
+    const y = padT + i * row;
+    const mid = y + row / 2;
+    out += `<g class="contrast-row">`;
+    // The lane, so an empty stretch reads as "measured, and low" rather than as
+    // a gap in the drawing.
+    out += `<line x1="${padL}" y1="${mid.toFixed(1)}" x2="${(padL + plotW).toFixed(1)}" ` +
+      `y2="${mid.toFixed(1)}" stroke="#e3e0dc"/>`;
+    // Cut to the room there IS, not to a constant. Thirty characters is wider
+    // than padL at ~6.4 px each, so "map01100 — Metabolic pathways" started to
+    // the left of the figure and the drawing began mid-word.
+    out += `<text x="${padL - 10}" y="${(mid + 4).toFixed(1)}" text-anchor="end" fill="#275662">` +
+      `${esc(trunc(labelOf(x0.r), labelChars))}<title>${esc(labelOf(x0.r))}</title></text>`;
+    if (paired) {
+      for (const [val, col] of [[x0.a, cA], [x0.b, cB]]) {
+        out += `<rect x="${(x(val) - 1).toFixed(1)}" y="${(mid - 9).toFixed(1)}" width="2" ` +
+          `height="18" fill="${col}" fill-opacity="0.85"/>`;
+      }
+    }
+    samples.forEach((s, si) => {
+      const g = groupOf(s);
+      const col = !paired ? cNone : g === gA[0] ? cA : g === gB[0] ? cB : cNone;
+      const v = x0.r.values[si] ?? 0;
+      // `contrast-pt` and `data-sample`, so the page can bind the same two
+      // gestures it binds on the ordination: hover names the sample, click opens
+      // what it is made of. Without them these dots were the only marks on the
+      // page that stood for a sample and could not be asked about — a dot in a
+      // lane is a sample exactly as a point in the ordination is.
+      //
+      // No tabindex: ten rows times eighteen samples is 180 tab stops, which is
+      // worse for a keyboard than none. The ordination and the diversity chart
+      // are the keyboard paths to the same panel.
+      out += `<circle class="contrast-pt" data-sample="${esc(s)}" ` +
+        `cx="${x(v).toFixed(1)}" cy="${mid.toFixed(1)}" r="3.2" fill="${col}" ` +
+        `fill-opacity="0.55" stroke="${col}" stroke-opacity="0.9">` +
+        `<title>${esc(s)}${g ? ` (${esc(g)})` : ""}: ${pc(v).toFixed(2)} % — ` +
+        `${esc(labelOf(x0.r))}</title></circle>`;
+    });
+    const trail = paired
+      ? `${pc(x0.a - x0.b) >= 0 ? "+" : ""}${pc(x0.a - x0.b).toFixed(2)}`
+      : `${pc(x0.score).toFixed(2)}`;
+    // The difference, then the q. Grey unless it clears 0.05, because at these
+    // sizes almost nothing does and a column of black numbers would read as a
+    // column of findings.
+    const qText = Number.isFinite(x0.q) ? fmtP(x0.q) : "";
+    out += `<text x="${(padL + plotW + 8).toFixed(1)}" y="${(mid + 4).toFixed(1)}" ` +
+      `fill="#5a5550">${esc(trail)}</text>`;
+    if (qText) {
+      out += `<text x="${(padL + plotW + qCol).toFixed(1)}" y="${(mid + 4).toFixed(1)}" ` +
+        `fill="${x0.q <= 0.05 ? "#275662" : "#9aa0a1"}" ` +
+        `font-weight="${x0.q <= 0.05 ? "600" : "400"}">${esc(qText)}` +
+        `<title>Mann-Whitney two-sided p = ${esc(fmtP(x0.p))}, ` +
+        `Benjamini-Hochberg q = ${esc(fmtP(x0.q))} over ${rows.length} rows</title></text>`;
+    }
+    out += `</g>`;
+  });
+
+  // The axis, at the bottom, in the unit every number here is in.
+  const axisY = padT + keep.length * row + 14;
+  out += `<line x1="${padL}" y1="${axisY}" x2="${(padL + plotW).toFixed(1)}" y2="${axisY}" stroke="#c9c4bd"/>`;
+  for (const f of [0, 0.5, 1]) {
+    const xx = padL + f * plotW;
+    out += `<line x1="${xx.toFixed(1)}" y1="${axisY}" x2="${xx.toFixed(1)}" y2="${axisY + 4}" stroke="#c9c4bd"/>` +
+      `<text x="${xx.toFixed(1)}" y="${axisY + 16}" text-anchor="middle" fill="#6b7172">` +
+      `${pc(max * f).toFixed(pc(max) < 2 ? 2 : 1)} %</text>`;
+  }
+  if (paired) {
+    // A LINE OF ITS OWN. Right-anchored at the end of the lanes, on the same
+    // baseline as the axis ticks, it landed exactly on the last tick and the two
+    // printed through each other — "M0155 3 %".
+    out += `<text x="${(padL + plotW).toFixed(1)}" y="${axisY + 32}" text-anchor="end">` +
+      `<tspan fill="${cA}">\u25cf ${esc(gA[0])}</tspan>` +
+      `<tspan fill="${cB}">  \u25cf ${esc(gB[0])}</tspan></text>`;
+  }
+
+  return out + "</svg>";
+}
+
+/**
+ * The groups present in a table, largest first — what a "contrast A against B"
+ * picker offers. Here rather than in the page so the ordering the picker shows
+ * and the ordering contrastSvg falls back to are the same list.
+ */
+export function contrastGroups(table, groupOf = () => null) {
+  const bySize = new Map();
+  for (const s of table?.samples ?? []) {
+    const g = groupOf(s);
+    if (!g) continue;
+    bySize.set(g, (bySize.get(g) ?? 0) + 1);
+  }
+  return [...bySize.entries()]
+    .sort((a, b) => b[1] - a[1] || String(a[0]).localeCompare(String(b[0])))
+    .map(([name, n]) => ({ name, n }));
+}
+
+/**
+ * The test for every row of a table, in the table's own order.
+ *
+ * Split out so a caller that redraws often — a slider drag, a window resize —
+ * can compute it once and hand it back through `stats`. Same arithmetic either
+ * way: contrastSvg calls this when nothing is handed in.
+ */
+export function contrastStats(table, { groupOf = () => null, pair = null } = {}) {
+  const { samples, rows } = table ?? { samples: [], rows: [] };
+  const bySize = new Map();
+  (samples ?? []).forEach((s, i) => {
+    const g = groupOf(s);
+    if (!g) return;
+    if (!bySize.has(g)) bySize.set(g, []);
+    bySize.get(g).push(i);
+  });
+  const groups = [...bySize.entries()]
+    .sort((a, b) => b[1].length - a[1].length || String(a[0]).localeCompare(String(b[0])));
+  const want = pair && pair.length === 2
+    ? pair.map((n) => groups.find(([g]) => g === n)).filter(Boolean) : [];
+  const cand = want.length === 2 && want[0][0] !== want[1][0] ? want : groups;
+  if (!(cand.length >= 2 && cand[0][1].length >= 2 && cand[1][1].length >= 2)) return null;
+  const [gA, gB] = [cand[0], cand[1]];
+  const ps = (rows ?? []).map((r) => mannWhitney(gA[1].map((i) => r.values[i] ?? 0),
+    gB[1].map((i) => r.values[i] ?? 0)).p);
+  const qs = benjaminiHochberg(ps);
+  return ps.map((p, i) => ({ p, q: qs[i] }));
+}
+
+/** A label cut to fit the lane, with the full string left in a <title>. */
+function trunc(s, n) {
+  const t = String(s ?? "");
+  return t.length <= n ? t : t.slice(0, n - 1) + "\u2026";
+}
+
+/**
+ * The composition of ONE sample as a pie, with its taxa named beside it.
+ *
+ * The counterpart to a point on the ordination: the PCoA says a sample sits
+ * apart from the others and never says what it is made of. `sample` is a name
+ * or a column index; an unknown name gives "" rather than an empty figure.
+ *
+ * The top N are taken WITHIN this sample, not from the run-wide ranking the
+ * composition bars use — the taxon that puts a sample on its own is usually one
+ * that is nowhere else in the run, which is exactly where a run-wide top 10
+ * would not have it.
+ *
+ * Drawn to the box it is given, exactly as the three figures are drawn to their
+ * card: `width` and `height` are the room the panel has left once the numbers
+ * under it have taken theirs. Fixed at 470 wide it left a strip of empty card
+ * down one side of a 563 px panel and clipped its own legend labels to fit a
+ * width it had chosen for itself. With no `height` it keeps its natural size,
+ * which is what a caller with no box to fill wants.
+ */
+export function pieSvg(table, sample, {
+  topN = 9, width = 470, height = 0, radius = 84, font = 12.5, unit = "taxa",
+} = {}) {
+  const c = typeof sample === "number" ? sample : table.samples.indexOf(sample);
+  const name = table.samples[c];
+  if (c < 0 || name === undefined) return "";
+
+  const present = table.rows
+    // `species` or `label`, for the reason compositionSvg spells out.
+    .map((r) => ({ label: r.species ?? r.label ?? r.name ?? "", v: r.values[c] || 0 }))
+    .filter((d) => d.v > 0)
+    .sort((a, b) => b.v - a.v);
+  const total = present.reduce((a, d) => a + d.v, 0);
+  const title = `Composition of ${name}`;
+  const head = `<text x="18" y="20" fill="#275662" font-weight="600" font-size="13">${esc(name)}</text>`;
+  if (!(total > 0)) {
+    // A sample can legitimately match nothing — the wrong catalogue, too few
+    // reads. Saying so beats an empty disc.
+    return svgOpen(width, 62, title, font) + head +
+      `<text x="18" y="42" fill="#5a5550">No taxon detected in this sample.</text></svg>`;
+  }
+
+  const padT = 44;
+  // The legend is what cannot be scaled — a row is a row — so it is settled
+  // first, and it is settled in COLUMNS, as the composition's is.
+  //
+  // One column was a ceiling of about thirteen names in the panel beside the
+  // plot: past that the pie stopped answering the control that asks for more
+  // taxa, and a figure that ignores its own slider reads as a figure that is not
+  // being redrawn at all. Rows are packed tighter and then flowed into a second
+  // column before any taxon is given up; only when neither is enough does the
+  // rest join "other taxa", which is the honest way to lose them.
+  const COL = 190;                    // a legend column: swatch, name, share
+  const rows1 = (st) => Math.max(3, Math.floor((height - padT - 10) / st));
+  // How many columns the width could carry beside the smallest disc worth
+  // drawing. Three is where a name has nothing left to be printed in.
+  const colsFit = Math.max(1, Math.min(3, Math.floor((width - 2 * 46 - 40) / COL)));
+  const want = Math.max(1, Math.min(topN, present.length));
+  let step = 19, cols = 1, capacity = Infinity;
+  if (height > 0) {
+    // One column for as long as one column can hold it, tightening the rows
+    // before adding a second: a column costs the disc a third of its radius, and
+    // ten taxa in two columns beside a small disc is a worse figure than ten in
+    // one beside a large one. Only then, and in the same order, a second.
+    outer:
+    for (let n = 1; n <= colsFit; n++) {
+      for (const st of [24, 22, 20, 18, 16, 14]) {
+        cols = n; step = st; capacity = n * rows1(st);
+        if (capacity >= want + 1) break outer;
+      }
+    }
+  }
+  const keep = present.slice(0, Math.max(1, Math.min(want, capacity - 1)));
+  const rest = present.slice(keep.length);
+  const restV = rest.reduce((a, d) => a + d.v, 0);
+
+  // TWO LISTS, and the split is the point of this figure.
+  //
+  // `wedges` is what the disc draws; `legend` is what is written beside it. They
+  // used to be one, so the rare taxa were a single grey wedge with one name —
+  // "other taxa (110)" — and a hundred and ten measurements were unreachable:
+  // no share, no name, nothing to hover. They are drawn individually now, each
+  // one its own wedge with its own name and share, and still grey and still
+  // pooled into one legend row, which is the honest summary of a hundred and ten
+  // things that will not fit in a legend.
+  //
+  // Alternating shades, because a hundred adjacent wedges of one colour is a
+  // smooth arc that hides the very thing this change is for. Two greys a step
+  // apart read as texture rather than as a second category.
+  const legend = keep.map((d, i) => ({ ...d, colour: colourAt(i) }));
+  const wedges = legend.slice();
+  if (restV > 1e-9) {
+    legend.push({
+      label: `other ${unit} (${rest.length})`,
+      v: restV,
+      colour: GREY,
+      rest: true,
+    });
+    rest.forEach((d, i) => wedges.push({
+      ...d, colour: i % 2 ? GREY_ALT : GREY, rest: true,
+    }));
+  }
+
+  // The disc takes what is left. It gives way to the legend rather than the
+  // other way round: someone who has asked for thirty taxa wants to read their
+  // names, and a disc of thirty slices is a colour wheel either way.
+  const r = height > 0
+    ? Math.max(46, Math.min(132,
+      Math.min((height - padT - 18) / 2, (width - cols * COL - 40) / 2)))
+    : radius;
+  const cx = 18 + r, cy = padT + r;
+  const h = height > 0 ? height : Math.max(cy + r + 16, padT + legend.length * 19 + 20);
+  let out = svgOpen(width, h, title, font) + head +
+    `<text x="18" y="36" fill="#6b7172">${present.length} ${esc(unit)} · ` +
+    `top ${Math.min(keep.length, present.length)} shown</text>`;
+
+  const at = (a) => `${(cx + r * Math.cos(a)).toFixed(1)} ${(cy + r * Math.sin(a)).toFixed(1)}`;
+  let a0 = -Math.PI / 2;
+  for (const s of wedges) {
+    const frac = s.v / total;
+    const a1 = a0 + frac * 2 * Math.PI;
+    const pct = frac >= 0.001 ? `${(frac * 100).toFixed(1)}%` : `${(frac * 100).toFixed(3)}%`;
+    // `<title>` AND the data attributes. The title is what survives Download SVG
+    // — a saved file has no page around it to run a tooltip — and the attributes
+    // are what the page's own tooltip reads, which appears at once and is styled
+    // like every other tooltip here instead of after the browser's second.
+    const tip = `<title>${esc(s.label)} — ${pct}</title>`;
+    const data = ` data-taxon="${esc(s.label)}" data-share="${pct}"` +
+      (s.rest ? ` data-rest="1"` : "");
+    if (frac > 0.9999) {
+      // One taxon and nothing else: an arc whose two ends are the same point
+      // draws nothing at all, so a 100% sample would come out blank.
+      out += `<circle class="pie-slice" cx="${cx}" cy="${cy}" r="${r}" fill="${s.colour}"${data}>${tip}</circle>`;
+    } else {
+      // No white edge on the rare ones: at a hundred slices to the arc a 1 px
+      // stroke is wider than the wedge it separates, so the pool would come out
+      // white rather than grey.
+      out += `<path class="pie-slice" d="M ${cx} ${cy} L ${at(a0)} A ${r} ${r} 0 ` +
+        `${frac > 0.5 ? 1 : 0} 1 ${at(a1)} Z" fill="${s.colour}"` +
+        (s.rest ? "" : ` stroke="#fff" stroke-width="1"`) + `${data}>${tip}</path>`;
+    }
+    if (frac >= 0.06) {
+      const am = (a0 + a1) / 2, lr = r * 0.62;
+      out += `<text x="${(cx + lr * Math.cos(am)).toFixed(1)}" ` +
+        `y="${(cy + lr * Math.sin(am) + 4).toFixed(1)}" text-anchor="middle" ` +
+        `fill="${inkOn(s.colour)}" font-weight="600">${pct}</text>`;
+    }
+    a0 = a1;
+  }
+
+  const lx0 = 2 * r + 34;
+  const colW = (width - lx0 - 8) / cols;
+  // Column-major: the ranking runs DOWN the first column and continues in the
+  // second. Read across, as the composition's legend is, the fifth most abundant
+  // taxon would sit beside the first.
+  const perCol = Math.ceil(legend.length / cols);
+  const swatch = Math.min(10, Math.max(6, step - 4));
+  // Tight rows need type that fits between them.
+  const lf = step >= 16 ? font : Math.max(9.5, step - 3);
+  // Clipped to the room there is, not to a count picked once for one width: 29
+  // characters at the old 470 px, where it was a flat 28, and in a panel half as
+  // wide again the whole species name rather than a cut one beside empty card.
+  const chars = Math.max(8, Math.floor((colW - swatch - 18 - 44) / (lf * 0.52)));
+  out += `<g font-size="${lf}">`;
+  legend.forEach((s, i) => {
+    const col = Math.floor(i / perCol), lx = lx0 + col * colW;
+    const y = padT + (i % perCol) * step;
+    const clipped = s.label.length > chars ? `${s.label.slice(0, chars - 1)}…` : s.label;
+    out += `<rect x="${lx}" y="${(y - swatch + 1).toFixed(1)}" width="${swatch}" ` +
+      `height="${swatch}" fill="${s.colour}"/>` +
+      `<text x="${lx + swatch + 6}" y="${y}" fill="#5a5550">${esc(clipped)}</text>` +
+      `<text x="${(lx + colW - 10).toFixed(1)}" y="${y}" text-anchor="end" fill="#275662">` +
+      `${((s.v / total) * 100).toFixed(1)}%</text>`;
+  });
+  return `${out}</g></svg>`;
 }
 
 // ---- enterotypes -------------------------------------------------------------
@@ -813,6 +1429,37 @@ export function pcoaSvg(table, {
     }
   }
 
+  // ---- where a name can be written -------------------------------------------
+  //
+  // Every label was drawn to the right of its marker, whatever was already
+  // there, so two samples a few pixels apart printed one name over the other and
+  // the legend printed over both. It is the most visible thing on the figure and
+  // it makes an otherwise honest plot look broken.
+  //
+  // So: four candidate positions per point — right, left, above, below — taken
+  // in that order, and the first that hits nothing already written wins. A point
+  // that has no free position keeps its marker, its <title> and its click; only
+  // the written name goes. Nothing is invented and nothing moves: the label is
+  // beside its own point or it is not drawn.
+  const taken = [];
+  const hits = (b) => taken.some((t) =>
+    b.x < t.x + t.w && t.x < b.x + b.w && b.y < t.y + t.h && t.y < b.y + b.h);
+  // The legend is drawn last but occupies its corner from the start, or the
+  // first eight labels are written under it.
+  if (groupOf && groups.length > 1) {
+    const longest = Math.max(...groups.map((g) => String(g).length),
+      legendNote ? legendNote.length * 0.62 : 0);
+    taken.push({ x: pad - 6, y: 8, w: Math.ceil(longest * 6.2) + 30,
+      h: groups.length * 16 + (legendNote ? 18 : 4) + 8 });
+  }
+  const LH = 12;                      // a line of 11 px type, with its leading
+  // MEASURED, not guessed: "SRR14473840" renders 78 px wide at 11 px in the
+  // page's own stack — 7.1 a character, because the run names are capitals and
+  // digits rather than the lowercase an average is usually taken over. At the
+  // 5.9 this started at, two labels judged clear of each other overlapped by
+  // nine pixels and printed "SRR1447385ARR14473855".
+  const CH = 7.1;
+
   shown.forEach(({ p, i }) => {
     const name = table.samples[i];
     // data-sample is what makes the point findable from the page: the plot is
@@ -831,7 +1478,24 @@ export function pcoaSvg(table, {
       `<title>${esc(name)}${groupOf && groupOf(name) ? ` — ${esc(groupOf(name))}` : ""}</title></circle>`;
     if (label) {
       const short = name.length > 14 ? `${name.slice(0, 13)}…` : name;
-      out += `<text x="${(sx(p.x) + 8).toFixed(1)}" y="${(sy(p.y) + 4).toFixed(1)}" fill="#5a5550">${esc(short)}</text>`;
+      const w = short.length * CH + 4, cx = sx(p.x), cy = sy(p.y);
+      // Each candidate is a BOX (what must be free) and the anchor point the
+      // text is actually drawn from — they are not the same coordinate for a
+      // right-aligned or centred label, and conflating them is how a collision
+      // check ends up guarding a rectangle the text is not in.
+      const spots = [
+        { x: cx + 8, y: cy - LH / 2, tx: cx + 8, ty: cy + 4, anchor: "start" },
+        { x: cx - 8 - w, y: cy - LH / 2, tx: cx - 8, ty: cy + 4, anchor: "end" },
+        { x: cx - w / 2, y: cy - 10 - LH, tx: cx, ty: cy - 11, anchor: "middle" },
+        { x: cx - w / 2, y: cy + 8, ty: cy + 19, tx: cx, anchor: "middle" },
+      ];
+      const spot = spots.find((c) => c.x >= 2 && c.x + w <= width - 2 &&
+        c.y >= 2 && c.y + LH <= height - 2 && !hits({ x: c.x, y: c.y, w, h: LH }));
+      if (spot) {
+        taken.push({ x: spot.x, y: spot.y, w, h: LH });
+        out += `<text x="${spot.tx.toFixed(1)}" y="${spot.ty.toFixed(1)}" ` +
+          `text-anchor="${spot.anchor}" fill="#5a5550">${esc(short)}</text>`;
+      }
     }
   });
 
@@ -950,146 +1614,3 @@ export function enterotypeSvg(table, {
   return out + "</svg>";
 }
 
-/**
- * The composition of ONE sample as a pie, with its taxa named beside it.
- *
- * The counterpart to a point on the ordination: the PCoA says a sample sits
- * apart from the others and never says what it is made of. `sample` is a name
- * or a column index; an unknown name gives "" rather than an empty figure.
- *
- * The top N are taken WITHIN this sample, not from the run-wide ranking the
- * composition bars use — the taxon that puts a sample on its own is usually one
- * that is nowhere else in the run, which is exactly where a run-wide top 10
- * would not have it.
- *
- * Drawn to the box it is given, exactly as the three figures are drawn to their
- * card: `width` and `height` are the room the panel has left once the numbers
- * under it have taken theirs. Fixed at 470 wide it left a strip of empty card
- * down one side of a 563 px panel and clipped its own legend labels to fit a
- * width it had chosen for itself. With no `height` it keeps its natural size,
- * which is what a caller with no box to fill wants.
- */
-export function pieSvg(table, sample, { topN = 9, width = 470, height = 0, radius = 84, font = 12.5 } = {}) {
-  const c = typeof sample === "number" ? sample : table.samples.indexOf(sample);
-  const name = table.samples[c];
-  if (c < 0 || name === undefined) return "";
-
-  const present = table.rows
-    .map((r) => ({ label: r.species, v: r.values[c] || 0 }))
-    .filter((d) => d.v > 0)
-    .sort((a, b) => b.v - a.v);
-  const total = present.reduce((a, d) => a + d.v, 0);
-  const title = `Composition of ${name}`;
-  const head = `<text x="18" y="20" fill="#275662" font-weight="600" font-size="13">${esc(name)}</text>`;
-  if (!(total > 0)) {
-    // A sample can legitimately match nothing — the wrong catalogue, too few
-    // reads. Saying so beats an empty disc.
-    return svgOpen(width, 62, title, font) + head +
-      `<text x="18" y="42" fill="#5a5550">No taxon detected in this sample.</text></svg>`;
-  }
-
-  const padT = 44;
-  // The legend is what cannot be scaled — a row is a row — so it is settled
-  // first, and it is settled in COLUMNS, as the composition's is.
-  //
-  // One column was a ceiling of about thirteen names in the panel beside the
-  // plot: past that the pie stopped answering the control that asks for more
-  // taxa, and a figure that ignores its own slider reads as a figure that is not
-  // being redrawn at all. Rows are packed tighter and then flowed into a second
-  // column before any taxon is given up; only when neither is enough does the
-  // rest join "other taxa", which is the honest way to lose them.
-  const COL = 190;                    // a legend column: swatch, name, share
-  const rows1 = (st) => Math.max(3, Math.floor((height - padT - 10) / st));
-  // How many columns the width could carry beside the smallest disc worth
-  // drawing. Three is where a name has nothing left to be printed in.
-  const colsFit = Math.max(1, Math.min(3, Math.floor((width - 2 * 46 - 40) / COL)));
-  const want = Math.max(1, Math.min(topN, present.length));
-  let step = 19, cols = 1, capacity = Infinity;
-  if (height > 0) {
-    // One column for as long as one column can hold it, tightening the rows
-    // before adding a second: a column costs the disc a third of its radius, and
-    // ten taxa in two columns beside a small disc is a worse figure than ten in
-    // one beside a large one. Only then, and in the same order, a second.
-    outer:
-    for (let n = 1; n <= colsFit; n++) {
-      for (const st of [24, 22, 20, 18, 16, 14]) {
-        cols = n; step = st; capacity = n * rows1(st);
-        if (capacity >= want + 1) break outer;
-      }
-    }
-  }
-  const keep = present.slice(0, Math.max(1, Math.min(want, capacity - 1)));
-  const restV = total - keep.reduce((a, d) => a + d.v, 0);
-  const slices = keep.map((d, i) => ({ ...d, colour: colourAt(i) }));
-  if (restV > 1e-9) {
-    slices.push({
-      label: `other taxa (${present.length - keep.length})`,
-      v: restV,
-      colour: GREY,
-    });
-  }
-
-  // The disc takes what is left. It gives way to the legend rather than the
-  // other way round: someone who has asked for thirty taxa wants to read their
-  // names, and a disc of thirty slices is a colour wheel either way.
-  const r = height > 0
-    ? Math.max(46, Math.min(132,
-      Math.min((height - padT - 18) / 2, (width - cols * COL - 40) / 2)))
-    : radius;
-  const cx = 18 + r, cy = padT + r;
-  const h = height > 0 ? height : Math.max(cy + r + 16, padT + slices.length * 19 + 20);
-  let out = svgOpen(width, h, title, font) + head +
-    `<text x="18" y="36" fill="#6b7172">${present.length} taxa · ` +
-    `top ${Math.min(keep.length, present.length)} shown</text>`;
-
-  const at = (a) => `${(cx + r * Math.cos(a)).toFixed(1)} ${(cy + r * Math.sin(a)).toFixed(1)}`;
-  let a0 = -Math.PI / 2;
-  for (const s of slices) {
-    const frac = s.v / total;
-    const a1 = a0 + frac * 2 * Math.PI;
-    const pct = `${(frac * 100).toFixed(1)}%`;
-    const tip = `<title>${esc(s.label)} — ${pct}</title>`;
-    if (frac > 0.9999) {
-      // One taxon and nothing else: an arc whose two ends are the same point
-      // draws nothing at all, so a 100% sample would come out blank.
-      out += `<circle cx="${cx}" cy="${cy}" r="${r}" fill="${s.colour}">${tip}</circle>`;
-    } else {
-      out += `<path d="M ${cx} ${cy} L ${at(a0)} A ${r} ${r} 0 ` +
-        `${frac > 0.5 ? 1 : 0} 1 ${at(a1)} Z" fill="${s.colour}" stroke="#fff" ` +
-        `stroke-width="1">${tip}</path>`;
-    }
-    if (frac >= 0.06) {
-      const am = (a0 + a1) / 2, lr = r * 0.62;
-      out += `<text x="${(cx + lr * Math.cos(am)).toFixed(1)}" ` +
-        `y="${(cy + lr * Math.sin(am) + 4).toFixed(1)}" text-anchor="middle" ` +
-        `fill="${inkOn(s.colour)}" font-weight="600">${pct}</text>`;
-    }
-    a0 = a1;
-  }
-
-  const lx0 = 2 * r + 34;
-  const colW = (width - lx0 - 8) / cols;
-  // Column-major: the ranking runs DOWN the first column and continues in the
-  // second. Read across, as the composition's legend is, the fifth most abundant
-  // taxon would sit beside the first.
-  const perCol = Math.ceil(slices.length / cols);
-  const swatch = Math.min(10, Math.max(6, step - 4));
-  // Tight rows need type that fits between them.
-  const lf = step >= 16 ? font : Math.max(9.5, step - 3);
-  // Clipped to the room there is, not to a count picked once for one width: 29
-  // characters at the old 470 px, where it was a flat 28, and in a panel half as
-  // wide again the whole species name rather than a cut one beside empty card.
-  const chars = Math.max(8, Math.floor((colW - swatch - 18 - 44) / (lf * 0.52)));
-  out += `<g font-size="${lf}">`;
-  slices.forEach((s, i) => {
-    const col = Math.floor(i / perCol), lx = lx0 + col * colW;
-    const y = padT + (i % perCol) * step;
-    const clipped = s.label.length > chars ? `${s.label.slice(0, chars - 1)}…` : s.label;
-    out += `<rect x="${lx}" y="${(y - swatch + 1).toFixed(1)}" width="${swatch}" ` +
-      `height="${swatch}" fill="${s.colour}"/>` +
-      `<text x="${lx + swatch + 6}" y="${y}" fill="#5a5550">${esc(clipped)}</text>` +
-      `<text x="${(lx + colW - 10).toFixed(1)}" y="${y}" text-anchor="end" fill="#275662">` +
-      `${((s.v / total) * 100).toFixed(1)}%</text>`;
-  });
-  return `${out}</g></svg>`;
-}

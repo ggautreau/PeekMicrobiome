@@ -1,0 +1,77 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>waiting</title>
+<pre id="out">running…</pre>
+<script type="module">
+  // Full scale: every KEGG ortholog at k=11, decompressed in the tab the way the
+  // page would do it, rather than the 4,000-reference subset used to prove
+  // correctness. The question here is not whether the answer is right — that was
+  // settled against sourmash 4.9.4 — but whether 13,506 references are something
+  // a browser can hold and scan without the tab dying.
+  const pkg = new URLSearchParams(location.search).get("pkg") || "funprofiler-pkg";
+  const K_STORED = 33, SCALED = 1000, SEED = 42;
+  const say = (s) => {
+    document.getElementById("out").textContent = s;
+    document.title = s;
+    fetch("/done?" + encodeURIComponent(s)).catch(() => {});
+  };
+  const mem = () => (performance.memory ? Math.round(performance.memory.usedJSHeapSize / 1e6) : -1);
+
+  try {
+    const mod = await import(`../../web/${pkg}/sourmash.js`);
+    const wasm = await mod.default();
+
+    const sample = new mod.KmerMinHash(0, K_STORED, true, false, false, SEED, SCALED, true);
+    const reads = await (await fetch("./reads.json")).json();
+    const t0 = performance.now();
+    for (const r of reads) sample.add_sequence_js(r);
+    const tSketch = (performance.now() - t0) / 1000;
+
+    // Gzip over the wire, decompressed by the platform: what shipping this would
+    // actually look like, and where a naive implementation would buffer 48 MB of
+    // text twice.
+    const t1 = performance.now();
+    const res = await fetch("./ko_full_k33.ndjson.gz");
+    const stream = res.body.pipeThrough(new DecompressionStream("gzip"));
+    const text = await new Response(stream).text();
+    const tFetch = (performance.now() - t1) / 1000;
+
+    const t2 = performance.now();
+    const prof = new mod.FuncProfiler();
+    let lines = 0;
+    for (const line of text.split("\n")) {
+      if (!line) continue;
+      prof.add_references_json(line, K_STORED, SCALED);
+      lines++;
+    }
+    const tLoad = (performance.now() - t2) / 1000;
+    const heapAfterLoad = mem();
+
+    const t3 = performance.now();
+    const csv = prof.profile(sample, 1);
+    const tProf = (performance.now() - t3) / 1000;
+    const rows = csv.trim().split("\n").slice(1);
+
+    let h = 0n;
+    for (const ch of rows.join("|")) h = (h * 31n + BigInt(ch.codePointAt(0))) & 0xffffffffffffn;
+
+    say([
+      `PKG=${pkg}`,
+      `REFS=${prof.len()}`,
+      `LINES=${lines}`,
+      `HASHES=${sample.size_js()}`,
+      `KOS=${rows.length}`,
+      `DIGEST=${h.toString(16)}`,
+      `MB_TEXT=${Math.round(text.length / 1e6)}`,
+      `WASM_MB=${wasm && wasm.memory ? Math.round(wasm.memory.buffer.byteLength / 1e6) : -1}`,
+      `JSHEAP_MB=${heapAfterLoad}`,
+      `FETCH_S=${tFetch.toFixed(2)}`,
+      `SKETCH_S=${tSketch.toFixed(2)}`,
+      `LOAD_S=${tLoad.toFixed(2)}`,
+      `PROFILE_S=${tProf.toFixed(3)}`,
+      "STATUS=OK",
+    ].join(" "));
+  } catch (e) {
+    say(`PKG=${pkg} STATUS=FAIL ${e && e.message ? e.message : e}`);
+  }
+</script>

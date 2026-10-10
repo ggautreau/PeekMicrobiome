@@ -144,12 +144,22 @@ function abortError() {
   return e;
 }
 
+/**
+ * Bytes, in the units the things this page names are published in.
+ *
+ * DECIMAL, not binary. Every figure a reader can check this against is decimal:
+ * Zenodo lists the human-gut catalogue at 454.0 MB, `web/db/biomes.json` carries
+ * its exact byte count, and the ENA reports FASTQ sizes the same way. Dividing by
+ * 1024 and writing "MB" made the page offer a "433.0 MB" download for the very
+ * file Zenodo calls 454.0 MB — a 4.6% gap the reader cannot explain and would
+ * reasonably read as the wrong file.
+ */
 export function fmtBytes(n) {
-  if (!Number.isFinite(n)) return "—";
-  if (n < 1024) return `${n} B`;
-  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
-  if (n < 1024 * 1024 * 1024) return `${(n / 1024 / 1024).toFixed(1)} MB`;
-  return `${(n / 1024 / 1024 / 1024).toFixed(2)} GB`;
+  if (!Number.isFinite(n)) return "\u2014";
+  if (n < 1e3) return `${n} B`;
+  if (n < 1e6) return `${(n / 1e3).toFixed(1)} kB`;
+  if (n < 1e9) return `${(n / 1e6).toFixed(1)} MB`;
+  return `${(n / 1e9).toFixed(2)} GB`;
 }
 
 export function fmtRate(bps) {

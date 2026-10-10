@@ -9,15 +9,20 @@
 import {
   sylphWorkerRpc, detectMemory64, chooseWasmBits, WORKER_VERSION,
   readsBudget, readsBudgetNote, readsOverBudgetNote, loadedBuildNote, fmtReads,
-} from "./sylph-worker-rpc.js?v=53";
-import { dbCacheClient, fmtRate, fmtEta, cacheSummary } from "./db-cache.js?v=53";
+} from "./sylph-worker-rpc.js?v=79";
+import { dbCacheClient, fmtRate, fmtEta, cacheSummary } from "./db-cache.js?v=79";
+import {
+  koTable, moduleTable, pathwayRollup, moduleCoverage, pathwayCoverage,
+  keggEntryUrl, keggMapUrl, heatHex, floorRows, NO_PATHWAY,
+  keggConsent, storeKeggConsent, keggGateHtml, FUNC_METHOD_NOTE,
+} from "./kegg.js?v=79";
 import {
   fetchCatalog, fallbackCatalog, renderDbSelect, biomeForUrl, biomeNote,
   mgnifyGenomeUrl,
   makeDbRef, refLine, refShort, genomeCountMismatch, rememberBiome, recallBiome,
   catalogueName, LOCAL_VALUE,
   selectionMatchesLoaded, notLoadedNote, refMetaMismatch,
-} from "./biomes.js?v=53";
+} from "./biomes.js?v=79";
 
 const $ = (id) => document.getElementById(id);
 const els = {
@@ -30,6 +35,10 @@ const els = {
   dbSelect: $("dbSelect"), loadDb: $("loadDb"), dbFile: $("dbFile"),
   cancelDb: $("cancelDb"), dbCacheInfo: $("dbCacheInfo"),
   dbBiomeNote: $("dbBiomeNote"), resultsRef: $("resultsRef"),
+  funcOn: $("funcOn"), funcGrain: $("funcGrain"), funcHead: $("funcHead"),
+  funcBody: $("funcBody"), funcTable: $("funcTable"), funcRefusal: $("funcRefusal"),
+  funcSummary: $("funcSummary"), funcRef: $("funcRef"),
+  taxoPanel: $("taxoPanel"), funcPanel: $("funcPanel"),
 };
 
 // One resumable, locally-cached download per database — shared with the
@@ -626,6 +635,10 @@ async function run() {
   els.results.classList.add("hide");
   els.progress.classList.remove("hide");
   els.run.disabled = true;
+  // Read once, at the start, and frozen for the duration: the reference goes into
+  // the worker before the first read, so ticking this mid-run would change
+  // nothing except what the page appears to promise.
+  if (els.funcOn) els.funcOn.disabled = true;
 
   const maxReads = clampReads(els.maxReads.value || 1_000_000);
   const t0 = performance.now();
@@ -639,9 +652,38 @@ async function run() {
     // reloads the database before a single read is sketched.
     await ensureWasmBuildFor(maxReads);
 
+    // The second sketch, if it was asked for. Loaded before the reads start
+    // moving, because a worker that has no reference sketches nothing and says
+    // nothing about it — the sample would simply come back with no functions.
+    funcWanted = !!els.funcOn?.checked;
+    funcProfile = null;
+    if (funcWanted) {
+      setStep("loading the KEGG ortholog reference (20 MB, once)…");
+      try {
+        // Always the 32-bit sourmash, whatever bit-width sylph is running beside
+        // it: separate wasm modules, separate memories, and matching the build
+        // the multi-sample page uses keeps the two numerically comparable.
+        await rpc.loadFuncRefs("./funprofiler-pkg", FUNC_REF_URL,
+          (p) => { if (p.progress?.phase === "func_refs") {
+            setStep(`loading the KEGG ortholog reference — ${p.progress.n.toLocaleString()} orthologs…`);
+          } });
+      } catch (e) {
+        // The species half is what most readers came for; failing the whole run
+        // over the optional half would be the worse trade.
+        funcWanted = false;
+        showError(`Functions are off for this run: the KEGG ortholog reference could not ` +
+          `be loaded (${e?.message ?? e}). Species profiling continues.`);
+        console.error(e);
+      }
+    } else {
+      // A worker that loaded the reference for an earlier run would keep
+      // sketching, unasked, at roughly double the cost.
+      await rpc.funcOff().catch(() => {});
+    }
+
     // The worker now does decompression + trim + profile end-to-end. Main
     // thread keeps no read buffer; we just relay progress events to the UI.
-    const { tsv, reads, elapsedMs } = await rpc.profileFile(
+    const { tsv, reads, elapsedMs, func } = await rpc.profileFile(
       selectedFile, maxReads,
       (p) => {
         if (p.phase === "profile_start") {
@@ -664,7 +706,10 @@ async function run() {
       },
     );
     paintProgress(100, selectedFile.size, selectedFile.size, reads ?? lastReadsSeen, maxReads, t0);
+    funcProfile = func?.profile && Object.keys(func.profile).length ? func.profile : null;
     renderResults(tsv);
+    if (funcWanted && keggConsent()) await loadKeggMap();
+    renderFunc();
     setStep(`done in ${((performance.now() - t0) / 1000).toFixed(1)} s (worker ${(elapsedMs / 1000).toFixed(1)} s)`);
   } catch (e) {
     showError(`${e.message ?? e}\n\nCheck DevTools console for details.`);
@@ -672,6 +717,7 @@ async function run() {
   } finally {
     if (wasmTick) clearInterval(wasmTick);
     els.run.disabled = false;
+    if (els.funcOn) els.funcOn.disabled = false;
   }
 }
 
@@ -738,6 +784,155 @@ function fmtPct(v) {
   return Number.isFinite(n) ? n.toFixed(2) + " %" : (v ?? "");
 }
 
+// ---- functions -----------------------------------------------------------------
+//
+// The same second reading of the same reads as on the multi-sample page, and the
+// same reference — but one sample, so everything that COMPARES samples is gone:
+// no matrix, no ordination, no clustering, no diversity across a cohort. What is
+// left is what the sample itself can do, at the granularity the reader picks.
+//
+// The roll-ups, the links, the colour ramp and the licence question all come from
+// kegg.js, which both pages import. Nothing about KEGG is written twice.
+
+// 13,509 KEGG ortholog sketches at k=11, from Zenodo 10045253 (CC BY 4.0).
+// See web/db/kegg/README.md.
+const FUNC_REF_URL = "./db/kegg/ko-sketches-k11.ndjson.gz";
+const SAMPLE = "this sample";     // the single column's name, in the table's own words
+let funcWanted = false;           // was the box ticked when this run started?
+let funcProfile = null;           // { K01952: 0.0184, … } for the one sample
+let keggMap = null;               // db/kegg/ko-map.json, fetched once, on demand
+
+async function loadKeggMap() {
+  if (keggMap) return keggMap;
+  try {
+    const res = await fetch(`./db/kegg/ko-map.json?v=${WORKER_VERSION}`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    keggMap = await res.json();
+  } catch (e) {
+    // Names are a convenience; the identifiers are the measurement. Without the
+    // map the KO level still works, and the roll-ups say why they cannot.
+    keggMap = { ko: {}, koModules: {}, modules: {}, pathways: {}, missing: String(e.message || e) };
+  }
+  return keggMap;
+}
+
+// The two tabs. Same behaviour as the multi-sample page: switching to Function
+// for the first time is what fetches the KEGG map, and only once the reader has
+// answered the licence question.
+for (const b of document.querySelectorAll(".res-tab")) {
+  b.addEventListener("click", async () => {
+    for (const o of document.querySelectorAll(".res-tab")) o.classList.toggle("is-on", o === b);
+    els.taxoPanel?.classList.toggle("hide", b.dataset.res !== "taxo");
+    els.funcPanel?.classList.toggle("hide", b.dataset.res !== "func");
+    if (b.dataset.res === "func" && keggConsent()) await loadKeggMap();
+    if (b.dataset.res === "func") renderFunc();
+  });
+}
+
+els.funcGrain?.addEventListener("change", renderFunc);
+
+function funcRefusal() {
+  // KEGG's terms come before any of KEGG's identifiers, on a browser that has
+  // not answered — including before "there is nothing to show", which is a
+  // different sentence that would skip the question.
+  if (!keggConsent()) return "gate";
+  if (!funcProfile || !Object.keys(funcProfile).length) {
+    if (funcWanted) return "Measuring — the functional profile appears when the run finishes.";
+    return "Functions were not measured for this run. They are read from the same " +
+      "FASTQ a second way — amino-acid k-mers against 13,509 KEGG orthologs " +
+      "(fmh-funprofiler) — and that pass is off unless \u201calso profile functions\u201d " +
+      "is ticked before you click Profile, because it costs a 20 MB reference " +
+      "download and takes about four times as long.";
+  }
+  const grain = els.funcGrain?.value ?? "pathway";
+  if (keggMap?.missing && grain !== "ko") {
+    return `KEGG's module and pathway map could not be loaded (${keggMap.missing}), ` +
+      `so orthologs cannot be rolled up. The ortholog level still works.`;
+  }
+  return "";
+}
+
+function renderFunc() {
+  if (!els.funcBody) return;
+  const refusal = funcRefusal();
+  if (refusal) {
+    els.funcRefusal.innerHTML = refusal === "gate" ? keggGateHtml() : escapeHTML(refusal);
+    els.funcRefusal.classList.remove("hide");
+    els.funcTable.classList.add("hide");
+    els.funcSummary.textContent = "";
+    if (els.funcRef) els.funcRef.textContent = "";
+    if (refusal === "gate") {
+      const answer = (v) => { storeKeggConsent(v); loadKeggMap().then(renderFunc); };
+      document.getElementById("keggAcademic")?.addEventListener("click", () => answer("academic"));
+      document.getElementById("keggLicensed")?.addEventListener("click", () => answer("licensed"));
+    }
+    return;
+  }
+  els.funcRefusal.classList.add("hide");
+  els.funcTable.classList.remove("hide");
+
+  const grain = els.funcGrain.value;
+  const profiles = { [SAMPLE]: funcProfile };
+  const samples = [SAMPLE];
+  const raw = grain === "ko" ? koTable(profiles, samples, keggMap)
+    : grain === "module" ? moduleTable(profiles, samples, keggMap)
+      : pathwayRollup(profiles, samples, keggMap);
+  // A floor, because the tail is long and real: 13,509 orthologs, most of them at
+  // one shared hash. 0.05 % keeps the table readable and the line below says
+  // exactly what it cost.
+  const t = floorRows(raw, grain === "ko" ? 0.05 : 0);
+  const max = Math.max(0, ...t.rows.map((r) => r.values[0]));
+
+  els.funcHead.innerHTML = `<tr><th>${grain === "ko" ? "Ortholog"
+    : grain === "module" ? "Module" : "Pathway"}</th><th>KEGG</th><th>Abundance</th></tr>`;
+
+  els.funcBody.innerHTML = t.rows.map((r) => {
+    // A pathway row links to KEGG's own drawing of the map with these orthologs
+    // coloured in; anything else links to its entry. `_none` is ours, not KEGG's,
+    // and gets no link at all — see keggEntryUrl.
+    // keggMapUrl returns a DESCRIPTOR — { url, kept, plain, dropped } — not a
+    // string: the caller has to be able to say how many orthologs fitted under
+    // KEGG's request-target ceiling. Dropping the `.url` here renders
+    // "[object Object]" as an href, which is a link that goes nowhere and looks
+    // exactly like one that works.
+    // One sample, so pathwayRollup's per-ortholog values ARE this sample's, and
+    // its koMax is this sample's most abundant ortholog — the same scale the
+    // multi-sample page computes per column, arrived at for free.
+    const map = grain === "pathway" && r.id !== NO_PATHWAY && r.kos?.length
+      ? keggMapUrl(r.id, r.kos, { max: t.koMax })
+      : null;
+    const url = map?.url ?? keggEntryUrl(r.id);
+    const pct = (r.values[0] * 100).toFixed(2);
+    const bg = max > 0 ? decodeURIComponent(heatHex(r.values[0], max)) : "";
+    return `<tr>
+      <td>${escapeHTML(r.name)}</td>
+      <td>${url
+        ? `<a href="${escapeHTML(url)}" target="_blank" rel="noopener noreferrer"
+             title="${grain === "pathway" ? "Open this map on KEGG with the orthologs found here coloured in"
+               : "Open this entry on KEGG"}"><code>${escapeHTML(r.id)}</code></a>`
+        : `<code>${escapeHTML(r.id)}</code>`}</td>
+      <td class="num" style="background:${bg}">${pct} %</td>
+    </tr>`;
+  }).join("");
+
+  // What the level can and cannot speak for. Most orthologs belong to no module,
+  // so a module table that says nothing about its own coverage is a table that
+  // looks like all of the signal while being a sixth of it.
+  const cov = grain === "ko" ? 1
+    : grain === "module" ? moduleCoverage(profiles, samples, keggMap)
+      : pathwayCoverage(profiles, samples, keggMap);
+  const parts = [`${t.rows.length.toLocaleString()} ${grain === "ko" ? "orthologs"
+    : grain === "module" ? "modules" : "pathways"}`];
+  if (grain !== "ko") parts.push(`covering ${(cov * 100).toFixed(1)} % of the measured signal`);
+  if (t.hidden) parts.push(`${t.hidden.toLocaleString()} below ${t.floor} % hidden ` +
+    `(${(t.carried * 100).toFixed(2)} % of the total)`);
+  els.funcSummary.textContent = parts.join(" · ");
+  if (els.funcRef) {
+    els.funcRef.textContent = FUNC_METHOD_NOTE;
+    els.funcRef.classList.add("db-ref-long");
+  }
+}
+
 // ---- chrome ---------------------------------------------------------------------
 
 function setStep(s) { els.step.textContent = s; }
@@ -749,12 +944,22 @@ function paintProgress(pct, bytesIn, totalBytes, reads, maxReads, t0) {
   els.elapsed.textContent = `${((performance.now() - t0) / 1000).toFixed(1)} s`;
 }
 
+/**
+ * Bytes, in the units the things this page names are published in.
+ *
+ * DECIMAL, not binary. Every figure a reader can check this against is decimal:
+ * Zenodo lists the human-gut catalogue at 454.0 MB, `web/db/biomes.json` carries
+ * its exact byte count, and the ENA reports FASTQ sizes the same way. Dividing by
+ * 1024 and writing "MB" made the page offer a "433.0 MB" download for the very
+ * file Zenodo calls 454.0 MB — a 4.6% gap the reader cannot explain and would
+ * reasonably read as the wrong file.
+ */
 function fmtBytes(n) {
-  if (!Number.isFinite(n)) return "—";
-  if (n < 1024) return `${n} B`;
-  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
-  if (n < 1024 * 1024 * 1024) return `${(n / 1024 / 1024).toFixed(1)} MB`;
-  return `${(n / 1024 / 1024 / 1024).toFixed(2)} GB`;
+  if (!Number.isFinite(n)) return "\u2014";
+  if (n < 1e3) return `${n} B`;
+  if (n < 1e6) return `${(n / 1e3).toFixed(1)} kB`;
+  if (n < 1e9) return `${(n / 1e6).toFixed(1)} MB`;
+  return `${(n / 1e9).toFixed(2)} GB`;
 }
 
 function escapeHTML(s) {

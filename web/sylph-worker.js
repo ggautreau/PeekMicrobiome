@@ -19,7 +19,11 @@
 //   in  { id, type: "profileFilesMulti", files: File[], maxReads }
 //   in  { id, type: "profileFilesPe", r1Files: File[], r2Files: File[], maxReads }
 //       progress: { id, progress: { ... } }   // emitted periodically
-//   out { id, ok: true, tsv, elapsedMs, reads }
+//   out { id, ok: true, tsv, elapsedMs, reads, func }
+//       `func` is { profile: {K01952: 0.0184, …}, reads, hashes } when the
+//       second sketch is on, and null when it is not.
+//   in  { id, type: "loadFuncRefs", pkg, refUrl }   // turn the second sketch on
+//       out { id, ok: true, result: { orthologs } }
 //   in  { id: 0, type: "cancel", target: <id-being-cancelled> }   // abort an in-flight op
 //   error: { id, ok: false, error: string }
 //
@@ -45,16 +49,28 @@
 // fails the named import and kills the worker module outright.
 import {
   readAndTrim, readAndTrimMulti, streamTrim, streamTrimMulti, streamTrimPair,
-} from "./fastq-trim.js?v=53";
+} from "./fastq-trim.js?v=79";
 import {
   WORKER_VERSION, detectMemory64, chooseWasmBits, WASM32_SAFE_READS,
-} from "./sylph-worker-rpc.js?v=53";
+} from "./sylph-worker-rpc.js?v=79";
 // The database is never downloaded here: one download happens in
 // db-cache-worker.js, then every worker in the pool reads the same OPFS file.
-import { readCachedBytes } from "./db-cache.js?v=53";
+import { readCachedBytes } from "./db-cache.js?v=79";
 // FASTQs, on the other hand, ARE fetched here in ENA mode — streamed, never
 // stored. urlSource is the resumable read source; see web/ena.js.
-import { urlSource, rateMeter, fastqUrl } from "./ena.js?v=53";
+import { urlSource, rateMeter, fastqUrl } from "./ena.js?v=79";
+import { loadFuncRefs, funcRefsLoaded, newFuncSample } from "./func-sketch.js?v=79";
+
+// The second sketch, when it has been asked for. Off unless the page says
+// otherwise: it costs a 20 MB download once and takes about four times as long per
+// sample, because every read is translated in six frames on top of being
+// sketched for sylph. A cost that large has to be a choice, not a default.
+let funcOn = false;
+let funcSample = null;
+// `stream` keeps the two mates' parsers apart — see newFuncSample(). Single-end
+// paths leave it at 0, and a chunk that arrives with functions off costs one
+// null check.
+const funcFeed = (chunk, stream = 0) => { if (funcSample) funcSample.feed(chunk, stream); };
 
 let profiler = null;
 
@@ -279,6 +295,9 @@ function hasPairPending(p) {
 // begin_sample* — and wasm never gives that memory back to the OS.
 // Tolerates an older pkg that does not export cancel_sample.
 function cancelSample() {
+  // Before the sylph side, because the abort below unwinds through the feed
+  // loops and a half-fed sketch left standing would join the next sample.
+  if (funcSample) { funcSample.drop(); funcSample = null; }
   if (profiler && typeof profiler.cancel_sample === "function") {
     try { profiler.cancel_sample(); } catch { /* nothing in flight */ }
   }
@@ -296,6 +315,31 @@ self.addEventListener("message", async (e) => {
       bits: wasmInfo?.bits ?? null,
       hasDb: !!profiler,
     } });
+    return;
+  }
+
+  if (type === "loadFuncRefs") {
+    // Asked for once per worker, before any sample. The reference is 20 MB over
+    // the wire and 48 MB of text, so the reply carries how many orthologs it
+    // holds: a page that says "functions on" while the file failed would refuse
+    // every sample afterwards with no reason given.
+    //
+    // `on: false` turns the second sketch off WITHOUT unloading anything. The
+    // pool outlives a run: a worker that loaded the reference for one run would
+    // otherwise keep paying for it on the next, where the box was unticked, and
+    // return functional profiles nobody asked for.
+    const { pkg, refUrl, bytes, on = true } = e.data;
+    if (!on) {
+      funcOn = false;
+      self.postMessage({ id, ok: true, result: { orthologs: 0, off: true } });
+      return;
+    }
+    const info = await loadFuncRefs({
+      pkg, refUrl,
+      onProgress: (n) => self.postMessage({ id, progress: { phase: "func_refs", n } }),
+    });
+    funcOn = true;
+    self.postMessage({ id, ok: true, result: info });
     return;
   }
 
@@ -382,9 +426,10 @@ self.addEventListener("message", async (e) => {
       if (streaming) {
         profiler.begin_sample(maxReads);
         sampleStarted = true;
+        funcSample = funcOn && funcRefsLoaded() ? newFuncSample() : null;
         fedBytes = 0;
         const res = await streamTrim(file, maxReads,
-          (chunk) => { fedBytes += chunk.length; profiler.feed(chunk); },
+          (chunk) => { fedBytes += chunk.length; profiler.feed(chunk); funcFeed(chunk); },
           (bytesIn, r, total) => self.postMessage({ id, progress: { bytesIn, reads: r, total } }),
           ac.signal,
           sampleStop,
@@ -410,6 +455,11 @@ self.addEventListener("message", async (e) => {
         console.log(`[worker profileFile] trim done: reads=${trimmed.reads} (target ${maxReads}) ` +
           `bytes=${trimmed.bytes.length} compressedRead=${trimmed.compressedBytesRead ?? '?'} ` +
           `fileSize=${file.size} in ${trimMs.toFixed(0)} ms`);
+        // The fallback holds the whole sample in memory, so the second sketch
+        // gets it in one chunk. Same reader, same result: it tracks FASTQ
+        // records across chunk boundaries and does not care how big one is.
+        funcSample = funcOn && funcRefsLoaded() ? newFuncSample() : null;
+        if (funcSample) funcSample.feed(trimmed.bytes);
         self.postMessage({ id, progress: { phase: "profile_start", reads } });
         const t0 = performance.now();
         tsv = profiler.profile(trimmed.bytes, maxReads);
@@ -418,7 +468,9 @@ self.addEventListener("message", async (e) => {
 
       console.log(`[worker profileFile] profile done in ${elapsedMs.toFixed(0)} ms; ` +
         `tsv has ${(tsv.match(/\n/g) || []).length} lines`);
-      self.postMessage({ id, ok: true, tsv, elapsedMs, reads });
+      const func = funcSample ? funcSample.finish() : null;
+      funcSample = null;
+      self.postMessage({ id, ok: true, tsv, elapsedMs, reads, func });
     } else if (type === "profileFilesMulti" || type === "profileUrls") {
       // ONE branch for local files and for ENA URLs. The only difference is the
       // first three lines: where the read sources come from, and whether the
@@ -438,9 +490,10 @@ self.addEventListener("message", async (e) => {
       if (streaming) {
         profiler.begin_sample(maxReads);
         sampleStarted = true;
+        funcSample = funcOn && funcRefsLoaded() ? newFuncSample() : null;
         let fedBytes = 0;
         const res = await streamTrimMulti(files, maxReads,
-          (chunk) => { fedBytes += chunk.length; profiler.feed(chunk); },
+          (chunk) => { fedBytes += chunk.length; profiler.feed(chunk); funcFeed(chunk); },
           (bytesIn, r, total, fi) =>
             self.postMessage({ id, progress: { bytesIn, reads: r, total, fi, net, bps: bps(bytesIn) } }),
           ac.signal,
@@ -471,6 +524,11 @@ self.addEventListener("message", async (e) => {
         console.log(`[worker profileFilesMulti] trim done: reads=${trimmed.reads} (target ${maxReads}) ` +
           `bytes=${trimmed.bytes.length} totalFileSize=${totalFileSize} ` +
           `in ${trimMs.toFixed(0)} ms`);
+        // The fallback holds the whole sample in memory, so the second sketch
+        // gets it in one chunk. Same reader, same result: it tracks FASTQ
+        // records across chunk boundaries and does not care how big one is.
+        funcSample = funcOn && funcRefsLoaded() ? newFuncSample() : null;
+        if (funcSample) funcSample.feed(trimmed.bytes);
         self.postMessage({ id, progress: { phase: "profile_start", reads } });
         const t0 = performance.now();
         tsv = profiler.profile(trimmed.bytes, maxReads);
@@ -479,7 +537,9 @@ self.addEventListener("message", async (e) => {
 
       console.log(`[worker profileFilesMulti] profile done in ${elapsedMs.toFixed(0)} ms; ` +
         `tsv has ${(tsv.match(/\n/g) || []).length} lines`);
-      self.postMessage({ id, ok: true, tsv, elapsedMs, reads });
+      const func = funcSample ? funcSample.finish() : null;
+      funcSample = null;
+      self.postMessage({ id, ok: true, tsv, elapsedMs, reads, func });
     } else if (type === "profileFilesPe" || type === "profileUrlsPe") {
       // Same rule as the branch above: URLs only change where the two mates are
       // read from. The pairing, the drift budget and the fail-together rule are
@@ -504,12 +564,13 @@ self.addEventListener("message", async (e) => {
         // so a survivor can never leak its reads into the next sample).
         profiler.begin_sample_pe(maxReads);
         sampleStarted = true;
+        funcSample = funcOn && funcRefsLoaded() ? newFuncSample() : null;
         const queues = hasPairQueues(profiler);
         const pendings = hasPairPending(profiler);
         let fed1 = 0, fed2 = 0;
         const [s1, s2] = await streamTrimPair(r1Files, r2Files, maxReads, {
-          onChunk1: (chunk) => { fed1 += chunk.length; profiler.feed_r1(chunk); },
-          onChunk2: (chunk) => { fed2 += chunk.length; profiler.feed_r2(chunk); },
+          onChunk1: (chunk) => { fed1 += chunk.length; profiler.feed_r1(chunk); funcFeed(chunk, 1); },
+          onChunk2: (chunk) => { fed2 += chunk.length; profiler.feed_r2(chunk); funcFeed(chunk, 2); },
           onProgress1: (b, r, t, fi) =>
             self.postMessage({ id, progress: { mate: 1, bytesIn: b, reads: r, total: t, fi, net, bps: bps1(b) } }),
           onProgress2: (b, r, t, fi) =>
@@ -543,6 +604,12 @@ self.addEventListener("message", async (e) => {
         const trimMs = performance.now() - trimT0;
         console.log(`[worker profileFilesPe] trim done: r1=${t1.reads}/${t1.bytes.length}B ` +
           `r2=${t2.reads}/${t2.bytes.length}B target ${maxReads} in ${trimMs.toFixed(0)} ms`);
+        // The mates are separate buffers here rather than interleaved callbacks,
+        // but they are still two streams, and each keeps its own record phase.
+        // Both go into the ONE sketch: the sample is the fragment library, not
+        // one end of it.
+        funcSample = funcOn && funcRefsLoaded() ? newFuncSample() : null;
+        if (funcSample) { funcSample.feed(t1.bytes, 1); funcSample.feed(t2.bytes, 2); }
         self.postMessage({ id, progress: { phase: "profile_start", reads } });
         const t0 = performance.now();
         tsv = profiler.profile_pe(t1.bytes, t2.bytes, maxReads);
@@ -551,7 +618,9 @@ self.addEventListener("message", async (e) => {
 
       console.log(`[worker profileFilesPe] profile done in ${elapsedMs.toFixed(0)} ms; ` +
         `tsv has ${(tsv.match(/\n/g) || []).length} lines`);
-      self.postMessage({ id, ok: true, tsv, elapsedMs, reads });
+      const func = funcSample ? funcSample.finish() : null;
+      funcSample = null;
+      self.postMessage({ id, ok: true, tsv, elapsedMs, reads, func });
     } else {
       throw new Error(`unknown message type: ${type}`);
     }

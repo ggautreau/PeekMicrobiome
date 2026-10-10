@@ -381,7 +381,11 @@ try {
     window.__blobs = [];
     const real = URL.createObjectURL.bind(URL);
     URL.createObjectURL = (b) => { window.__blobs.push(b); return real(b); };
-    document.getElementById("downloadTsv").click();
+    // The TSV is an entry in the Export menu now, not a button of its own: three
+    // controls saying one verb became one.
+    const sel = document.getElementById("exportAs");
+    sel.value = "tsv";
+    sel.dispatchEvent(new Event("change", { bubbles: true }));
     await new Promise(r => setTimeout(r, 200));
     return await window.__blobs[0].text();
   })()`);
@@ -471,7 +475,9 @@ try {
       if (el && el.download) window.__names.push(el.download);
       return realAppend(el);
     };
-    document.getElementById("downloadTsv").click();
+    const sel2 = document.getElementById("exportAs");
+    sel2.value = "tsv";
+    sel2.dispatchEvent(new Event("change", { bubbles: true }));
     await new Promise(r => setTimeout(r, 300));
     document.body.appendChild = realAppend;
     return { text: await window.__b2[0].text(), name: window.__names[0] ?? "" };

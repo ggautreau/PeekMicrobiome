@@ -1,0 +1,9 @@
+# Fixtures, rebuilt by fixtures.sh: the KO subset is 27 MB and the reads come
+# from fmh-funprofiler's own repository. Neither belongs in git.
+reads.json
+ko_subset_plain.json
+KOs_scaled_1000.sig.zip
+.chrome-run-*
+ko_full_k33.ndjson
+ko_full_k33.ndjson.gz
+fmh-demo/

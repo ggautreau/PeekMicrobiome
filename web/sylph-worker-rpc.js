@@ -185,7 +185,134 @@
 // v53: the wheel over the ordination finishes its gesture instead of handing the
 // page back the moment the zoom runs out of room — one flick used to dezoom and
 // then scroll. The cluster note drops its runner-up k.
-export const WORKER_VERSION = "53";
+// v55: the results split into Taxonomy and Function, each with its own matrix,
+// downloads and figures — and the bundled example now carries the functional
+// half, which is 1 MB more session than a page on v54 expects to fetch.
+// v79: THE WORKER PROTOCOL CHANGED — "loadFuncRefs" now accepts a `bytes` field
+// and uses it instead of fetching. A page on v79 hands the compressed reference
+// to a worker; a cached v78 worker would ignore the field and fetch the URL
+// itself, which is the very thing the change removes — eight workers, eight
+// downloads of one 20 MB file, under a line that says "once".
+// v78: no protocol change — the module GRAPH changed. parseMetadata and the CSV
+// writer it has to match moved out of multi.js into groups.js, so a cached
+// multi.js on v77 would import two names groups.js did not export at that
+// version and fail to evaluate, taking the whole page with it. Everything
+// versioned moves together for that reason: the token is not per file.
+// v77: THE WORKER PROTOCOL CHANGED — it answers a new message type,
+// "loadFuncRefs", and every profile reply now carries a `func` field beside the
+// TSV. A page on v77 paired with a cached v76 worker would ask that worker to
+// load the KEGG ortholog reference and wait forever for a reply it has no code
+// to send, so this bump is what keeps a returning visitor working. The worker
+// also imports a new module, func-sketch.js, which is the second sketch itself:
+// the same reads, in amino acids, against 13,509 KEGG orthologs, fed from all
+// four of the worker's feed paths — and per-stream, because the paired path
+// calls back from two downloads at once and one parser state across both loses
+// the FASTQ record phase and three quarters of the sketch. The Function tab is
+// therefore measured in the browser now rather than only carried by a session,
+// on both pages, behind an opt-in that says what it costs.
+// Also on v77: a Contrast figure on both halves (ranked by effect, no p-values,
+// every sample a dot), the GTDB release recorded per catalogue and printed
+// wherever the catalogue is named, and the worker pool sized from the machine's
+// cores and memory against the size of the catalogue instead of from the
+// constant 4.
+// v76: the three global maps are asked for on KEGG's GREY base. They are the
+// ones a reader clicks first, and they were the worst case: KEGG paints
+// map01100 in its own category palette — 2,473,946 coloured pixels — and our
+// marks vanished in it. `coloring=grayscale` turns that into 119,352, nearly all
+// ours. It exists only for 011xx (KEGG's script gates it on mapno matching
+// /^011/) and only on the named-parameter URL form, since appending it to the
+// keyless path form makes the CGI answer 400. That form has no `default=`, and a
+// bare identifier in it gets KEGG's own RED — which on our ramp would read as
+// the most abundant thing on the map — so there it drops rather than promotes.
+// v75: the KEGG maps TAB is gone and the link moved into the matrix cell, where
+// it belonged all along — a cell is a pathway AND a sample, which is exactly
+// what a coloured map needs. Two tabs tried to be that table and both WERE the
+// table: a figure of the top fourteen pathways averaged, then a list of links
+// ordered by share of the profile. Measured, that ordering carries no per-sample
+// information at all — two samples share 9.6 of their top 10 pathways — and it
+// puts the global maps first, which are the ones our colours read worst on.
+// v74 (with v73): the KEGG links actually colour, and the tab stops duplicating the matrix.
+// Two things were wrong and one was an instrument. The tab drew pathways x
+// samples with the abundance in each cell, which IS the matrix below it — it is
+// a sample picker and a list of links now. The ramp started at lightness 0.88,
+// near white, invisible on line art and hopeless on the 011xx global maps that
+// KEGG already draws in its own colours (those rows now say so). And on a box
+// two orthologs share, KEGG lets the LAST one in the URL win: measured, the same
+// pair swapped renders 1,287 px and NOTHING for the other, so the list is chosen
+// most-abundant-first and written least-abundant-first. The instrument: the
+// first blob image KEGG builds is entirely uncoloured, so reading it when
+// img.src turns blob: reports zero every time — which is what made this look
+// broken when it was not. Measured settled, our own URL renders 13,612 pixels in
+// 12 shades on map00010, against 0 for the bare map.
+// v71: a KEGG maps tab — one link per pathway PER SAMPLE, each opening that map
+// on kegg.jp coloured by that sample's ortholog abundances on a log ramp. Not a
+// figure: KEGG draws the map, and the only thing this page can add is which
+// boxes and how darkly. The URL is KEGG's own documented colouring form
+// (kegg.jp/kegg/webapp/color_url.html), one colour per ortholog now rather than
+// one for all; where the list outruns the 2,023-byte request target the least
+// abundant lose their colour before they lose their box, because a missing box
+// says "not found" and that is false. 96 of the example's 102 maps fit whole.
+// v70 (with v69): the Function panel gets the rest of the taxonomic figure furniture, which
+// it should have had from the start — the top-N slider, the colour control
+// (groups or computed clusters) and the zoom, all on the SAME ordination code
+// rather than a second copy. `pcoaSvg` was being called directly there, so the
+// functional plot had no window, no clusters and no slider; that was not a
+// decision, it was the half that was built second. The gestures now bind to both
+// canvases, and the clusters earn their place: taxonomically they recover all
+// six people of the example without being told who is who, functionally they do
+// not, and reading the two side by side is the redundancy result.
+// v68: the KEGG map FIGURE is gone. It drew fourteen bars of numbers the matrix
+// beside it shows all 87 of, per sample, sortable and downloadable — and once
+// its row labels started opening KEGG's own drawing, the honest map was on
+// kegg.jp rather than in a layout of ours carrying its name. The coloured link
+// moved to the pathway rows of the matrix, where the identifier already was.
+// v67 (with v65 and v66): the KEGG map lists the samples instead of averaging them — one mark per
+// sample per pathway, names over the columns — and each row label opens that map
+// on kegg.jp with the orthologs found here coloured in. The colouring URL is
+// KEGG's own documented form, show_pathway?<map>/<ko>/…/default%3d<colour>; the
+// two forms that look right are not (/pathway/<map>+<ko> is a 404, and the
+// multi_query variant on that path returns the map with the argument ignored).
+// The request target is capped at 2,023 bytes, so long lists are cut most-
+// abundant-first and the figure says how many maps were cut.
+// v64: a Gut Metabolic Modules level, whose definitions this page does NOT ship
+// — VIB licenses them for academic non-commercial use and forbids passing them
+// outside the licensee's institution, so the page carries the parser and the
+// reader opens their own copy, read in the tab and kept nowhere. It is a LEVEL
+// and not a column beside the KEGG modules: only 7 of the 103 have the ortholog
+// set of some KEGG module, and 32 are built entirely from orthologs no KEGG
+// module contains. A second consent gate, in the shape of the KEGG one.
+// v61: the Function tab gets the rest of the taxonomic half's furniture — the
+// cluster checkbox, and "Pick a sample" with a functional pie, its own Hill
+// numbers and its nearest neighbours by Bray-Curtis over the orthologs. The
+// panel machinery is shared rather than copied: a surface descriptor names the
+// canvas, the panel, the noun and whether the enterotype audit means anything
+// there. Diversity is computed on the ORTHOLOGS at every level, because modules
+// and maps overlap and Shannon over categories that share members is not an
+// index; all three Hill numbers are reported, since q=2 separates these samples
+// 1.7x better than q=1. And "Profiled against <catalogue>" moved inside the
+// Taxonomy panel — over a table of KEGG pathways it was the wrong sentence.
+// v60 (one release, numbered up while it was being verified): an adversarial
+// review of the Function tab, and one number that could not
+// be true. The KEGG map figure summed module rows per map, double-counting an
+// ortholog once per module INSIDE one bar: map01100 read 43 % of a profile whose
+// module-assigned part was 23 %. Orthologs are now deduplicated per map, the
+// pathway coverage is measured rather than borrowed from the module level, and
+// every rolled-up view says its rows overlap. The functional matrix takes a
+// floor (Settings -> Function floor, 0.05 % by default) so 4,307 orthologs
+// becomes a few hundred, and says what it hid and what that carried. Also: the
+// Settings KEGG dropdown could never repaint the panel, the figure tabs bypassed
+// the licence gate, the downloads stayed live under the refusal, and the demo
+// banner promised a functional half the ENA panel cannot reproduce.
+// v58: the functional CSV quotes its own separator. It was written as a TSV and
+// then had its tabs swapped for commas, and 436 of the 508 KEGG module names
+// carry a comma — so most rows of the downloaded file had more fields than its
+// own header. A page on v57 goes on writing that file.
+// v57 (with v56): the functional figures name their own rows. compositionSvg and alphaSvg
+// read `species` alone, so a chart of KEGG modules printed ten `undefined`s in
+// its legend and counted "effective number of taxa"; both now take the label and
+// the unit. The functional matrix is drawn by the same renderer as the
+// taxonomic one, with the KEGG identifier linked where the genome accession is.
+export const WORKER_VERSION = "79";
 
 // ---- memory64 capability probe ----------------------------------------------
 
@@ -495,6 +622,23 @@ export function sylphWorkerRpc() {
     async loadDbCached(url) {
       const { meta } = await call("loadDbCached", { url });
       return meta;
+    },
+    /**
+     * Turn the second sketch on for this worker, and load the KEGG ortholog
+     * sketches it matches against.
+     *
+     * PER WORKER, and there is no way around it: each worker owns its own wasm
+     * memory, so the 39 MB of references is paid once per worker rather than
+     * once per page. The 20 MB download is not — the browser cache serves the
+     * pool after the first — but the parse is. Resolves to { orthologs }.
+     */
+    async loadFuncRefs(pkg, refUrl, onProgress, bytes) {
+      const { result } = await call("loadFuncRefs", { pkg, refUrl, bytes }, { onProgress });
+      return result;
+    },
+    /** Stop sketching functions, without unloading the reference. */
+    async funcOff() {
+      await call("loadFuncRefs", { on: false });
     },
     async loadDbFile(file) {
       const { meta } = await call("loadDbFile", { file });
