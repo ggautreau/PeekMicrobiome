@@ -14,9 +14,10 @@
 // The sketch itself needs the sourmash wasm (web/funprofiler-pkg, in this
 // repository) and the KEGG ortholog reference (web/db/kegg/, 20 MB, also here
 // because the page downloads it); without them nothing runs, and it says so.
-// The read checks also need the FASTQ fixtures in scripts/ena-test/fx/, which
-// are not in the repository: without those — as in CI — the checks on the
-// reference itself run and the read checks are skipped and said so.
+// The stream shapes are checked twice: on reads made up here, which need
+// nothing and so run in CI, comparing the sketch itself; and on the FASTQ
+// fixtures in scripts/ena-test/fx/, which are not in the repository, comparing
+// the KEGG profile as well — skipped, and said so, where they are absent.
 
 import fs from "node:fs";
 import zlib from "node:zlib";
@@ -38,7 +39,7 @@ const check = (name, ok, detail = "") => {
 const have = (p) => { try { return fs.statSync(p).isFile(); } catch { return false; } };
 
 if (!have(PKG + "/sourmash_bg.wasm") || !have(REF)) {
-  skip += 16;
+  skip += 25;
   console.log(`skip the sketcher — needs ${path.relative(HERE, PKG)}/ and ` +
     `${path.relative(HERE, REF)}`);
   console.log(`\n${pass} passed, ${fail} failed, ${skip} skipped (func-sketch)`);
@@ -79,9 +80,107 @@ check("loading twice loads once",
     empty.map((s) => s.name.split(" ")[0]).join(", "));
 }
 
-// Everything below sketches reads, and the reads are the parity fixtures in
-// scripts/ena-test/fx/ — gitignored and fetched on demand, so absent from a CI
-// checkout. The checks above need only the reference, and they still run there.
+// ---- the stream shapes, on reads made up here ---------------------------------
+//
+// The defect this file exists for — two mates through ONE parser state, which
+// loses the 4-line record phase and three quarters of the sketch — is a property
+// of the parser, not of the reads. So the shapes are fed here first with reads
+// that need no fixture: random DNA from a fixed seed, every record shaped like
+// the fixtures' (100 to 160 bp, a quality line as long, R2 the reverse
+// complement of R1 with its quality reversed). They match no ortholog, so the
+// profile is empty; what is compared is the sketch — how many reads went in and
+// how many hashes it kept — which is exactly what a lost record phase changes.
+// This is what CI runs; the fixtures below add the KEGG profile on real reads.
+{
+  let seed = 0x5eed1e55;
+  const rand = () => {                      // mulberry32: small, fixed, portable
+    seed = (seed + 0x6d2b79f5) >>> 0;
+    let t = seed;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+  const QUAL = "#,:FIJ";
+  const COMP = { A: "T", C: "G", G: "C", T: "A" };
+  const recs = [];
+  for (let i = 0; i < 5000; i++) {
+    const len = 100 + Math.floor(rand() * 61);
+    let seq = "", qual = "";
+    for (let j = 0; j < len; j++) {
+      seq += "ACGT"[Math.floor(rand() * 4)];
+      qual += QUAL[Math.floor(rand() * QUAL.length)];
+    }
+    recs.push({ id: `syn.${i}`, seq, qual });
+  }
+  const fq = (rs) => Buffer.from(rs.map((r) => `@${r.id}\n${r.seq}\n+\n${r.qual}\n`).join(""), "latin1");
+  const S1 = fq(recs);
+  const S2 = fq(recs.map((r) => ({
+    id: `${r.id}/2`,
+    seq: [...r.seq].reverse().map((c) => COMP[c]).join(""),
+    qual: [...r.qual].reverse().join(""),
+  })));
+  const sketch = (bytes, chunk, stream = 0) => {
+    const s = newFuncSample();
+    if (chunk === Infinity) s.feed(bytes, stream);
+    else for (let i = 0; i < bytes.length; i += chunk) s.feed(bytes.subarray(i, i + chunk), stream);
+    return s.finish();
+  };
+  const alike = (a, b) => a.reads === b.reads && a.hashes === b.hashes
+    && JSON.stringify(a.profile) === JSON.stringify(b.profile);
+  const said = (x) => `${x.reads} reads, ${x.hashes} hashes`;
+
+  const whole = sketch(S1, Infinity);
+  check("made-up reads: 5,000 reads in, a sketch of several hundred hashes out",
+    whole.reads === 5000 && whole.hashes > 300, said(whole));
+  const by7919 = sketch(S1, 7919), by1 = sketch(S1, 1);
+  check("made-up reads: chunked at 7,919 bytes — the same sketch", alike(whole, by7919), said(by7919));
+  check("made-up reads: chunked at 1 byte — the same sketch", alike(whole, by1), said(by1));
+
+  const pe = newFuncSample();
+  pe.feed(S1, 1);
+  pe.feed(S2, 2);
+  const peWhole = pe.finish();
+  const il = newFuncSample();
+  for (let i = 0; i < Math.max(S1.length, S2.length); i += 4111) {
+    if (i < S1.length) il.feed(S1.subarray(i, i + 4111), 1);
+    if (i < S2.length) il.feed(S2.subarray(i, i + 4111), 2);
+  }
+  const ilDone = il.finish();
+  check("made-up reads: interleaved mates give the same sketch as whole mates",
+    alike(peWhole, ilDone), `${said(ilDone)} against ${said(peWhole)}`);
+  check("made-up reads: ...and the same as one mate after the other on one stream",
+    alike(peWhole, sketch(Buffer.concat([S1, S2]), 4111, 0)));
+
+  const conflated = newFuncSample();
+  for (let i = 0; i < Math.max(S1.length, S2.length); i += 4111) {
+    if (i < S1.length) conflated.feed(S1.subarray(i, i + 4111), 0);
+    if (i < S2.length) conflated.feed(S2.subarray(i, i + 4111), 0);
+  }
+  const bad = conflated.finish();
+  check("made-up reads: two mates through ONE parser state lose most of the sketch",
+    bad.hashes < peWhole.hashes / 2,
+    `${bad.hashes} hashes against ${peWhole.hashes} — if these are equal the per-stream ` +
+    `state has stopped doing anything and this check no longer bites`);
+
+  // R2 is R1's reverse complement, and six frames read a sequence and its
+  // reverse complement into the same k-mers: twice the reads, the same sketch.
+  check("made-up reads: both mates are read, and a strand pair is one sketch in six frames",
+    peWhole.reads === 10000 && peWhole.hashes === whole.hashes, said(peWhole));
+
+  check("made-up reads: a stream that does not end in a newline keeps its last read",
+    sketch(S1.subarray(0, S1.length - 1), 7919).reads === 5000);
+
+  const dropped = newFuncSample();
+  dropped.feed(S1.subarray(0, 100000), 0);
+  dropped.drop();
+  dropped.feed(S1.subarray(100000), 0);
+  check("made-up reads: a dropped sample takes no more reads and returns nothing",
+    dropped.finish() === null);
+}
+
+// Everything below sketches the parity fixtures in scripts/ena-test/fx/ —
+// gitignored and fetched on demand, so absent from a CI checkout. The checks
+// above need no fixture, and they still run there.
 if (!have(FX1) || !have(FX2)) {
   skip += 11;
   console.log(`skip the read checks — need the FASTQ fixtures in ` +

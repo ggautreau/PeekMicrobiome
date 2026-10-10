@@ -4,6 +4,22 @@ Figures in this file are measured on the development machine (Chrome 151, Linux,
 not estimated. Where a number replaced an assumption, the assumption is named too — several of
 them were wrong in ways that mattered.
 
+## 2026-10-10 (2)
+
+### The mate-parser check ran only where its fixtures were
+
+`web/func-sketch.test.mjs` fed the protein sketcher its four stream shapes — whole, chunked at
+7,919 bytes and at one byte, two mates interleaved — on the FASTQ fixtures in `scripts/ena-test/fx/`,
+which are not in the repository. In CI all eleven read checks were skipped, and the mutation that
+puts both mates through one parser state survived there on every push: the mutation job stayed red
+at 61 of 62.
+
+The defect it guards is the parser's, not the reads', so nine of those checks now run first on
+reads made up from a fixed seed — random DNA, 100 to 160 bp, R2 the reverse complement of R1 —
+comparing the sketch itself: reads in, hashes kept. Under that mutation the interleaved mates keep
+64 hashes of 970. The fixtures, where present, still add the KEGG profile on real reads. A
+clean checkout without them: 14 passed, 11 skipped, and the mutation caught.
+
 ## 2026-10-10
 
 ### A review of the page and the code: what came out wrong without saying so
@@ -94,8 +110,7 @@ its profiles came out identical byte for byte.
 workers, 85 checks), `web/worker.test.mjs` (the real worker and wasm, 52), figures (43), clustering
 (9), exports (15), screening (4), and the database-cache suite (48), which existed but never ran
 there. Parity 1,683, ENA 185, wiring 175, all passing in a clean checkout; 62 mutations, fourteen of
-them new, each caught locally — in CI the one on the protein sketch's mate parser still needs the
-FASTQ fixtures the repository does not carry. One had been passing for the wrong reason: the clustering test asked `cluster.js` which
+them new, each caught — in CI too, since the entry above. One had been passing for the wrong reason: the clustering test asked `cluster.js` which
 fields to check, so dropping a field from the module dropped it from the test too.
 
 ## 2026-08-08 (4)

@@ -324,7 +324,8 @@ const MUTATIONS = [
     why: "interleaved mates lose the FASTQ record phase — 247 hashes of 1,054, with nothing thrown",
     from: `      const st = parserFor(stream);`,
     to: `      const st = parserFor(0);`,
-    expect: /interleaved mates give the same profile/,
+    // "sketch" on the made-up reads, which CI runs; "profile" on the fixtures.
+    expect: /interleaved mates give the same (sketch|profile)/,
   },
   {
     name: "GMM: report a value however few of the module's steps were found",

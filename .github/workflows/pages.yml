@@ -51,8 +51,9 @@ jobs:
       # The protein sketcher, against the four shapes the worker feeds it in:
       # whole buffers, chunks that fall inside a line, and two mates arriving
       # interleaved. A reader that loses the FASTQ record phase does not throw —
-      # it returns a smaller profile — so the checks demand the SAME profile out
-      # of every shape.
+      # it returns a smaller profile — so the checks demand the SAME sketch out
+      # of every shape. Here they run on reads made up from a fixed seed; the
+      # real-read fixtures, which add the KEGG profile, are not in the repo.
       - name: Protein sketcher
         run: node web/func-sketch.test.mjs
 
